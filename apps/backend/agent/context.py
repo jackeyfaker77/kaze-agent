@@ -1,0 +1,354 @@
+import base64
+import json
+import logging
+import mimetypes
+from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol
+
+from agent.core.types import ContextRenderResult, ContextRequest
+from agent.core.prompt_block import (
+    ActiveSkillsPromptBlock,
+    BehaviorRulesPromptBlock,
+    IdentityPromptBlock,
+    LongTermMemoryPromptBlock,
+    MemoryBlockPromptBlock,
+    RecentContextPromptBlock,
+    SelfModelPromptBlock,
+    SessionContextPromptBlock,
+    SkillsCatalogPromptBlock,
+    SystemPromptBuildResult,
+    SystemPromptBuilder,
+    TurnContext,
+)
+from agent.prompting import (
+    PromptAssembler,
+    PromptSectionMeta,
+    PromptSectionRender,
+    build_context_frame_message,
+)
+from agent.skills import SkillsLoader
+from session.manager.models import INTERRUPTED_TURN_METADATA_KEY
+from prompts.agent import (
+    build_agent_static_identity_prompt,
+    build_current_message_time_envelope,
+    build_skills_catalog_prompt,
+    build_telegram_rendering_prompt,
+)
+
+if TYPE_CHECKING:
+    from core.memory.markdown import MemoryProfileApi
+
+logger = logging.getLogger("agent.context")
+
+_READABLE_TEXT_ATTACHMENT_SUFFIXES = {".md", ".txt"}
+
+
+class ChannelPolicy(Protocol):
+    channel: str
+
+    def augment_system_prompt(self, prompt: str) -> str: ...
+
+
+class TelegramChannelPolicy:
+    channel = "telegram"
+
+    def augment_system_prompt(self, prompt: str) -> str:
+        return prompt + build_telegram_rendering_prompt()
+
+    def matches(self, channel: str) -> bool:
+        return channel == self.channel or channel.startswith(f"{self.channel}_")
+
+
+class MessageEnvelopeBuilder:
+    def __init__(
+        self,
+        policies: dict[str, ChannelPolicy] | None = None,
+        *,
+        multimodal: bool = True,
+    ):
+        self._policies = policies or {}
+        self._multimodal = multimodal
+
+    def set_media_capabilities(
+        self,
+        *,
+        multimodal: bool,
+    ) -> None:
+        self._multimodal = multimodal
+
+    def build(
+        self,
+        *,
+        history: list[dict[str, Any]],
+        current_message: str,
+        system_prompt: str,
+        context_frame: str,
+        channel: str | None,
+        message_timestamp: datetime | None,
+        media: list[str] | None,
+    ) -> list[dict[str, Any]]:
+        prompt = system_prompt
+        if channel:
+            policy = self._resolve_policy(channel)
+            if policy is not None:
+                prompt = policy.augment_system_prompt(prompt)
+
+        # 顺序是有意设计的：stable system -> history -> context frame -> 当前用户消息。
+        messages: list[dict[str, Any]] = [{"role": "system", "content": prompt}]
+        messages.extend(history)
+        if context_frame.strip():
+            messages.append(build_context_frame_message(context_frame))
+        messages.append(
+            {
+                "role": "user",
+                "content": self._build_user_content(
+                    current_message,
+                    media,
+                    message_timestamp=message_timestamp,
+                ),
+            }
+        )
+        return messages
+
+    def _build_user_content(
+        self,
+        text: str,
+        media: list[str] | None,
+        *,
+        message_timestamp: datetime | None = None,
+    ) -> str | list[dict[str, Any]]:
+        text = self._stamp_current_message(text, message_timestamp=message_timestamp)
+        if not media:
+            return text
+        if not self._multimodal:
+            return self._build_text_with_media_refs(text, media)
+
+        images = []
+        for item in media:
+            item = str(item)
+            if item.startswith(("http://", "https://")):
+                images.append({"type": "image_url", "image_url": {"url": item}})
+                continue
+
+            p = Path(item)
+            mime, _ = mimetypes.guess_type(p)
+            if not p.is_file() or not mime or not mime.startswith("image/"):
+                continue
+            with p.open("rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            images.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                }
+            )
+
+        text_with_refs = self._append_text_attachment_refs(text, media)
+        if not images:
+            return text_with_refs
+        return images + [{"type": "text", "text": text_with_refs}]
+
+    def _build_text_with_media_refs(self, text: str, media: list[str]) -> str:
+        refs: list[str] = []
+        for item in media:
+            value = str(item)
+            if value.startswith(("http://", "https://")):
+                refs.append(f"- 图片URL: {value}")
+                continue
+
+            p = Path(value)
+            mime, _ = mimetypes.guess_type(p)
+            if not p.is_file() or (mime and not mime.startswith("image/")):
+                continue
+            refs.append(f"- 图片路径: {value}")
+
+        lines = [self._append_text_attachment_refs(text, media)]
+        if refs:
+            lines.extend(["", "[附加媒体]", *refs])
+        if refs:
+            lines.append("当前模型不支持多模态，无法处理图片内容。")
+        if len(lines) == 1:
+            return lines[0]
+        return "\n".join(lines)
+
+    def _append_text_attachment_refs(self, text: str, media: list[str]) -> str:
+        file_refs: list[str] = []
+        for item in media:
+            value = str(item)
+            if value.startswith(("http://", "https://")):
+                continue
+            path = Path(value)
+            if not path.is_file() or path.suffix.lower() not in _READABLE_TEXT_ATTACHMENT_SUFFIXES:
+                continue
+            quoted_path = json.dumps(value, ensure_ascii=False)
+            file_refs.append(f"- 文件路径: {value}")
+            file_refs.append(f"- 如需读取内容，请调用 read_file(path={quoted_path})")
+        if not file_refs:
+            return text
+        lines = [text, "", "[附加文件]", *file_refs]
+        return "\n".join(lines)
+
+    def _stamp_current_message(
+        self,
+        text: str,
+        *,
+        message_timestamp: datetime | None = None,
+    ) -> str:
+        stripped = text.lstrip()
+        if not stripped:
+            return build_current_message_time_envelope(
+                message_timestamp=message_timestamp
+            )
+        if stripped.startswith("[当前消息时间:"):
+            return text
+        stamp = build_current_message_time_envelope(message_timestamp=message_timestamp)
+        return f"{stamp}\n{text}"
+
+    def _resolve_policy(self, channel: str) -> ChannelPolicy | None:
+        policy = self._policies.get(channel)
+        if policy is not None:
+            return policy
+        for candidate in self._policies.values():
+            matches = getattr(candidate, "matches", None)
+            if callable(matches) and matches(channel):
+                return candidate
+        return None
+
+
+class ContextBuilder:
+    def __init__(
+        self,
+        workspace: Path,
+        memory: "MemoryProfileApi",
+        *,
+        multimodal: bool = True,
+    ):
+        self.workspace = workspace
+        self.skills = SkillsLoader(workspace)
+        self.memory = memory
+        self._system_prompt_builder = SystemPromptBuilder(
+            [
+                IdentityPromptBlock(render_fn=build_agent_static_identity_prompt),
+                BehaviorRulesPromptBlock(),
+                MemoryBlockPromptBlock(),
+                LongTermMemoryPromptBlock(),
+                SelfModelPromptBlock(),
+                RecentContextPromptBlock(),
+                SessionContextPromptBlock(),
+                ActiveSkillsPromptBlock(),
+                SkillsCatalogPromptBlock(render_fn=build_skills_catalog_prompt),
+            ]
+        )
+        self._envelope_builder = MessageEnvelopeBuilder(
+            policies={TelegramChannelPolicy.channel: TelegramChannelPolicy()},
+            multimodal=multimodal,
+        )
+        self._assembler = PromptAssembler(self)
+        self._last_debug_breakdown: list[PromptSectionMeta] = []
+        self._last_assembled_contexts: dict[str, dict[str, str]] = {
+            "turn_injection_context": {},
+        }
+
+    def set_media_capabilities(
+        self,
+        *,
+        multimodal: bool,
+    ) -> None:
+        self._envelope_builder.set_media_capabilities(
+            multimodal=multimodal,
+        )
+
+    @property
+    def last_debug_breakdown(self) -> list[PromptSectionMeta]:
+        return list(self._last_debug_breakdown)
+
+    @property
+    def last_assembled_contexts(self) -> dict[str, dict[str, str]]:
+        return {
+            "turn_injection_context": dict(
+                self._last_assembled_contexts["turn_injection_context"]
+            ),
+        }
+
+    def build_turn_injection_context(
+        self,
+        *,
+        turn_injection_prompt: str | None = None,
+        session_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        context: dict[str, str] = {}
+        if turn_injection_prompt:
+            context["turn_injection"] = turn_injection_prompt
+        if isinstance((session_metadata or {}).get(INTERRUPTED_TURN_METADATA_KEY), dict):
+            context["interrupted_turn"] = (
+                "上一轮助手回复因用户主动中断而未完成。已保留的 assistant "
+                "content 和 reasoning_content 只是中断时的原始快照，不能视为完整结论，"
+                "也不要续写或改写其中的 reasoning_content；请基于当前用户消息自然回应。"
+            )
+        return context
+
+    def render(
+        self,
+        request: ContextRequest,
+        *,
+        system_sections_top: list[PromptSectionRender] | None = None,
+        system_sections_bottom: list[PromptSectionRender] | None = None,
+        session_metadata: dict[str, Any] | None = None,
+    ) -> ContextRenderResult:
+        bind_session_metadata = getattr(self.memory, "bind_session_metadata", None)
+        if callable(bind_session_metadata):
+            bind_session_metadata(session_metadata)
+        merged_top = list(system_sections_top or [])
+        turn_injection_context = self.build_turn_injection_context(
+            turn_injection_prompt=request.turn_injection_prompt,
+            session_metadata=session_metadata,
+        )
+        assembled = self._assembler.assemble(
+            history=request.history,
+            current_message=request.current_message,
+            media=request.media,
+            skill_names=request.skill_names,
+            channel=request.channel,
+            chat_id=request.chat_id,
+            message_timestamp=request.message_timestamp,
+            retrieved_memory_block=request.retrieved_memory_block,
+            disabled_sections=request.disabled_sections,
+            turn_injection_context=turn_injection_context,
+            system_sections_top=merged_top,
+            system_sections_bottom=system_sections_bottom,
+        )
+        self._last_debug_breakdown = assembled.debug_breakdown
+        self._last_assembled_contexts = {
+            "turn_injection_context": dict(assembled.turn_injection_context),
+        }
+        return ContextRenderResult(
+            system_prompt=assembled.system_prompt,
+            turn_injection_context=dict(assembled.turn_injection_context),
+            messages=list(assembled.messages),
+            debug_breakdown=list(assembled.debug_breakdown),
+        )
+
+    def _build_system_prompt_result(
+        self,
+        skill_names: list[str] | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        retrieved_memory_block: str = "",
+        disabled_sections: set[str] | None = None,
+    ) -> SystemPromptBuildResult:
+        ctx = TurnContext(
+            workspace=self.workspace,
+            memory=self.memory,
+            skills=self.skills,
+            skill_names=skill_names or [],
+            channel=channel,
+            chat_id=chat_id,
+            retrieved_memory_block=retrieved_memory_block,
+        )
+        built = self._system_prompt_builder.build(
+            ctx,
+            disabled_sections=disabled_sections,
+        )
+        self._last_debug_breakdown = built.debug_breakdown
+        return built

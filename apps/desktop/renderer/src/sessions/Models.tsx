@@ -1,0 +1,31 @@
+import { useState } from "react";
+import { CaretRight, Key, MagnifyingGlass, Plugs, Plus, SlidersHorizontal, Trash } from "@phosphor-icons/react";
+import type { ModelRegistrationFormData, SettingsFormData } from "../../../src/bridge/shared";
+import { Modal } from "./primitives";
+
+export function Models({ settings, save, saving, busy }: { settings: SettingsFormData | null; save: (value: SettingsFormData) => Promise<void>; saving: boolean; busy: boolean }) {
+  const [query, setQuery] = useState("");
+  const [editing, setEditing] = useState<ModelRegistrationFormData | null>(null);
+  const [error, setError] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const registrations = settings?.models.registrations ?? [];
+  const existing = registrations.some(r => r.id === editing?.id);
+  function add(provider: string, baseUrl: string) {
+    setError(""); setConfirmRemove(false);
+    setEditing({ id: crypto.randomUUID(), provider, baseUrl, model: "", apiKey: "", effort: "none" });
+  }
+  async function persist(remove = false) {
+    if (!settings || !editing || saving) return;
+    setError("");
+    try {
+      const next = remove ? registrations.filter(r => r.id !== editing.id) : existing ? registrations.map(r => r.id === editing.id ? editing : r) : [...registrations, editing];
+      await save({ ...settings, models: { registrations: next } }); setEditing(null);
+    } catch (e) { setError(String(e)); }
+  }
+  return <section className="models-page"><div className="models-inner"><header><h1>模型连接</h1><p>每套 API Key 都是独立连接；按连接选择对话使用的模型。</p></header><label className="search-field model-search"><MagnifyingGlass /><input aria-label="搜索连接或模型" placeholder="搜索连接或模型" value={query} onChange={e => setQuery(e.target.value)} /></label>
+    <section><div className="section-heading"><div><h2>已配置</h2><p>同一供应商可以添加多个连接，模型名称用于区分。</p></div><small>{registrations.length} 个</small></div>
+      {!settings ? <p className="muted">正在加载模型连接…</p> : registrations.filter(r => `${r.provider} ${r.model}`.toLowerCase().includes(query.toLowerCase())).map(r => <button className="connection-row" key={r.id} disabled={busy || saving} onClick={() => { setEditing({ ...r }); setError(""); setConfirmRemove(false); }}><span className="provider-avatar">{r.provider.toLowerCase().includes("deepseek") || r.baseUrl.includes("deepseek") ? "D" : r.provider.charAt(0).toUpperCase()}</span><span className="connection-name">{r.model}<small>{r.provider} · {r.baseUrl || "默认服务地址"}</small></span><span className="connection-status">{registrations[0]?.id === r.id ? "默认模型" : "已配置"}</span><CaretRight /></button>)}{settings && !registrations.length && <p className="muted">添加一个连接后即可开始对话。</p>}
+    </section><section><h2>添加其他连接</h2><p>继续添加另一个账号或服务。</p>{[{ label: "DeepSeek", caption: "官方 API", provider: "openai", url: "https://api.deepseek.com/v1", icon: Plugs }, { label: "OpenAI 兼容服务", caption: "兼容 Chat Completions 的 API", provider: "openai", url: "", icon: Plus }, { label: "Anthropic", caption: "Claude API", provider: "anthropic", url: "", icon: Plugs }, { label: "自定义 API", caption: "配置供应商与服务地址", provider: "openai", url: "", icon: Key }].filter(p => `${p.label} ${p.caption}`.toLowerCase().includes(query.toLowerCase())).map(p => <button key={p.label} className="connection-row" disabled={!settings || busy || saving} onClick={() => add(p.provider, p.url)}><span className="provider-avatar"><p.icon /></span><span className="connection-name">{p.label}<small>{p.caption}</small></span><CaretRight /></button>)}</section>
+    <section className="system-models"><h2><SlidersHorizontal />系统模型</h2><p>切换后会重启会话服务。正在回复时，请等待回复完成再修改。</p><label>默认模型<select disabled={!settings || busy || saving} aria-label="系统默认模型" value={registrations[0]?.id ?? ""} onChange={e => { const first = registrations.find(r => r.id === e.target.value); if (settings && first) void save({ ...settings, models: { registrations: [first, ...registrations.filter(r => r.id !== first.id)] } }).catch(err => setError(String(err))); }}>{registrations.length ? registrations.map(r => <option key={r.id} value={r.id}>{r.model} · {r.provider}</option>) : <option value="">尚未配置</option>}</select></label><p className="muted">对话与 Agent 使用默认模型；语音、记忆检索等配置可在右上角设置中调整。</p><span role="status">{saving ? "正在保存并连接服务…" : ""}</span></section>{!editing && error && <p className="inline-error" role="alert">{error}</p>}
+    </div>{editing && <Modal title={existing ? "编辑模型连接" : "添加模型连接"} close={() => { if (!saving) setEditing(null); }}><form className="connection-form" onSubmit={e => { e.preventDefault(); void persist(); }}><label>供应商<input required value={editing.provider} onChange={e => setEditing({ ...editing, provider: e.target.value })} /></label><label>服务地址<input type="url" placeholder="使用供应商默认地址" value={editing.baseUrl} onChange={e => setEditing({ ...editing, baseUrl: e.target.value })} /></label><label>API Key<input type="password" autoComplete="off" value={editing.apiKey} onChange={e => setEditing({ ...editing, apiKey: e.target.value })} /></label><label>模型名称<input required autoFocus placeholder="例如 deepseek-chat" value={editing.model} onChange={e => setEditing({ ...editing, model: e.target.value })} /></label><label>推理强度<select value={editing.effort} onChange={e => setEditing({ ...editing, effort: e.target.value as ModelRegistrationFormData["effort"] })}>{["none", "low", "high", "max"].map(value => <option key={value}>{value}</option>)}</select></label>{error && <p className="inline-error" role="alert">{error}</p>}{confirmRemove && <p>移除此连接？已有会话记录会保留。</p>}<footer>{existing && registrations.length > 1 && <button type="button" className="danger" disabled={saving} onClick={() => confirmRemove ? void persist(true) : setConfirmRemove(true)}><Trash />{confirmRemove ? "确认移除" : "移除连接"}</button>}<button type="button" disabled={saving} onClick={() => setEditing(null)}>取消</button><button className="primary" disabled={saving || busy} type="submit">{saving ? "正在保存…" : "保存连接"}</button></footer></form></Modal>}</section>;
+}

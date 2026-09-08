@@ -1,0 +1,1 @@
+"""Generic proactive admission contracts."""

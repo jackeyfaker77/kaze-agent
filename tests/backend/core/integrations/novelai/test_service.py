@@ -1,0 +1,418 @@
+from __future__ import annotations
+
+import base64
+import json
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+import httpx
+import pytest
+
+from core.integrations.novelai.client import NovelAIClient
+from core.integrations.novelai.models import (
+    GenerateImageRequest,
+    GeneratedImageRecord,
+    NovelAIGenerationSource,
+    NovelAISettings,
+)
+from core.integrations.novelai.prompt_tags import PromptTagStore
+from core.integrations.novelai.service import NovelAIService
+from core.integrations.novelai.store import NovelAIStore
+from core.roles.store import RoleStore
+
+_TINY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9sXkD1gAAAAASUVORK5CYII="
+)
+
+
+@pytest.mark.asyncio
+async def test_regenerate_reuses_exact_request_parameters_with_fresh_seed(
+    tmp_path: Path,
+) -> None:
+    settings = NovelAISettings(enabled=True, token="novel-token")
+    client = _FakeClient(_json_response(), settings)
+    service = NovelAIService(
+        settings=settings,
+        client=client,
+        store=NovelAIStore(tmp_path),
+        role_store=RoleStore(tmp_path),
+        workspace=tmp_path,
+    )
+    source = NovelAIGenerationSource(
+        record=GeneratedImageRecord(
+            id="source-record",
+            created_at="2026-07-22T08:00:00+00:00",
+            role_id="mira",
+            session_key="role:mira",
+            mode="img2img",
+            prompt="1girl, rain",
+            negative_prompt="blurry",
+            model="nai-diffusion-4-5-curated",
+            sampler="k_euler_ancestral",
+            steps=24,
+            seed=17,
+            width=832,
+            height=1216,
+            base_image_path=str(tmp_path / "base.png"),
+            output_paths=[str(tmp_path / "old.png")],
+            wrote_back_to_role=False,
+        ),
+        output_path=str(tmp_path / "old.png"),
+        request_payload={
+            "action": "img2img",
+            "input": "1girl, rain",
+            "model": "nai-diffusion-4-5-curated",
+            "parameters": {
+                "width": 832,
+                "height": 1216,
+                "steps": 24,
+                "sampler": "k_euler_ancestral",
+                "negative_prompt": "blurry",
+                "seed": 17,
+                "image": "original-base64",
+                "strength": 0.42,
+                "noise": 0.31,
+                "reference_image_multiple": ["reference-data"],
+            },
+        },
+    )
+
+    with patch("core.integrations.novelai.service.secrets.randbelow", return_value=100):
+        result = await service.regenerate(source, session_key="role:mira")
+
+    assert result.seed == 100
+    assert client.last_generate_kwargs["action"] == "img2img"
+    assert client.last_generate_kwargs["prompt"] == "1girl, rain"
+    assert client.last_generate_kwargs["parameters"] == {
+        "width": 832,
+        "height": 1216,
+        "steps": 24,
+        "sampler": "k_euler_ancestral",
+        "negative_prompt": "blurry",
+        "seed": 100,
+        "image": "original-base64",
+        "strength": 0.42,
+        "noise": 0.31,
+        "reference_image_multiple": ["reference-data"],
+    }
+    assert source.request_payload["parameters"]["seed"] == 17
+
+
+class _FakeClient(NovelAIClient):
+    def __init__(self, response: httpx.Response, settings: NovelAISettings) -> None:
+        self._response = response
+        self._user_data: dict[str, object] = {}
+        self.last_generate_kwargs: dict[str, object] = {}
+        super().__init__(requester=None, settings=settings)  # type: ignore[arg-type]
+
+    async def generate_image(self, **kwargs: object) -> httpx.Response:
+        self.last_generate_kwargs = dict(kwargs)
+        return self._response
+
+    async def fetch_user_data(self) -> dict[str, object]:
+        return self._user_data
+
+
+def _json_response() -> httpx.Response:
+    request = httpx.Request("POST", "https://image.novelai.net/ai/generate-image")
+    return httpx.Response(
+        200,
+        headers={"content-type": "application/json"},
+        json={"images": [base64.b64encode(_TINY_PNG).decode("utf-8")]},
+        request=request,
+    )
+
+
+def _error_response(status_code: int) -> httpx.Response:
+    request = httpx.Request("POST", "https://image.novelai.net/ai/generate-image")
+    return httpx.Response(
+        status_code,
+        headers={"content-type": "application/json"},
+        json={"statusCode": status_code, "message": "Internal Server Error"},
+        request=request,
+    )
+
+
+@pytest.mark.asyncio
+async def test_service_persists_generated_image_and_metadata(tmp_path: Path) -> None:
+    settings = NovelAISettings(
+        enabled=True,
+        token="novel-token",
+        add_quality_tags=True,
+        undesired_content_preset=2,
+    )
+    service = NovelAIService(
+        settings=settings,
+        client=_FakeClient(_json_response(), settings),
+        store=NovelAIStore(tmp_path),
+        role_store=RoleStore(tmp_path),
+        workspace=tmp_path,
+    )
+
+    result = await service.generate(
+        GenerateImageRequest(
+            prompt="a girl under moonlight",
+            mode="txt2img",
+            negative_prompt="blurry",
+            session_key="role:mira",
+        )
+    )
+
+    output_path = Path(result.output_paths[0])
+    assert output_path.exists()
+    assert output_path.read_bytes() == _TINY_PNG
+    assert Path(result.request_path).exists()
+    assert Path(result.meta_path).exists()
+    record = json.loads(Path(result.meta_path).read_text(encoding="utf-8"))
+    assert record["mode"] == "txt2img"
+    assert record["prompt"] == "a girl under moonlight"
+    assert record["session_key"] == "role:mira"
+    request_payload = json.loads(Path(result.request_path).read_text(encoding="utf-8"))
+    assert request_payload["model"] == "nai-diffusion-4-5-curated"
+    assert request_payload["parameters"]["negative_prompt"] == "blurry"
+    assert request_payload["parameters"]["qualityToggle"] is True
+    assert request_payload["parameters"]["ucPreset"] == 2
+    assert (
+        request_payload["parameters"]["v4_prompt"]["caption"]["base_caption"]
+        == "a girl under moonlight"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prompt", "negative_prompt", "field_name"),
+    [
+        ("月光下的少女", "", "prompt"),
+        ("1girl, moonlight", "模糊", "negative_prompt"),
+    ],
+)
+async def test_service_rejects_non_english_tags_before_external_call(
+    tmp_path: Path,
+    prompt: str,
+    negative_prompt: str,
+    field_name: str,
+) -> None:
+    settings = NovelAISettings(enabled=True, token="novel-token")
+    client = _FakeClient(_json_response(), settings)
+    service = NovelAIService(
+        settings=settings,
+        client=client,
+        store=NovelAIStore(tmp_path),
+        role_store=RoleStore(tmp_path),
+        workspace=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match=rf"{field_name} 仅支持英文 NovelAI tags"):
+        await service.generate(
+            GenerateImageRequest(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+            )
+        )
+
+    assert client.last_generate_kwargs == {}
+
+
+@pytest.mark.asyncio
+async def test_service_expands_prompts_from_tag_knowledge_base(tmp_path: Path) -> None:
+    settings = NovelAISettings(enabled=True, token="novel-token")
+    prompt_tags = PromptTagStore(tmp_path)
+    prompt_tags.upsert(
+        {
+            "id": "rain",
+            "name": "雨景",
+            "enabled": True,
+            "category": "atmosphere",
+            "match_terms": ["雨景"],
+            "positive_tags": ["rainy atmosphere"],
+            "negative_tags": ["flat lighting"],
+            "rating": "general",
+        }
+    )
+    service = NovelAIService(
+        settings=settings,
+        client=_FakeClient(_json_response(), settings),
+        store=NovelAIStore(tmp_path),
+        role_store=RoleStore(tmp_path),
+        workspace=tmp_path,
+        prompt_tag_store=prompt_tags,
+    )
+
+    result = await service.generate(
+        GenerateImageRequest(prompt="1girl, outdoors", negative_prompt="blurry"),
+        prompt_tag_match_text="给我画一张雨景",
+    )
+
+    request_payload = json.loads(Path(result.request_path).read_text(encoding="utf-8"))
+    assert request_payload["input"] == "1girl, outdoors, rainy atmosphere"
+    assert request_payload["parameters"]["negative_prompt"] == "blurry, flat lighting"
+
+
+@pytest.mark.asyncio
+async def test_service_does_not_match_prompt_tags_without_source_text(
+    tmp_path: Path,
+) -> None:
+    settings = NovelAISettings(enabled=True, token="novel-token")
+    prompt_tags = Mock(spec=PromptTagStore)
+    service = NovelAIService(
+        settings=settings,
+        client=_FakeClient(_json_response(), settings),
+        store=NovelAIStore(tmp_path),
+        role_store=RoleStore(tmp_path),
+        workspace=tmp_path,
+        prompt_tag_store=prompt_tags,
+    )
+
+    result = await service.generate(
+        GenerateImageRequest(prompt="1girl, rain", negative_prompt="blurry")
+    )
+
+    request_payload = json.loads(Path(result.request_path).read_text(encoding="utf-8"))
+    assert request_payload["input"] == "1girl, rain"
+    assert request_payload["parameters"]["negative_prompt"] == "blurry"
+    prompt_tags.expand.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_service_img2img_requires_base_image_path(tmp_path: Path) -> None:
+    settings = NovelAISettings(enabled=True, token="novel-token")
+    service = NovelAIService(
+        settings=settings,
+        client=_FakeClient(_json_response(), settings),
+        store=NovelAIStore(tmp_path),
+        role_store=RoleStore(tmp_path),
+        workspace=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="base_image_path"):
+        await service.generate(
+            GenerateImageRequest(
+                prompt="repaint this portrait",
+                mode="img2img",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_service_img2img_uses_custom_strength_and_noise(tmp_path: Path) -> None:
+    settings = NovelAISettings(enabled=True, token="novel-token")
+    client = _FakeClient(_json_response(), settings)
+    service = NovelAIService(
+        settings=settings,
+        client=client,
+        store=NovelAIStore(tmp_path),
+        role_store=RoleStore(tmp_path),
+        workspace=tmp_path,
+    )
+    base_image = tmp_path / "base.png"
+    base_image.write_bytes(_TINY_PNG)
+
+    _ = await service.generate(
+        GenerateImageRequest(
+            prompt="repaint this portrait",
+            mode="img2img",
+            base_image_path=str(base_image),
+            strength=0.4,
+            noise=0.6,
+        )
+    )
+
+    parameters = client.last_generate_kwargs["parameters"]
+    assert isinstance(parameters, dict)
+    assert parameters["strength"] == 0.4
+    assert parameters["noise"] == 0.6
+
+
+@pytest.mark.asyncio
+async def test_service_auto_writeback_updates_role_assets(tmp_path: Path) -> None:
+    role_store = RoleStore(tmp_path)
+    _ = role_store.create_role(
+        role_id="mira",
+        name="Mira",
+        system_prompt="You are Mira.",
+    )
+    settings = NovelAISettings(
+        enabled=True,
+        token="novel-token",
+        auto_writeback_role_assets=True,
+    )
+    service = NovelAIService(
+        settings=settings,
+        client=_FakeClient(_json_response(), settings),
+        store=NovelAIStore(tmp_path),
+        role_store=role_store,
+        workspace=tmp_path,
+    )
+
+    result = await service.generate(
+        GenerateImageRequest(
+            prompt="character portrait",
+            mode="txt2img",
+            role_id="mira",
+            session_key="role:mira",
+        )
+    )
+
+    updated = role_store.get_role("mira")
+    assert updated is not None
+    assert result.wrote_back_to_role is True
+    assert len(updated.illustrations) == 1
+    assert updated.chat_background == updated.illustrations[0]
+
+
+@pytest.mark.asyncio
+async def test_service_rewrites_v45_subscription_error(tmp_path: Path) -> None:
+    settings = NovelAISettings(enabled=True, token="novel-token")
+    client = _FakeClient(_error_response(500), settings)
+    client._user_data = {
+        "subscription": {
+            "active": False,
+            "perks": {
+                "imageGeneration": False,
+            },
+        },
+        "information": {
+            "trialImagesLeft": 30,
+        },
+    }
+    service = NovelAIService(
+        settings=settings,
+        client=client,
+        store=NovelAIStore(tmp_path),
+        role_store=RoleStore(tmp_path),
+        workspace=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="诊断信息：subscription.active=False"):
+        await service.generate(
+            GenerateImageRequest(
+                prompt="moonlight portrait",
+                mode="txt2img",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_service_uses_nsfw_model_when_switch_enabled(tmp_path: Path) -> None:
+    settings = NovelAISettings(
+        enabled=True,
+        token="novel-token",
+        nsfw_enabled=True,
+    )
+    client = _FakeClient(_json_response(), settings)
+    service = NovelAIService(
+        settings=settings,
+        client=client,
+        store=NovelAIStore(tmp_path),
+        role_store=RoleStore(tmp_path),
+        workspace=tmp_path,
+    )
+
+    _ = await service.generate(
+        GenerateImageRequest(
+            prompt="moonlight portrait",
+            mode="txt2img",
+        )
+    )
+
+    assert client.last_generate_kwargs["model"] == "nai-diffusion-4-5-full"

@@ -1,0 +1,219 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Awaitable, Callable
+
+from agent.config_models import Config
+from bootstrap.channel_host import ChannelHost
+from bootstrap.channels import start_channels
+from bootstrap.tools import CoreRuntime, build_core_runtime
+from bus.event_bus import EventBus
+from core.common.workspace import resolve_default_workspace
+from core.net.http import (
+    SharedHttpResources,
+    clear_default_shared_http_resources,
+    configure_default_shared_http_resources,
+)
+
+def configure_logging_stream(stream) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+        datefmt="%H:%M:%S",
+        stream=stream,
+        force=True,
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+
+
+configure_logging_stream(sys.stderr)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RuntimeFeatures:
+    enable_message_channels: bool = True
+    enable_proactive: bool = True
+
+
+SERVICE_RUNTIME_FEATURES = RuntimeFeatures()
+DESKTOP_RUNTIME_FEATURES = RuntimeFeatures(
+    enable_message_channels=True,
+)
+
+
+async def _run_cleanup_steps(*steps: tuple[str, Callable[[], Awaitable[None]]]) -> None:
+    first_error: Exception | None = None
+    for name, step in steps:
+        try:
+            await step()
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+            logger.warning("shutdown step failed: %s: %s", name, exc)
+    if first_error is not None:
+        raise first_error
+
+
+async def _noop_async() -> None:
+    return None
+
+
+class AppRuntime:
+    def __init__(
+        self,
+        config: Config,
+        workspace: Path,
+        *,
+        features: RuntimeFeatures = SERVICE_RUNTIME_FEATURES,
+    ) -> None:
+        self.config = config
+        self.workspace = workspace
+        self.features = features
+        self.http_resources = SharedHttpResources()
+        self.channel_host: ChannelHost | None = None
+        self.core: CoreRuntime | None = None
+        self.agent_loop = None
+        self.bus = None
+        self.event_bus: EventBus | None = None
+        self.tools = None
+        self.push_tool = None
+        self.session_manager = None
+        self.scheduler = None
+        self.provider = None
+        self.light_provider = None
+        self.mcp_registry = None
+        self.memory_runtime = None
+        self.presence = None
+        self.proactive_loops = {}
+        self._background_tasks: list[asyncio.Task[None]] = []
+        self._memory_optimizer = None
+        self._shutdown = False
+        self._started = False
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        configure_default_shared_http_resources(self.http_resources)
+        try:
+            self.core = build_core_runtime(
+                self.config,
+                self.workspace,
+                self.http_resources,
+            )
+            self.agent_loop = self.core.loop
+            self.bus = self.core.bus
+            event_bus = self.core.event_bus
+            self.event_bus = event_bus
+            self.tools = self.core.tools
+            self.push_tool = self.core.push_tool
+            self.session_manager = self.core.session_manager
+            self.scheduler = self.core.scheduler
+            self.provider = self.core.provider
+            self.light_provider = self.core.light_provider
+            self.mcp_registry = self.core.mcp_registry
+            self.memory_runtime = self.core.memory_runtime
+            self.presence = self.core.presence
+            await self.core.start()
+
+            plugin_manager = getattr(self.core, "plugin_manager", None)
+            self.channel_host = await start_channels(
+                self.config,
+                bus=self.bus,
+                session_manager=self.session_manager,
+                push_tool=self.push_tool,
+                http_resources=self.http_resources,
+                event_bus=event_bus,
+                bot_commands=(
+                    plugin_manager.telegram_bot_commands
+                    if plugin_manager
+                    else None
+                ),
+                interrupt_controller=self.agent_loop,
+                plugin_channels=plugin_manager.channels if plugin_manager else None,
+                enable_message_channels=self.features.enable_message_channels,
+            )
+            await self.channel_host.start_all()
+
+            self._background_tasks = [
+                asyncio.create_task(self.agent_loop.run(), name="agent_loop"),
+                asyncio.create_task(
+                    self.bus.dispatch_outbound(),
+                    name="bus_dispatch_outbound",
+                ),
+                asyncio.create_task(self.scheduler.run(), name="scheduler"),
+            ]
+            if self.features.enable_proactive and self.config.proactive.enabled:
+                from bootstrap.proactive import run_proactive
+                self._background_tasks.append(asyncio.create_task(run_proactive(self.core), name="proactive"))
+            self._started = True
+        except Exception:
+            await self.shutdown()
+            raise
+
+    async def run(self) -> None:
+        try:
+            await self.start()
+            if self._background_tasks:
+                await asyncio.gather(*self._background_tasks)
+        finally:
+            await self.shutdown()
+
+    async def shutdown(self) -> None:
+        if self._shutdown:
+            return
+        self._shutdown = True
+        try:
+            if self.agent_loop is not None:
+                self.agent_loop.stop()
+            if self.bus is not None:
+                self.bus.stop()
+            if self.scheduler is not None:
+                self.scheduler.stop()
+            for task in self._background_tasks:
+                if task.done():
+                    continue
+                task.cancel()
+            for task in self._background_tasks:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            self._background_tasks = []
+            await _run_cleanup_steps(
+                ("core.stop", self.core.stop if self.core else _noop_async),
+                (
+                    "channels.stop",
+                    self.channel_host.stop_all if self.channel_host else _noop_async,
+                ),
+                (
+                    "memory_runtime.aclose",
+                    self.memory_runtime.aclose if self.memory_runtime else _noop_async,
+                ),
+                ("http_resources.aclose", self.http_resources.aclose),
+            )
+        finally:
+            if self.session_manager is not None:
+                self.session_manager._store.close()
+            clear_default_shared_http_resources(self.http_resources)
+
+
+def build_app_runtime(
+    config: Config,
+    workspace: Path | None = None,
+    *,
+    features: RuntimeFeatures = SERVICE_RUNTIME_FEATURES,
+) -> AppRuntime:
+    return AppRuntime(
+        config,
+        workspace or resolve_default_workspace(),
+        features=features,
+    )

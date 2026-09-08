@@ -1,0 +1,342 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import io
+import json
+import sys
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
+from unittest.mock import AsyncMock
+
+import pytest
+
+from bus.event_bus import EventBus
+from core.roles import RoleRepository, RoleStore
+from agent.screen_observation.service import ScreenObservationService
+from desktop_bridge.models import BridgeResponse
+from desktop_bridge.server import DesktopBridgeServer
+from desktop_bridge.service import DesktopBridgeService
+from session.manager import SessionManager
+from agent.tools.registry import ToolRegistry
+
+
+class _ReconfigurableTextStream:
+    def __init__(self, encoding: str) -> None:
+        self.encoding = encoding
+        self.reconfigure_calls: list[dict[str, str]] = []
+        self.buffer = io.BytesIO()
+
+    def reconfigure(self, **kwargs: str) -> None:
+        self.reconfigure_calls.append(kwargs)
+        self.encoding = kwargs["encoding"]
+
+    def readline(self) -> str:
+        return ""
+
+    def write(self, text: str) -> int:
+        encoded = text.encode(self.encoding)
+        self.buffer.write(encoded)
+        return len(text)
+
+    def flush(self) -> None:
+        return None
+
+
+def _build_observation_service(runtime, role_store):
+    return ScreenObservationService(
+        roles=RoleRepository(role_store),
+        provider=runtime.provider,
+        memory=runtime.memory_runtime.engine,
+        model=runtime.config.model,
+    )
+
+
+def _build_server(tmp_path: Path) -> DesktopBridgeServer:
+    session_manager = SessionManager(tmp_path)
+    runtime = SimpleNamespace(
+        session_manager=SimpleNamespace(
+            workspace=tmp_path,
+            open_role_session=session_manager.open_role_session,
+        ),
+        loop=SimpleNamespace(process_direct=AsyncMock(return_value="ok")),
+        event_bus=EventBus(),
+        provider=None,
+    )
+    return DesktopBridgeServer(runtime)
+
+
+@pytest.mark.asyncio
+async def test_serve_stdio_forces_utf8_for_all_bridge_streams(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = _build_server(tmp_path)
+    streams = {
+        "stdin": _ReconfigurableTextStream("cp936"),
+        "stdout": _ReconfigurableTextStream("cp936"),
+        "stderr": _ReconfigurableTextStream("cp936"),
+    }
+    captured: dict[str, object] = {}
+
+    async def _serve_streams(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(server, "serve_streams", _serve_streams)
+    monkeypatch.setattr(sys, "stdin", streams["stdin"])
+    monkeypatch.setattr(sys, "stdout", streams["stdout"])
+    monkeypatch.setattr(sys, "stderr", streams["stderr"])
+
+    await server.serve_stdio()
+
+    assert all(stream.encoding == "utf-8" for stream in streams.values())
+    assert all(
+        stream.reconfigure_calls == [{"encoding": "utf-8", "errors": "strict"}]
+        for stream in streams.values()
+    )
+    write_payload = cast(
+        Callable[[dict[str, object]], Awaitable[None]], captured["write_payload"]
+    )
+    await write_payload({"message": "你好"})
+    assert json.loads(streams["stdout"].buffer.getvalue().decode("utf-8")) == {
+        "message": "你好"
+    }
+
+
+def test_server_forwards_the_role_runtime_registry_to_story(tmp_path: Path) -> None:
+    session_manager = SessionManager(tmp_path)
+    role_runtime_registry = SimpleNamespace()
+    runtime = SimpleNamespace(
+        session_manager=SimpleNamespace(
+            workspace=tmp_path,
+            open_role_session=session_manager.open_role_session,
+        ),
+        loop=SimpleNamespace(process_direct=AsyncMock(return_value="ok")),
+        event_bus=EventBus(),
+        provider=None,
+        role_runtime_registry=role_runtime_registry,
+    )
+
+    server = DesktopBridgeServer(runtime)
+
+    assert server.service.story_simulation._role_runtime_registry is role_runtime_registry
+
+
+def test_desktop_server_reuses_core_screen_observation_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        DesktopBridgeService,
+        "_build_novelai_service",
+        lambda self: None,
+    )
+    observation = SimpleNamespace()
+    runtime = SimpleNamespace(
+        session_manager=SimpleNamespace(workspace=tmp_path),
+        loop=SimpleNamespace(),
+        event_bus=EventBus(),
+        tools=ToolRegistry(),
+        config=SimpleNamespace(multimodal=True, model="main-model"),
+        provider=SimpleNamespace(),
+        memory_runtime=SimpleNamespace(engine=SimpleNamespace()),
+        screen_observation=observation,
+    )
+
+    DesktopBridgeServer(runtime)
+
+    assert runtime.tools.get_tool("observe_screen") is None
+    assert runtime.screen_observation is observation
+
+
+@pytest.mark.asyncio
+async def test_observation_service_reads_roles_through_the_production_repository(
+    tmp_path: Path,
+) -> None:
+    role_store = RoleStore(tmp_path)
+    role_store.create_role(
+        role_id="mira",
+        name="Mira",
+        description="陪伴者",
+        system_prompt="用中文回复",
+    )
+    provider = SimpleNamespace(
+        chat=AsyncMock(
+            return_value=SimpleNamespace(
+                content=(
+                    '{"interface_summary":"空白画面","activity_key":"idle",'
+                    '"targets":[],"risks":[],"bubble":"",'
+                    '"experience_candidate":""}'
+                ),
+                tool_calls=[],
+            )
+        )
+    )
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(multimodal=True, model="main-model"),
+        provider=provider,
+        memory_runtime=SimpleNamespace(engine=SimpleNamespace()),
+    )
+    service = _build_observation_service(runtime, role_store)
+
+    assert service is not None
+    result = await service.analyze(
+        {
+            "role_id": "mira",
+            "frame_id": "frame-1",
+            "captured_at": "2026-07-23T12:00:00Z",
+            "width": 64,
+            "height": 64,
+            "scale_factor": 1,
+            "image_base64": base64.b64encode(b"\x89PNG\r\n\x1a\ncontent").decode(
+                "ascii"
+            ),
+            "previous_observation": None,
+            "recent_bubbles": [],
+        }
+    )
+
+    assert result["activity_key"] == "idle"
+    assert isinstance(service._model_adapter._roles, RoleRepository)
+    assert service._model_adapter._roles is service._memory_writer._roles
+
+
+@pytest.mark.asyncio
+async def test_observation_service_validates_memory_roles_through_the_repository(
+    tmp_path: Path,
+) -> None:
+    role_store = RoleStore(tmp_path)
+    role_store.create_role(role_id="mira", name="Mira", system_prompt="test")
+    memory = SimpleNamespace(
+        mutate=AsyncMock(
+            return_value=SimpleNamespace(
+                accepted=True,
+                item_id="event-1",
+                status="new",
+                actual_kind="event",
+            )
+        )
+    )
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(multimodal=True, model="main-model"),
+        provider=SimpleNamespace(),
+        memory_runtime=SimpleNamespace(engine=memory),
+    )
+    service = _build_observation_service(runtime, role_store)
+
+    assert service is not None
+    result = await service.remember(
+        {
+            "role_id": "mira",
+            "summary": "一起整理了报告",
+            "happened_at": "2026-07-23T12:00:00Z",
+            "source_ref": "screen-observation:session-1:0",
+        }
+    )
+
+    assert result["item_id"] == "event-1"
+
+
+@pytest.mark.asyncio
+async def test_health_response_is_not_blocked_by_slow_mutation(tmp_path: Path) -> None:
+    server = _build_server(tmp_path)
+    lines: asyncio.Queue[str | None] = asyncio.Queue()
+    mutation_started = asyncio.Event()
+    release_mutation = asyncio.Event()
+    health_written = asyncio.Event()
+    writes: list[dict[str, object]] = []
+
+    async def _handle(request, emit_event):
+        del emit_event
+        method = str(request["method"])
+        if method == "novelai.generate":
+            mutation_started.set()
+            await release_mutation.wait()
+        return BridgeResponse(
+            id=str(request["id"]),
+            type="response",
+            method=method,
+            payload={"ok": True},
+        )
+
+    async def _write(payload: dict[str, object]) -> None:
+        writes.append(payload)
+        if payload["method"] == "health":
+            health_written.set()
+
+    server.service.handle = _handle
+    await lines.put(json.dumps({"id": "slow", "method": "novelai.generate"}))
+    await lines.put(json.dumps({"id": "health", "method": "health"}))
+    serve_task = asyncio.create_task(
+        server.serve_streams(read_line=lines.get, write_payload=_write)
+    )
+
+    await mutation_started.wait()
+    await asyncio.wait_for(health_written.wait(), timeout=0.2)
+    assert [payload["id"] for payload in writes] == ["health"]
+
+    release_mutation.set()
+    await lines.put(None)
+    await serve_task
+    assert {payload["id"] for payload in writes} == {"slow", "health"}
+
+
+@pytest.mark.asyncio
+async def test_server_uses_one_writer_for_concurrent_responses(tmp_path: Path) -> None:
+    server = _build_server(tmp_path)
+    lines = iter(
+        [
+            json.dumps({"id": str(index), "method": "health"})
+            for index in range(4)
+        ]
+        + [None]
+    )
+    active_writes = 0
+    peak_writes = 0
+    writes: list[dict[str, object]] = []
+
+    async def _read() -> str | None:
+        return next(lines)
+
+    async def _write(payload: dict[str, object]) -> None:
+        nonlocal active_writes, peak_writes
+        active_writes += 1
+        peak_writes = max(peak_writes, active_writes)
+        await asyncio.sleep(0)
+        writes.append(payload)
+        active_writes -= 1
+
+    await server.serve_streams(read_line=_read, write_payload=_write)
+
+    assert peak_writes == 1
+    assert {payload["id"] for payload in writes} == {"0", "1", "2", "3"}
+
+
+@pytest.mark.asyncio
+async def test_server_eof_cancels_and_awaits_in_flight_request(tmp_path: Path) -> None:
+    server = _build_server(tmp_path)
+    lines = iter(
+        [json.dumps({"id": "slow", "method": "novelai.generate"}), None]
+    )
+    cancelled = asyncio.Event()
+
+    async def _read() -> str | None:
+        return next(lines)
+
+    async def _handle(request, emit_event):
+        del request, emit_event
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def _write(_payload: dict[str, object]) -> None:
+        raise AssertionError("cancelled request must not write a response")
+
+    server.service.handle = _handle
+
+    await asyncio.wait_for(
+        server.serve_streams(read_line=_read, write_payload=_write),
+        timeout=0.2,
+    )
+    assert cancelled.is_set()

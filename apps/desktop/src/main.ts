@@ -1,0 +1,437 @@
+import { resolve } from "node:path";
+import { app, BrowserWindow, Menu, powerMonitor, protocol, screen, session, shell } from "electron";
+import { localAssetSchemePrivileges, registerLocalAssetProtocol } from "./assets/assetProtocol.js";
+import { DesktopBridgeClient } from "./bridge/bridgeClient.js";
+import { startBridge, wireBridgeEvents } from "./bridge/bridgeLifecycle.js";
+import { logDesktopDiagnostic } from "./diagnostics.js";
+import { registerDesktopIpc } from "./bridge/ipc.js";
+import { openGrantedLocalAsset } from "./assets/localAssetOpen.js";
+import { LocalAssetRegistry, localAssetScheme } from "./assets/localAssetRegistry.js";
+import { ensureDesktopRuntimeConfig, resolveDesktopRuntimePaths } from "./runtimePaths.js";
+import { createDesktopTray } from "./tray.js";
+import { createDesktopWindow, showDesktopWindow } from "./window.js";
+import {
+  attachDesktopWindowLifecycle,
+  shouldHideDesktopWindowOnClose as shouldHideDesktopWindowOnClosePolicy,
+} from "./windowLifecycle.js";
+import { registerDesktopContentSecurityPolicy } from "./windowSecurity.js";
+import { DesktopPetController } from "./pet/controller.js";
+import { loadDesktopPetSettings, saveDesktopPetSettings } from "./pet/settings.js";
+import type { DesktopPetActionState, DesktopPetBinding, DesktopPetSettings } from "./pet/types.js";
+import { createDesktopPetWindow, displayForDesktopPet } from "./pet/window.js";
+import { DesktopObservationController } from "./observation/controller.js";
+import { wireSessionReplyBubbles } from "./observation/roleBubble.js";
+import { createVoiceCaptureWindow } from "./voice/window.js";
+import { BrowserVoiceRecorder } from "./voice/recorder.js";
+import { DesktopVoiceController } from "./voice/controller.js";
+import { VoiceHotkeyController } from "./voice/hotkey.js";
+import { BrowserVoicePlayback } from "./voice/playback.js";
+import { cancelVoiceTurn, createVoicePlaybackCallbacks, handleVoiceBridgeEvent, selectVoiceTurn } from "./voice/bridgeEvents.js";
+import { configureSettingsConfigPath, loadSettingsData } from "./settings.js";
+import type { SettingsFormData, VoiceStatePayload } from "./bridge/shared.js";
+import { configureApplicationIdentity } from "./applicationIdentity.js";
+
+// Voice replies are played from a trusted hidden renderer without a DOM user gesture.
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+
+const runtimePaths = resolveDesktopRuntimePaths({
+  packaged: app.isPackaged,
+  appPath: app.getAppPath(),
+  homePath: app.getPath("home"),
+  workspacePath: process.env.HASAKI_WORKSPACE,
+});
+const hasSingleInstanceLock = configureApplicationIdentity(app, runtimePaths.workspacePath, process.env.HASAKI_DESKTOP_USER_DATA_DIR);
+const bridge = new DesktopBridgeClient(runtimePaths.bridge);
+const localAssets = new LocalAssetRegistry();
+const trayLifecycleEnabled = process.platform === "win32";
+let desktopWindow: BrowserWindow | null = null;
+let desktopTray: ReturnType<typeof createDesktopTray> | null = null;
+let desktopPetSettings: DesktopPetSettings;
+let desktopPet: DesktopPetController | null = null;
+let desktopObservation: DesktopObservationController | null = null;
+let voiceRecorder: BrowserVoiceRecorder | null = null;
+let voiceController: DesktopVoiceController | null = null;
+let voicePlayback: BrowserVoicePlayback | null = null;
+let voiceHotkey: VoiceHotkeyController | null = null;
+let voiceSettings: SettingsFormData["voice"];
+let activeSessionKey = "desktop:default";
+let isQuitting = false;
+let bridgeShutdownStarted = false;
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+}
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: localAssetScheme,
+    privileges: localAssetSchemePrivileges,
+  },
+]);
+
+process.on("uncaughtException", (error) => {
+  logDesktopDiagnostic({
+    scope: "main",
+    event: "process.uncaughtException",
+    payload: {
+      error,
+    },
+  });
+});
+
+process.on("unhandledRejection", (reason) => {
+  logDesktopDiagnostic({
+    scope: "main",
+    event: "process.unhandledRejection",
+    payload: {
+      reason,
+    },
+  });
+});
+
+app.on("child-process-gone", (_event, details) => {
+  logDesktopDiagnostic({
+    scope: "main",
+    event: "app.child-process-gone",
+    payload: {
+      type: details.type,
+      reason: details.reason,
+      exitCode: details.exitCode,
+      serviceName: details.serviceName,
+      name: details.name,
+    },
+  });
+});
+
+app.on("second-instance", () => {
+  logDesktopDiagnostic({
+    scope: "main",
+    event: "app.second-instance",
+    payload: {},
+  });
+  showOrCreateDesktopWindow();
+});
+
+async function openLocalAttachment(value: string) {
+  const result = await openGrantedLocalAsset(localAssets, value, (path) => shell.openPath(path));
+  if (result.error) {
+    logDesktopDiagnostic({
+      scope: "main",
+      event: "asset.open.failed",
+      payload: { error: result.error },
+    });
+  }
+  return result;
+}
+
+function desktopPetSettingsPath(): string {
+  return resolve(app.getPath("userData"), "desktop-pet.json");
+}
+
+async function resolveDesktopPetBinding(): Promise<DesktopPetBinding | null> {
+  const response = await bridge.invoke({ method: "pet.get", payload: {} });
+  if (response.error) throw new Error(response.error.message);
+  const packages = response.payload.packages;
+  if (!Array.isArray(packages)) return null;
+  const selected = packages.find((p: { id: string }) => p.id === response.payload.selected_package_id);
+  if (!selected) return null;
+  const reference = localAssets.grantPath(selected.spritesheet_abs);
+  if (!reference) return null;
+  return {
+    sessionKey: String(response.payload.session_key || "desktop:default"),
+    package: { id: selected.id, displayName: selected.display_name, spritesheetUrl: reference.url },
+    actions: desktopPetActions(selected.actions),
+  };
+}
+
+function desktopPetActions(value: unknown): Record<string, DesktopPetActionState> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, DesktopPetActionState> = {};
+  for (const [name, state] of Object.entries(value)) {
+    if (typeof state === "string" && isDesktopPetActionState(state)) result[name] = state;
+  }
+  return result;
+}
+
+function isDesktopPetActionState(value: string): value is DesktopPetActionState {
+  return ["idle", "running-right", "running-left", "waving", "jumping"].includes(value);
+}
+
+async function persistDesktopPetSettings(settings: DesktopPetSettings): Promise<void> {
+  desktopPetSettings = settings;
+  await saveDesktopPetSettings(desktopPetSettingsPath(), settings);
+}
+
+function requestAppQuit(): void {
+  isQuitting = true;
+  app.quit();
+}
+
+function publishVoiceState(payload: VoiceStatePayload): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send("desktop:voice-state", payload);
+  }
+}
+
+function syncVoiceAvailability(): void {
+  if (!voiceHotkey) return;
+  const enabled = Boolean(voiceSettings?.enabled);
+  if (enabled) {
+    voiceHotkey.start();
+    return;
+  }
+  voiceHotkey.stop();
+  voiceController?.cancel();
+}
+
+function syncDesktopPetRuntimeState(): void {
+  desktopTray?.refresh();
+  syncVoiceAvailability();
+}
+
+function reloadVoiceSettings(): void {
+  voiceSettings = loadSettingsData().formData.voice;
+  voiceHotkey?.setHotkey(voiceSettings.hotkey);
+  syncVoiceAvailability();
+}
+
+async function hideDesktopPet(): Promise<void> {
+  await desktopPet?.hide();
+  syncDesktopPetRuntimeState();
+  await desktopObservation?.restore();
+}
+
+async function showDesktopPet(): Promise<void> {
+  await desktopPet?.show();
+  syncDesktopPetRuntimeState();
+  await desktopObservation?.restore();
+}
+
+function shouldHideDesktopWindowOnClose(): boolean {
+  return shouldHideDesktopWindowOnClosePolicy({
+    isQuitting,
+    trayLifecycleEnabled,
+    desktopPetRunning: Boolean(desktopPet?.isRunning || desktopPetSettings?.visible),
+  });
+}
+
+function wireDesktopWindow(window: BrowserWindow): BrowserWindow {
+  attachDesktopWindowLifecycle(window, {
+    shouldHideOnClose: shouldHideDesktopWindowOnClose,
+  });
+  window.on("closed", () => {
+    if (desktopWindow === window) {
+      desktopWindow = null;
+    }
+  });
+  return window;
+}
+
+function getOrCreateDesktopWindow(): BrowserWindow {
+  if (desktopWindow) {
+    return desktopWindow;
+  }
+  desktopWindow = wireDesktopWindow(createDesktopWindow({
+    openLocalAttachment,
+  }));
+  return desktopWindow;
+}
+
+function showOrCreateDesktopWindow(): BrowserWindow {
+  const window = getOrCreateDesktopWindow();
+  showDesktopWindow(window);
+  return window;
+}
+
+if (hasSingleInstanceLock) void app.whenReady().then(() => {
+  logDesktopDiagnostic({ scope: "main", event: "runtime.paths", payload: {
+    appPath: app.getAppPath(), workspace: runtimePaths.workspacePath,
+    backend: runtimePaths.bridge, userData: app.getPath("userData"), sessionData: app.getPath("sessionData"),
+  } });
+  ensureDesktopRuntimeConfig(runtimePaths);
+  configureSettingsConfigPath(runtimePaths.configPath);
+  reloadVoiceSettings();
+  process.env.HASAKI_DESKTOP_USER_DATA_DIR = app.getPath("userData");
+  desktopPetSettings = loadDesktopPetSettings(desktopPetSettingsPath());
+  const activeVoiceRecorder = new BrowserVoiceRecorder(createVoiceCaptureWindow);
+  voiceRecorder = activeVoiceRecorder;
+  const privateWorkspaceRoot = runtimePaths.workspacePath;
+  const localAssetImportsRoot = resolve(privateWorkspaceRoot, "private_runtime", "imports");
+  localAssets.addTrustedRoot(privateWorkspaceRoot);
+  registerDesktopContentSecurityPolicy(
+    session.defaultSession.webRequest,
+    process.env.HASAKI_RENDERER_DEV_SERVER_URL,
+  );
+  registerLocalAssetProtocol(protocol, localAssets);
+  void startBridge(bridge);
+  desktopPet = new DesktopPetController({
+    getSettings: () => desktopPetSettings,
+    saveSettings: persistDesktopPetSettings,
+    resolveBinding: resolveDesktopPetBinding,
+    createWindow: createDesktopPetWindow,
+    displayForWindow: displayForDesktopPet,
+    cursorScreenPoint: () => screen.getCursorScreenPoint(),
+    openLocalAttachment,
+  });
+  desktopObservation = new DesktopObservationController({
+    pet: desktopPet,
+    getSessionKey: () => activeSessionKey,
+  });
+  const activeVoiceController = new DesktopVoiceController({
+    recorder: activeVoiceRecorder,
+    bridge,
+    isEnabled: () => Boolean(
+      voiceSettings?.enabled
+      && !activeVoiceRecorder.isBusy
+    ),
+    sessionKey: () => activeSessionKey,
+    microphoneDeviceId: () => voiceSettings?.microphoneDeviceId ?? "",
+    publishState: publishVoiceState,
+    onNewInput: (previousTurnId, nextTurnId) => {
+      void selectVoiceTurn(bridge, activeVoicePlayback, previousTurnId, nextTurnId).catch((error) => {
+        logDesktopDiagnostic({
+          scope: "main",
+          event: "voice-turn.cancel.failed",
+          payload: { error, previousTurnId, nextTurnId },
+        });
+      });
+    },
+    onCancelTurn: (turnId) => {
+      activeVoicePlayback.cancelTurn(turnId);
+      void cancelVoiceTurn(bridge, turnId).catch((error) => {
+        logDesktopDiagnostic({
+          scope: "main",
+          event: "voice-turn.cancel.failed",
+          payload: { error, turnId },
+        });
+      });
+    },
+  });
+  voiceController = activeVoiceController;
+  const activeVoicePlayback = new BrowserVoicePlayback(
+    createVoiceCaptureWindow,
+    createVoicePlaybackCallbacks(activeVoiceController),
+  );
+  voicePlayback = activeVoicePlayback;
+  if (process.platform === "win32") {
+    voiceHotkey = new VoiceHotkeyController({
+      onPress: (source) => activeVoiceController.startPress(source),
+      onRelease: (source) => activeVoiceController.release(source),
+      onCancel: () => activeVoiceController.cancel(),
+    });
+    voiceHotkey.setHotkey(voiceSettings.hotkey);
+  }
+  wireBridgeEvents(bridge, localAssets, (event) => {
+    if (event.method === "session.selected") { activeSessionKey = String(event.payload.session_key); return; }
+    if (event.method === "desktop.pet.action") {
+      desktopPet?.handleAgentAction(event.payload);
+      return;
+    }
+    if (handleVoiceBridgeEvent(event, activeVoiceController, activeVoicePlayback)) return;
+  });
+  wireSessionReplyBubbles(bridge, desktopObservation);
+  powerMonitor.on("lock-screen", () => {
+    void desktopObservation?.suspend("Windows 已锁定，屏幕观察已暂停").catch((error) => {
+      logDesktopDiagnostic({ scope: "main", event: "desktop-observation.suspend.failed", payload: { error } });
+    });
+  });
+  powerMonitor.on("unlock-screen", () => {
+    void desktopObservation?.resume().catch((error) => {
+      logDesktopDiagnostic({ scope: "main", event: "desktop-observation.resume.failed", payload: { error } });
+    });
+  });
+  registerDesktopIpc({
+    bridge,
+    localAssets,
+    localAssetImportsRoot,
+    openLocalAttachment,
+    desktopPet,
+    desktopObservation,
+    onOpenPetChat: showOrCreateDesktopWindow,
+    onShowPetContextMenu: (petWindow) => {
+      Menu.buildFromTemplate([
+        { label: "显示主窗口", click: showOrCreateDesktopWindow },
+        { label: "隐藏桌宠", click: () => void hideDesktopPet() },
+      ]).popup({ window: petWindow });
+    },
+    voiceRecorder: activeVoiceRecorder,
+    voiceController: activeVoiceController,
+    voicePlayback: activeVoicePlayback,
+    onVoiceSettingsChanged: reloadVoiceSettings,
+    onPetVisibilityChanged: syncDesktopPetRuntimeState,
+  });
+  getOrCreateDesktopWindow();
+  if (trayLifecycleEnabled) {
+    desktopTray = createDesktopTray({
+      onShowWindow: () => {
+        showOrCreateDesktopWindow();
+      },
+      onQuitRequested: requestAppQuit,
+      getDesktopPetState: () => ({
+        visible: desktopPetSettings.visible,
+        available: Boolean(desktopPetSettings.sessionKey && desktopPetSettings.packageId),
+      }),
+      onToggleDesktopPet: async () => {
+        if (!desktopPet) return;
+        try {
+          await (desktopPetSettings.visible ? hideDesktopPet() : showDesktopPet());
+        } catch (error) {
+          logDesktopDiagnostic({ scope: "main", event: "desktop-pet.toggle.failed", payload: { error } });
+        }
+      },
+    });
+    void desktopPet.restore().then(async () => {
+      syncDesktopPetRuntimeState();
+      await desktopObservation?.restore();
+    }).catch((error) => {
+      logDesktopDiagnostic({ scope: "main", event: "desktop-pet.restore.failed", payload: { error } });
+    });
+  }
+  app.on("activate", () => {
+    showOrCreateDesktopWindow();
+  });
+}).catch((error) => {
+  logDesktopDiagnostic({
+    scope: "main",
+    event: "app.whenReady.failed",
+    payload: {
+      error,
+    },
+  });
+  app.exit(1);
+});
+
+app.on("window-all-closed", () => {
+  if (!isQuitting && trayLifecycleEnabled) {
+    return;
+  }
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+
+app.on("before-quit", (event) => {
+  isQuitting = true;
+  desktopTray?.destroy();
+  voiceHotkey?.stop();
+  voiceController?.dispose();
+  voicePlayback?.dispose();
+  voiceRecorder?.dispose();
+  if (bridgeShutdownStarted || !bridge.isRunning()) {
+    return;
+  }
+  event.preventDefault();
+  bridgeShutdownStarted = true;
+  void (async () => {
+    try {
+      await desktopObservation?.shutdown();
+    } catch (error) {
+      logDesktopDiagnostic({ scope: "main", event: "desktop-observation.shutdown.failed", payload: { error } });
+    } finally {
+      await bridge.stop();
+      app.quit();
+    }
+  })();
+});
+
+export { bridge };

@@ -1,0 +1,124 @@
+/// <reference types="node" />
+
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import type { DesktopApi, SettingsFormData, SettingsSnapshot } from "../../../src/bridge/shared.js";
+import {
+  loadSettingsPageData,
+  saveSettingsPageData,
+  shouldRetryFailedSettingsLoad,
+} from "./settingsPersistence.js";
+
+function createSettingsFormData(
+  overrides: Partial<SettingsFormData["models"]> = {},
+): SettingsFormData {
+  return {
+    models: {
+      registrations: overrides.registrations ?? [{ id: "00000000-0000-4000-a000-000000000001", provider: "openai", model: "gpt-main", apiKey: "", baseUrl: "", effort: "none" }],
+    },
+    channels: {
+      telegramToken: "",
+      qqBotUin: "",
+      qqBotAppId: "",
+      qqBotClientSecret: "",
+    },
+    memory: {
+      enabled: true,
+      engine: "default",
+      embeddingModel: "",
+      embeddingApiKey: "",
+      embeddingBaseUrl: "",
+      outputDimensionality: "",
+    },
+    voice: {
+      enabled: false,
+      hotkey: "Ctrl+Space",
+      microphoneDeviceId: "",
+      asrProvider: "tencent",
+      asrBaseUrl: "https://asr.tencentcloudapi.com/",
+      asrSecretId: "",
+      asrSecretKey: "",
+      ttsProvider: "minimax",
+      ttsBaseUrl: "https://api.minimaxi.com/v1/t2a_v2",
+      ttsModel: "speech-2.8-turbo",
+      ttsApiKey: "",
+      ttsVolume: 2,
+    },
+    advanced: {
+      maxTokens: 4000,
+      maxIterations: 10,
+      devMode: false,
+      streamingEnabled: false,
+      memoryWindow: 20,
+      searchEnabled: true,
+      spawnEnabled: true,
+      memoryOptimizerEnabled: false,
+      memoryOptimizerIntervalSeconds: 3600,
+      pluginsRawToml: "",
+    },
+  };
+}
+
+function createSettingsSnapshot(
+  overrides: Partial<SettingsFormData["models"]> = {},
+): SettingsSnapshot {
+  return {
+    configPath: "D:\\Coding\\Shiori\\config.toml",
+    formData: createSettingsFormData(overrides),
+  };
+}
+
+describe("shouldRetryFailedSettingsLoad", () => {
+  it("retries once the bridge recovers from a failed settings load", () => {
+    assert.equal(shouldRetryFailedSettingsLoad({ bridgeReady: true, loadError: "bridge offline" }), true);
+    assert.equal(shouldRetryFailedSettingsLoad({ bridgeReady: false, loadError: "bridge offline" }), false);
+  });
+});
+
+describe("loadSettingsPageData", () => {
+  it("loads only persisted runtime settings", async () => {
+    const snapshot = createSettingsSnapshot();
+    const loaded = await loadSettingsPageData({
+      readSettings: async () => snapshot,
+    } satisfies Pick<DesktopApi, "readSettings">);
+
+    assert.deepEqual(loaded.snapshot, snapshot);
+  });
+});
+
+describe("saveSettingsPageData", () => {
+  it("does not touch role-owned channel bindings", async () => {
+    const calls: string[] = [];
+    const persistedSnapshot = createSettingsSnapshot({ registrations: [{ id: "00000000-0000-4000-a000-000000000001", provider: "openai", model: "saved-model", apiKey: "", baseUrl: "", effort: "none" }] });
+    const result = await saveSettingsPageData(
+      {
+        saveSettings: async () => {
+          calls.push("saveSettings");
+          return {
+            ok: true,
+            health: { ok: true, message: "ok" },
+          };
+        },
+        readSettings: async () => {
+          calls.push("readSettings");
+          return persistedSnapshot;
+        },
+        invoke: async () => ({ id: "", type: "response", method: "roles.update", payload: {}, error: null }),
+      } satisfies Pick<DesktopApi, "readSettings" | "saveSettings" | "invoke">,
+      createSettingsFormData({ registrations: [{ id: "00000000-0000-4000-a000-000000000001", provider: "openai", model: "draft-model", apiKey: "", baseUrl: "", effort: "none" }] }),
+    );
+
+    assert.deepEqual(calls, ["saveSettings", "readSettings"]);
+    assert.equal(result.snapshot.formData.models.registrations[0]?.model, "saved-model");
+    assert.equal(result.nextDraft.channels.telegramToken, "");
+  });
+
+  it("does not invoke legacy APIs while saving settings", async () => {
+    const result = await saveSettingsPageData({
+      saveSettings: async () => ({ ok: true, health: { ok: true, message: "ok" } }),
+      invoke: async () => { throw new Error("Unexpected RPC"); },
+      readSettings: async () => createSettingsSnapshot(),
+    }, createSettingsFormData());
+    assert.equal(result.saveResult.ok, true);
+  });
+});

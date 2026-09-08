@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": ["node"]
+  },
+  "include": [
+    "src/main.ts",
+    "src/pet/**/*.ts",
+    "src/observation/**/*.ts",
+    "src/voice/**/*.ts",
+    "src/assets/**/*.ts",
+    "src/bridge/**/*.ts",
+    "src/paths.ts",
+    "src/tray.ts",
+    "src/window.ts",
+    "src/windowSecurity.ts",
+    "src/electron-shim.d.ts"
+  ]
+}
