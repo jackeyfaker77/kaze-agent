@@ -20,7 +20,7 @@ it("sets both storage paths before taking the single-instance lock", () => {
     },
   }, workspace);
   assert.equal(ownsLock, false);
-  assert.deepEqual(calls, ["name:Hasaki Agent", "id:com.hasaki.agent", "userData", "sessionData"]);
+  assert.deepEqual(calls, ["name:Kaze", "id:com.hasaki.agent", "userData", "sessionData"]);
   assert.equal(paths.userData, resolve(workspace, ".desktop/user-data"));
   assert.equal(realpathSync(paths.sessionData), realpathSync(resolve(paths.userData, "chromium")));
 });

@@ -26,11 +26,11 @@ export function createDesktopTray({ onShowWindow, onQuitRequested, getDesktopPet
             void onToggleDesktopPet?.().finally(refresh);
           },
         },
-        { label: "退出 Hasaki Agent", click: () => onQuitRequested() },
+        { label: "退出 Kaze", click: () => onQuitRequested() },
       ]),
     );
   };
-  tray.setToolTip("Hasaki Agent");
+  tray.setToolTip("Kaze");
   refresh();
   tray.on("click", () => onShowWindow());
   tray.on("right-click", refresh);

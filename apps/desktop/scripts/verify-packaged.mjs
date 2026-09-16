@@ -27,7 +27,7 @@ export async function verifyPackagedDesktop(appOutDir) {
     requireFile(join(resources, "app.asar")),
     requireFile(join(resources, "runtime", "shiori-runtime.exe")),
     requireFile(join(resources, "config.example.toml")),
-    requireFile(join(resources, "assets", "shiori-app-icon.ico")),
+    requireFile(join(resources, "assets", "kaze-app-icon.ico")),
     requireDirectory(join(resources, "app.asar.unpacked", "node_modules", "uiohook-napi")),
   ]);
 }

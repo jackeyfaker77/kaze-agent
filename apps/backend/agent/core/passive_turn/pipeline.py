@@ -417,6 +417,12 @@ class PassiveTurnPipeline:
                         note=str(exc)[:160],
                     )
                 )
+                if msg.metadata.get("raise_on_error"):
+                    # Desktop RPC needs a failure, not an uncommitted control reply.
+                    # Keep provider response bodies and credentials out of the UI.
+                    if getattr(exc, "status_code", None) in {401, 403}:
+                        raise RuntimeError("模型认证失败，请在“模型”中检查 API Key 和访问权限后重试。") from exc
+                    raise RuntimeError("消息处理失败，请检查模型连接、服务地址和模型名称后重试。") from exc
                 return await self._control_outbound(
                     state,
                     OutboundMessage(

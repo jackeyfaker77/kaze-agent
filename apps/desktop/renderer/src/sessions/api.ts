@@ -1,4 +1,4 @@
-export type Message = { id?: string; session_key?: string; seq?: number; role: string; content: string; media?: string[]; ts?: string; timestamp?: string; extra?: unknown };
+export type Message = { id?: string; session_key?: string; seq?: number; role: string; content: string; media?: string[]; ts?: string; timestamp?: string; extra?: unknown; tool_chain?: unknown };
 export type Session = { session_key: string; title: string; messages: Message[] };
 export type Entry = { key: string; metadata?: { title?: string }; updated_at?: string; message_count: number };
 export async function rpc<T>(method: string, payload: Record<string, unknown> = {}): Promise<T> {

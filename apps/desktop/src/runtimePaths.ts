@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { removeUnconfiguredModelExample } from "./settings.js";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const developmentRepositoryRoot = resolve(moduleDirectory, "..", "..", "..");
@@ -85,6 +86,7 @@ function buildBridgeArgs(prefix: string[], workspacePath: string, configPath: st
 /** Creates the user-owned config file once, preserving it across upgrades and uninstalls. */
 export function ensureDesktopRuntimeConfig(paths: DesktopRuntimePaths): void {
   if (existsSync(paths.configPath)) {
+    removeUnconfiguredModelExample(paths.configPath);
     return;
   }
   mkdirSync(dirname(paths.configPath), { recursive: true });

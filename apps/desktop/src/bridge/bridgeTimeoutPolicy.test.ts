@@ -10,4 +10,6 @@ test("bridge timeout policy keeps command classes explicit", () => {
   assert.equal(bridgeRequestTimeoutMs("voice.clone"), bridgeTimeoutPolicy.voiceRequest);
   assert.equal(bridgeRequestTimeoutMs("novelai.generate"), bridgeTimeoutPolicy.imageGeneration);
   assert.equal(bridgeRequestTimeoutMs("observation.analyze"), bridgeTimeoutPolicy.observation);
+  assert.equal(bridgeRequestTimeoutMs("codex.models"), bridgeTimeoutPolicy.modelCatalog);
+  assert.equal(bridgeRequestTimeoutMs("codex.login.status"), bridgeTimeoutPolicy.defaultRequest);
 });

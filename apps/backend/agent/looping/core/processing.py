@@ -180,9 +180,12 @@ class _ProcessingMixin:
         disabled_tools: list[str] | None = None,
         media: list[str] | None = None,
         metadata: dict[str, object] | None = None,
+        raise_on_error: bool = False,
     ) -> str:
         merged_metadata: dict[str, object] = dict(metadata or {})
         merged_metadata["session_key_override"] = session_key
+        if raise_on_error:
+            merged_metadata["raise_on_error"] = True
         if omit_user_turn:
             merged_metadata["omit_user_turn"] = True
         if skip_post_memory:

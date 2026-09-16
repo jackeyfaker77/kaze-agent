@@ -37,3 +37,35 @@
 @media(forced-colors:active){.session-app button,.session-app select{border:1px solid ButtonText}.session-app :focus-visible{outline:2px solid Highlight}}
 
 .markdown ul{list-style:disc}.markdown ol{list-style:decimal}
+
+/* 工作台工具链：使用现有主题色，长记录在详情栏内换行。 */
+.message-detail .tool-chain{margin:24px 0;min-width:0}
+.message-detail .tool-chain h3{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;margin:0 0 8px}
+.message-detail .tool-chain h3 span,.tool-chain-note,.tool-call-status{font-size:12px;font-weight:400;color:var(--muted)}
+.message-detail .tool-chain-note{margin:0 0 12px}
+.tool-chain .tool-round{margin:10px 0;border:1px solid var(--line);border-radius:8px;background:var(--low);overflow-wrap:anywhere}
+.tool-chain summary{cursor:pointer;padding:10px 12px;min-height:40px;overflow-wrap:anywhere}
+.tool-chain summary:hover{background:var(--selected)}
+.tool-chain summary:focus-visible{outline-offset:-3px}
+.tool-chain .tool-calls{padding:0 10px}
+.tool-chain .tool-call{border-top:1px solid var(--line)}
+.tool-chain .tool-call-status{margin-left:8px}
+.message-detail .tool-chain dl{margin:0;padding:0 12px}
+.message-detail .tool-chain dl>div{display:block;padding:10px 0;border-bottom:1px solid var(--line);min-width:0}
+.message-detail .tool-chain dl>div:last-child{border-bottom:0}
+.message-detail .tool-chain dt{width:auto;margin-bottom:6px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.message-detail .tool-chain dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.message-detail .tool-chain pre{margin:0;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;padding:8px;background:var(--bright);border-radius:4px}
+.tool-chain .record-tree,.tool-chain .record-long-text{min-width:0;border-left:1px solid var(--line)}
+
+.session-app .codex-avatar{background:#6559d9;color:#fff}
+.codex-connection .codex-auth-status{padding:10px 12px;background:var(--container);border-radius:8px}
+.codex-connection .codex-device-login{display:grid;gap:12px;padding:16px;border:1px solid var(--line);border-radius:10px;background:var(--low)}
+.codex-connection .codex-device-login p{margin:0}
+.codex-connection .codex-device-login code{font-size:24px;letter-spacing:.1em;text-align:center;padding:10px;background:var(--bright);border-radius:6px;user-select:all}
+.codex-connection .codex-device-login small{line-height:1.7}
+.codex-connection .codex-login-button{justify-content:center;background:var(--container)}
+
+/* Kaze: transparent sitting wind-ferret, shared across light/dark surfaces. */
+.kaze-avatar{display:block;object-fit:contain;flex-shrink:0;user-select:none}
+.chat-message.assistant>small{display:flex;align-items:center;gap:8px}

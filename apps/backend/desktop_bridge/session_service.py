@@ -20,6 +20,8 @@ class DesktopBridgeService:
         self.runtime = runtime
         self.workspace = runtime.session_manager.workspace
         self.sessions = runtime.session_manager
+        from desktop_bridge.codex_service import CodexConnectionService
+        self.codex = CodexConnectionService(self.workspace)
         from core.pets.packages import PetPackageService
         self.pets = PetPackageService(self.workspace)
         self._listeners = []
@@ -116,6 +118,8 @@ class DesktopBridgeService:
                                   error=BridgeError(code="request_failed", message=str(exc)))
 
     async def _dispatch(self, method, payload, request_id):
+        if method.startswith("codex."):
+            return await self.codex.handle(method, payload)
         if method == "health":
             return {"ok": True, "architecture": "sessions", "memory_path": str(self.workspace / "memory")}
         voice_result = await self.voice.handle(method, payload)
@@ -204,6 +208,9 @@ class DesktopBridgeService:
                 raise ValueError("消息不能为空")
             if key in self._requests:
                 raise ValueError("此会话正在回复，请等待或停止后重试")
+            credential = self.runtime.config.api_key.strip()
+            if credential in {"sk-...", "YOUR_API_KEY", "your-api-key"} or credential.startswith("${"):
+                raise ValueError(f"模型 {self.runtime.config.model} 的 API Key 尚未配置，请在“模型”中填写有效密钥或选择已配置的模型。")
             session = self.sessions.get_or_create(key)
             if not session.metadata.get("title") or session.metadata["title"] == "新会话":
                 session.metadata["title"] = content.splitlines()[0][:60] if content else "附件会话"
@@ -216,6 +223,7 @@ class DesktopBridgeService:
                 reply = await self.runtime.loop.process_direct(
                     content=content, session_key=key, channel="desktop", chat_id=key,
                     stream_events=True, media=media,
+                    raise_on_error=True,
                     metadata={"request_id": request_id, "input_method": payload.get("input_method", "text")},
                 )
                 result = {"session_key": key, "reply": reply, "session": self._snapshot(key)}
@@ -266,6 +274,7 @@ class DesktopBridgeService:
             await emit("voice.tts.finished")
 
     async def aclose(self):
+        await self.codex.aclose()
         for event_type, handler in self._event_handlers:
             self.runtime.event_bus.off(event_type, handler)
         await self.voice.aclose()

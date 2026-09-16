@@ -148,8 +148,31 @@ function loadModelRegistrations(llm: Record<string, unknown>): ModelRegistration
   });
 }
 
+function isLegacyQwenExample(item: ModelRegistrationFormData): boolean {
+  return item.id === "00000000-0000-4000-a000-000000000002"
+    && item.provider === "qwen" && item.model === "qwen-vl-plus"
+    && item.apiKey.trim() === "sk-...";
+}
+
+/** Remove only the shipped, unconfigured example, preserving all other TOML bytes. */
+export function removeUnconfiguredModelExample(path: string): void {
+  if (!existsSync(path)) return;
+  const content = readFileSync(path, "utf-8");
+  const registrations = loadModelRegistrations(asRecord(parseToml(content).llm));
+  if (!registrations.some(isLegacyQwenExample) || !registrations.some(item => !isLegacyQwenExample(item))) return;
+  const next = content.replace(/^\[\[llm\.registrations\]\]\r?\n[\s\S]*?(?=^\[|$(?![\s\S]))/gm, block => {
+    const item = loadModelRegistrations(asRecord(parseToml(block).llm))[0];
+    return item && isLegacyQwenExample(item) ? "" : block;
+  });
+  if (next === content) return;
+  const backup = `${path}.before-example-cleanup.bak`;
+  if (!existsSync(backup)) writeFileSync(backup, content, { encoding: "utf-8" });
+  writeFileSync(path, next, { encoding: "utf-8" });
+}
+
 export function loadSettingsData(): SettingsSnapshot {
   const configuredPath = requireConfigPath();
+  removeUnconfiguredModelExample(configuredPath);
   const content = existsSync(configuredPath) ? readFileSync(configuredPath, "utf-8") : "";
   const parsed = parseToml(content);
   const llm = asRecord(parsed.llm);
@@ -397,6 +420,9 @@ export async function saveSettings(
   formData: SettingsFormData,
   checkHealth: BridgeHealthChecker,
 ): Promise<SaveSettingsResult> {
+  // A still-open settings view may submit the old example after migration.
+  // Apply the same rule on writes so unrelated settings cannot resurrect it.
+  formData = { ...formData, models: { registrations: formData.models.registrations.filter(item => !isLegacyQwenExample(item)) } };
   validateSettings(formData);
   writeFileSync(requireConfigPath(), renderSettingsToml(formData), { encoding: "utf-8" });
   const health = await checkHealth();

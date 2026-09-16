@@ -414,7 +414,7 @@ def build_core_runtime(
     migrate_workspace(workspace)
     bus = MessageBus()
     event_bus = EventBus()
-    provider, light_provider, agent_provider = build_providers(config)
+    provider, light_provider, agent_provider = build_providers(config, workspace)
     loop_provider = provider
     loop_model = config.model
     session_manager = SessionManager(workspace)

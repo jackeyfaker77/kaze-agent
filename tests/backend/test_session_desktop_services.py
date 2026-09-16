@@ -85,6 +85,84 @@ async def test_workbench_filters_and_document_allowlist(desktop):
 
 
 @pytest.mark.asyncio
+async def test_provider_failure_is_an_rpc_error_and_retry_does_not_duplicate_messages(desktop):
+    runtime, bridge = desktop
+    events = []
+    bridge.add_event_listener(events.append)
+    class AuthenticationFailure(Exception):
+        status_code = 401
+
+    async def fail(**kwargs):
+        raise AuthenticationFailure("provider response with secret-test-value")
+
+    async def succeed(**kwargs):
+        return LLMResponse(content="成功回复")
+
+    request = {"method": "chat.send", "payload": {"session_key": "desktop:retry", "content": "请保留我的消息"}}
+    runtime.provider.chat = fail
+    response = await bridge.handle(request)
+    assert response.error is not None
+    assert "认证失败" in response.error.message
+    assert "secret-test-value" not in response.error.message
+    assert not any(event["method"] == "chat.done" for event in events)
+    assert runtime.session_manager.get_or_create("desktop:retry").messages == []
+    assert not bridge._requests and not bridge._chat_tasks
+
+    runtime.provider.chat = succeed
+    response = await bridge.handle(request)
+    assert response.error is None
+    assert [m["content"] for m in response.payload["session"]["messages"]] == ["请保留我的消息", "成功回复"]
+
+    # Failure in an existing session must retain committed history, too.
+    events.clear()
+    runtime.provider.chat = fail
+    request["payload"]["content"] = "第二条消息"
+    response = await bridge.handle(request)
+    assert response.error is not None
+    assert len(runtime.session_manager.get_or_create("desktop:retry").messages) == 2
+    assert not any(event["method"] == "chat.done" for event in events)
+    runtime.provider.chat = succeed
+    response = await bridge.handle(request)
+    assert response.error is None
+    assert len(response.payload["session"]["messages"]) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credential", ["sk-...", "${UNCONFIGURED_API_KEY}"])
+async def test_example_credentials_fail_before_contacting_provider(desktop, credential):
+    runtime, bridge = desktop
+    runtime.config.api_key = credential
+    called = False
+    async def chat(**kwargs):
+        nonlocal called
+        called = True
+        return LLMResponse(content="不应调用")
+    runtime.provider.chat = chat
+    result = await bridge.handle({"method": "chat.send", "payload": {"session_key": "desktop:missing", "content": "你好"}})
+    assert result.error is not None
+    assert "尚未配置" in result.error.message
+    assert not called
+    assert runtime.session_manager.list_sessions() == []
+
+
+@pytest.mark.asyncio
+async def test_other_channels_keep_their_error_reply(desktop):
+    runtime, _ = desktop
+    async def fail(**kwargs):
+        raise RuntimeError("provider unavailable")
+    runtime.provider.chat = fail
+    assert await runtime.loop.process_direct("你好", session_key="cli:failure") == "处理消息时出错，请稍后再试。"
+
+
+def test_config_template_does_not_register_an_unrequested_vision_model():
+    import tomllib
+    from pathlib import Path
+    template = Path(__file__).resolve().parents[2] / "config" / "examples" / "config.example.toml"
+    registrations = tomllib.loads(template.read_text(encoding="utf-8"))["llm"]["registrations"]
+    assert [item["model"] for item in registrations] == ["deepseek-v4-flash"]
+
+
+@pytest.mark.asyncio
 async def test_cancel_during_chat_does_not_block_other_requests(desktop):
     runtime, bridge = desktop
     started = asyncio.Event()

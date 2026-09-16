@@ -61,7 +61,7 @@ export function createDesktopWindow({ openLocalAttachment }: CreateDesktopWindow
   }
 
   const win = new BrowserWindow({
-    title: "Hasaki Agent",
+    title: "Kaze",
     icon: desktopWindowIcon,
     width: 1320,
     height: 860,

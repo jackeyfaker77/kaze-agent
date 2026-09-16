@@ -6,6 +6,7 @@ export const bridgeTimeoutPolicy = Object.freeze({
   voiceRequest: 30_000,
   imageGeneration: 5 * 60_000,
   observation: 2 * 60_000,
+  modelCatalog: 2 * 60_000,
   gracefulStop: 5_000,
   forcedStop: 2_000,
 });
@@ -19,6 +20,7 @@ const imageGenerationMethods = new Set([
 export function bridgeRequestTimeoutMs(method: string): number {
   if (method === "chat.send") return 15 * 60_000;
   if (method === "health") return bridgeTimeoutPolicy.health;
+  if (method === "codex.models") return bridgeTimeoutPolicy.modelCatalog;
   if (imageGenerationMethods.has(method)) return bridgeTimeoutPolicy.imageGeneration;
   if (method === "observation.analyze") return bridgeTimeoutPolicy.observation;
   if (method.startsWith("voice.")) return bridgeTimeoutPolicy.voiceRequest;

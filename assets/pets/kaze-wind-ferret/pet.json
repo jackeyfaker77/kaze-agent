@@ -1,0 +1,11 @@
+{
+  "id": "kaze-wind-ferret",
+  "displayName": "Kaze 小风鼬",
+  "description": "奶白色小风鼬，绿色领巾与蓝色卷尾，带着怀旧像素感陪伴你的桌面。",
+  "spritesheetPath": "spritesheet.webp",
+  "actions": {
+    "hello": "waving",
+    "jump": "jumping",
+    "rest": "idle"
+  }
+}

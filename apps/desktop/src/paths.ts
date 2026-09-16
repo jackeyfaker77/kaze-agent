@@ -16,7 +16,7 @@ const packagedAssetsRoot = app.isPackaged && process.resourcesPath
 /** Absolute path to the desktop shell icon asset used by Electron windows. */
 export const desktopWindowIcon = resolve(
   packagedAssetsRoot,
-  process.platform === "win32" ? "shiori-app-icon.ico" : "shiori-app-icon.png",
+  process.platform === "win32" ? "kaze-app-icon.ico" : "kaze-app-icon.png",
 );
 
 /** Absolute path to the icon used by Electron's native drag preview. */

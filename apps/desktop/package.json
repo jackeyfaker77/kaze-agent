@@ -1,7 +1,7 @@
 {
-  "name": "hasaki-desktop",
+  "name": "kaze-desktop",
   "version": "0.1.0",
-  "description": "Hasaki Windows session assistant",
+  "description": "Kaze Windows session assistant",
   "author": "YinFengWindy",
   "private": true,
   "type": "module",
@@ -54,7 +54,7 @@
   },
   "build": {
     "appId": "com.hasaki.agent",
-    "productName": "Hasaki Agent",
+    "productName": "Kaze",
     "asar": true,
     "npmRebuild": false,
     "directories": {
@@ -83,7 +83,7 @@
       }
     ],
     "win": {
-      "icon": "../../assets/shiori-app-icon.ico",
+      "icon": "../../assets/kaze-app-icon.ico",
       "target": [
         {
           "target": "nsis",

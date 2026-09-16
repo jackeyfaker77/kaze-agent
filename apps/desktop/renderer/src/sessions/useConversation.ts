@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { newDraftKey, rpc, type Entry, type Session } from "./api";
+import { recoverAttachments, recoverDraft } from "./recoverDraft";
 
 /** A draft has an address for pet voice, but is never saved by navigation. */
 export function useConversation() {
@@ -79,9 +80,12 @@ export function useConversation() {
     try {
       const result = await rpc<{ session: Session }>("chat.send", { session_key: currentKey, content, media });
       saved.current = result.session.messages.length > 0; setSession(saved.current ? result.session : null);
-      await refresh();
+      await refresh().catch(fail);
     } catch (e) {
-      fail(e); setDraft(content); setAttachments(media);
+      const reason = e instanceof Error ? e.message : String(e);
+      setError(`发送失败，输入和附件已恢复。${reason}`);
+      setDraft(current => recoverDraft(current, content));
+      setAttachments(current => recoverAttachments(current, media));
       try {
         const actual = await rpc<Session>("session.get", { session_key: currentKey });
         saved.current = actual.messages.length > 0; setSession(saved.current ? actual : null); await refresh();

@@ -9,8 +9,8 @@ logger = logging.getLogger("desktop.bridge.dispatcher")
 
 RequestOperation = Callable[[], Awaitable[None]]
 
-_READ_ONLY_METHODS = frozenset({"health", "sessions.list", "session.get", "memory.get", "pet.get", "tasks.list", "messages.list", "runtime.catalog", "document.get"})
-_INTEGRATION_METHODS = frozenset({"chat.send", "voice.transcribe", "voice.synthesize", "observation.analyze"})
+_READ_ONLY_METHODS = frozenset({"health", "sessions.list", "session.get", "memory.get", "pet.get", "tasks.list", "messages.list", "runtime.catalog", "document.get", "codex.status", "codex.login.status"})
+_INTEGRATION_METHODS = frozenset({"chat.send", "voice.transcribe", "voice.synthesize", "observation.analyze", "codex.models"})
 class BridgeRequestDispatcher:
     """Runs bridge requests with bounded concurrency and one conservative write lane."""
 

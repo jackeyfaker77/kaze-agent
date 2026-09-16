@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from agent.config_models import Config
 from infra.providers.llm_provider import LLMProvider
 
@@ -11,7 +12,13 @@ _LIGHT_STREAM_IDLE_TIMEOUT_S = 45.0
 
 def build_providers(
     config: Config,
+    workspace: Path | None = None,
 ) -> tuple[LLMProvider, LLMProvider | None, LLMProvider | None]:
+    if config.provider.lower() == "codex":
+        from agent.model_runtime.provider import CodexProvider
+        if workspace is None:
+            raise ValueError("Codex 连接需要明确的 workspace")
+        return CodexProvider(workspace=workspace, registration=config.model_registrations[0]), None, None
     payload_snapshot_enabled = bool(getattr(config, "dev_mode", False))
     main_extra = _sanitize_extra_body(
         base_url=config.base_url,

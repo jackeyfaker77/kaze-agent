@@ -291,6 +291,67 @@ test("changing the package for one role invalidates the active pet binding", asy
   window.destroy();
 });
 
+test("visibility controls hide without backend access and can show again after recovery", async () => {
+  let settings: DesktopPetSettings = { visible: false, sessionKey: null, packageId: null, positions: {} };
+  let backendAvailable = true;
+  let lookups = 0;
+  const windows: FakePetWindow[] = [];
+  const controller = new DesktopPetController({
+    getSettings: () => settings,
+    saveSettings: async (next) => { settings = next; },
+    resolveBinding: async () => {
+      lookups += 1;
+      if (!backendAvailable) throw new Error("backend unavailable");
+      return { sessionKey: "desktop:default", package: { id: "pet-1", displayName: "Pet", spritesheetUrl: "mira-asset://pet" } };
+    },
+    createWindow: () => {
+      const window = new FakePetWindow();
+      windows.push(window);
+      return window as unknown as BrowserWindow;
+    },
+    displayForWindow: () => ({ id: "display-1", workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+    cursorScreenPoint: () => ({ x: 0, y: 0 }),
+    openLocalAttachment: () => undefined,
+  });
+  await controller.sync(true);
+  backendAvailable = false;
+  await controller.sync(false);
+  assert.equal(lookups, 1);
+  assert.equal(controller.isRunning, false);
+  assert.equal(settings.visible, false);
+  assert.equal(settings.packageId, "pet-1");
+  await assert.rejects(controller.sync(true), /backend unavailable/);
+  backendAvailable = true;
+  await controller.sync(true);
+  assert.equal(controller.isRunning, true);
+  assert.equal(settings.visible, true);
+  assert.equal(windows.length, 2);
+  await controller.hide();
+});
+
+test("show reports a missing package and restoring a changed package respects hidden state", async () => {
+  let settings: DesktopPetSettings = { visible: false, sessionKey: "desktop:default", packageId: "old-pet", positions: {} };
+  let available = false;
+  const controller = new DesktopPetController({
+    getSettings: () => settings,
+    saveSettings: async (next) => { settings = next; },
+    resolveBinding: async () => available
+      ? { sessionKey: "desktop:default", package: { id: "new-pet", displayName: "Pet", spritesheetUrl: "mira-asset://pet" } }
+      : null,
+    createWindow: () => { throw new Error("must stay hidden"); },
+    displayForWindow: () => ({ id: "display-1", workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+    cursorScreenPoint: () => ({ x: 0, y: 0 }),
+    openLocalAttachment: () => undefined,
+  });
+  await assert.rejects(controller.sync(true), /请先导入并选择桌宠包/);
+  assert.equal(settings.packageId, "old-pet");
+  available = true;
+  await controller.restore();
+  assert.equal(settings.packageId, "new-pet");
+  assert.equal(settings.visible, false);
+  assert.equal(controller.isRunning, false);
+});
+
 test("agent pet actions move to a bounded target and play a transient package action", async () => {
   let settings: DesktopPetSettings = {
     visible: false,

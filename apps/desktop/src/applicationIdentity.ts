@@ -13,7 +13,7 @@ export function configureApplicationIdentity(app: IdentityApp, workspacePath: st
   const userData = resolve(userDataOverride || resolve(workspacePath, ".desktop", "user-data"));
   const sessionData = resolve(userData, "chromium");
   mkdirSync(sessionData, { recursive: true });
-  app.setName("Hasaki Agent");
+  app.setName("Kaze");
   app.setAppUserModelId("com.hasaki.agent");
   app.setPath("userData", userData);
   app.setPath("sessionData", sessionData);

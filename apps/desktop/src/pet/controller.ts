@@ -106,6 +106,10 @@ export class DesktopPetController {
   }
 
   sync(forceVisible?: boolean): Promise<void> {
+    // Explicit visibility controls must behave the same as the tray controls.
+    // Hiding never depends on a successful backend/package lookup.
+    if (forceVisible === false) return this.hide();
+    if (forceVisible === true) return this.show();
     return this.enqueue(async () => {
       const binding = await this.options.resolveBinding();
       if (!binding) {
@@ -114,11 +118,10 @@ export class DesktopPetController {
         return;
       }
       const current = this.options.getSettings();
-      const changedBinding = current.packageId !== binding.package.id;
       const nextSettings = bindDesktopPetSettings(
         current,
         binding,
-        forceVisible ?? (changedBinding || current.visible),
+        current.visible,
       );
       if (nextSettings.visible) await this.load(binding, nextSettings, "idle");
       else this.destroyWindow();
