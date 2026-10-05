@@ -10,18 +10,18 @@ from agent.tools.observe_screen import ObserveScreenTool
 from agent.tools.registry import ToolRegistry
 
 
-def test_observe_screen_description_matches_role_owned_availability() -> None:
+def test_observe_screen_description_matches_session_owned_availability() -> None:
     assert "屏幕观察已开启" not in ObserveScreenTool.description
     assert "桌宠" not in ObserveScreenTool.description
     assert "界面与活动摘要" in ObserveScreenTool.description
 
 
 @pytest.mark.asyncio
-async def test_observe_screen_returns_only_the_safe_role_summary() -> None:
+async def test_observe_screen_returns_only_the_safe_session_summary() -> None:
     capture = SimpleNamespace(
         capture=Mock(
             return_value={
-                "role_id": "mira",
+                "session_key": "mira",
                 "image_base64": "raw-frame-must-not-leak",
             }
         )
@@ -39,7 +39,7 @@ async def test_observe_screen_returns_only_the_safe_role_summary() -> None:
         analyzer=SimpleNamespace(analyze=analyzer),
     )
 
-    output = await tool.execute(channel="telegram", role_id="mira")
+    output = await tool.execute(channel="telegram", session_key="mira")
 
     assert json.loads(output) == {
         "available": True,
@@ -52,7 +52,7 @@ async def test_observe_screen_returns_only_the_safe_role_summary() -> None:
 
 
 @pytest.mark.asyncio
-async def test_observe_screen_returns_a_risky_screen_summary_to_the_role() -> None:
+async def test_observe_screen_returns_a_risky_screen_summary_to_the_session() -> None:
     analyzer = AsyncMock(
         return_value={
             "interface_summary": "包含密钥的窗口",
@@ -61,11 +61,11 @@ async def test_observe_screen_returns_a_risky_screen_summary_to_the_role() -> No
         }
     )
     tool = ObserveScreenTool(
-        capture=SimpleNamespace(capture=Mock(return_value={"role_id": "mira"})),
+        capture=SimpleNamespace(capture=Mock(return_value={"session_key": "mira"})),
         analyzer=SimpleNamespace(analyze=analyzer),
     )
 
-    output = await tool.execute(channel="qq", role_id="mira")
+    output = await tool.execute(channel="qq", session_key="mira")
 
     assert json.loads(output) == {
         "available": True,
@@ -75,27 +75,27 @@ async def test_observe_screen_returns_a_risky_screen_summary_to_the_role() -> No
 
 
 @pytest.mark.asyncio
-async def test_observe_screen_rejects_calls_without_a_role() -> None:
+async def test_observe_screen_rejects_calls_without_a_session() -> None:
     tool = ObserveScreenTool(
         capture=SimpleNamespace(capture=Mock()),
         analyzer=SimpleNamespace(analyze=AsyncMock()),
     )
 
-    with pytest.raises(ValueError, match="缺少角色身份"):
+    with pytest.raises(ValueError, match="缺少会话标识"):
         await tool.execute(channel="telegram")
 
 
 @pytest.mark.asyncio
-async def test_observe_screen_uses_the_current_role_context_over_tool_arguments() -> None:
-    capture = SimpleNamespace(capture=Mock(return_value={"role_id": "mira"}))
+async def test_observe_screen_uses_the_current_session_context_over_tool_arguments() -> None:
+    capture = SimpleNamespace(capture=Mock(return_value={"session_key": "mira"}))
     analyzer = SimpleNamespace(analyze=AsyncMock(return_value={}))
     registry = ToolRegistry()
     registry.register(ObserveScreenTool(capture=capture, analyzer=analyzer))
 
     await registry.execute(
         "observe_screen",
-        {"role_id": "other"},
-        context={"channel": "telegram", "role_id": "mira"},
+        {"session_key": "other"},
+        context={"channel": "telegram", "session_key": "mira"},
     )
 
     capture.capture.assert_called_once_with("mira")

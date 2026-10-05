@@ -19,8 +19,7 @@ from bus.events_lifecycle import (
     ToolCallStarted,
     TurnStarted,
 )
-from core.roles import RoleStore
-from conversation.service import LegacySessionDescriptor
+from core.channels.hub import ChannelHub
 from infra.channels.base import AttachmentStore
 
 
@@ -395,19 +394,6 @@ async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
     bus = _Bus()
     event_bus = EventBus()
     session_manager = _SessionManager(tmp_path)
-    role_store = RoleStore(tmp_path)
-    role_store.create_role(
-        role_id="mira",
-        name="Mira",
-        description="bound telegram role",
-        system_prompt="you are mira",
-    )
-    role_store.update_role(
-        "mira",
-        channel_bindings=[
-            {"channel": "telegram", "chat_id": "123", "allow_from": ["1"]}
-        ],
-    )
     interrupt_controller = MagicMock()
     interrupt_controller.request_interrupt.return_value = SimpleNamespace(
         status="interrupted",
@@ -418,6 +404,7 @@ async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
         "token",
         bus,
         session_manager,
+        channel_hub=ChannelHub(session_manager, {"telegram": ["1", "Alice"]}),
         allow_from=["1", "Alice"],
         bot_commands=[
             ("memorystatus", "查看记忆整理状态"),
@@ -494,7 +481,7 @@ async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
     )
     await channel._on_stop_command(stop_update, context)
     interrupt_controller.request_interrupt.assert_called_once_with(
-        session_key="role:mira",
+        session_key="telegram:123",
         sender="1",
         command="/stop",
     )
@@ -791,7 +778,7 @@ async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
     await channel.stop()
     assert {
         "session_key": "role:mira",
-        "thread_id": "thread:mira:telegram:123",
+        "thread_id": "",
         "delivery_status": "sent",
         "external_message_id": "",
     } in session_manager.delivery_updates
@@ -813,20 +800,6 @@ async def test_qq_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     monkeypatch.setattr(lifecycle, "resolve_ncatbot_dir", lambda: ncatbot_dir)
     bus = _Bus()
     session_manager = _SessionManager(tmp_path)
-    role_store = RoleStore(tmp_path)
-    role_store.create_role(
-        role_id="mira",
-        name="Mira",
-        description="bound qq role",
-        system_prompt="you are mira",
-    )
-    role_store.update_role(
-        "mira",
-        channel_bindings=[
-            {"channel": "qq", "chat_id": "1", "allow_from": ["1"]},
-            {"channel": "qq", "chat_id": "gqq:100", "allow_from": ["1"]},
-        ],
-    )
     async def _request_get(url, **kwargs):
         if url.endswith("a.jpg") or url.endswith("a.png"):
             return SimpleNamespace(
@@ -843,6 +816,7 @@ async def test_qq_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
         "42",
         bus,
         session_manager,
+        channel_hub=ChannelHub(session_manager, {"qq": ["1"]}),
         allow_from=["1"],
         groups=[group_cfg],
         websocket_open_timeout_seconds=7.5,
@@ -890,14 +864,6 @@ async def test_qq_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     )
     await channel.start()
     assert bus.outbound[0][0] == "qq"
-    channel._channel_hub._conversation.ensure_thread_for_session(
-        LegacySessionDescriptor(
-            session_key="qq:gqq:100",
-            role_id="mira",
-            channel="qq",
-            chat_id="gqq:100",
-        )
-    )
 
     async def _drain(coro):
         return await coro
@@ -914,16 +880,16 @@ async def test_qq_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert len(bus.inbound) == 2
     assert bus.inbound[0].metadata["chat_type"] == "private"
     assert bus.inbound[1].metadata["chat_type"] == "group"
-    assert bus.inbound[0].session_key == "role:mira"
-    assert bus.inbound[0].metadata["role_id"] == "mira"
-    assert bus.inbound[0].metadata["thread_id"] == "thread:mira:qq:1"
-    assert bus.inbound[1].session_key == "role:mira"
-    assert bus.inbound[1].metadata["thread_id"] == "thread:mira:qq:gqq:100"
+    assert bus.inbound[0].session_key == "qq:1"
+    assert "role_id" not in bus.inbound[0].metadata
+    assert "thread_id" not in bus.inbound[0].metadata
+    assert bus.inbound[1].session_key == "qq:gqq:100"
+    assert "thread_id" not in bus.inbound[1].metadata
     assert channel._interrupt_controller.request_interrupt.call_count == 2
     assert [
         call.kwargs["session_key"]
         for call in channel._interrupt_controller.request_interrupt.call_args_list
-    ] == ["role:mira", "role:mira"]
+    ] == ["qq:1", "qq:gqq:100"]
 
     channel._run_on_bot_loop = AsyncMock(side_effect=_drain)
     sample = tmp_path / "image.bin"
@@ -965,33 +931,20 @@ async def test_qq_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     await channel.stop()
     assert {
         "session_key": "role:mira",
-        "thread_id": "thread:mira:qq:gqq:100",
+        "thread_id": "",
         "delivery_status": "sent",
         "external_message_id": "",
     } in session_manager.delivery_updates
 
 
 @pytest.mark.asyncio
-async def test_telegram_channel_routes_bound_inbound_to_role_session(
+async def test_telegram_channel_routes_inbound_to_transport_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
     mod = _import_telegram_channel(monkeypatch)
     bus = _Bus()
     session_manager = _SessionManager(tmp_path)
-    role_store = RoleStore(tmp_path)
-    role_store.create_role(
-        role_id="mira",
-        name="Mira",
-        description="bound telegram role",
-        system_prompt="you are mira",
-    )
-    role_store.update_role(
-        "mira",
-        channel_bindings=[
-            {"channel": "telegram", "chat_id": "123", "allow_from": ["1"]}
-        ],
-    )
 
     interrupt_controller = MagicMock()
     event_bus = EventBus()
@@ -999,6 +952,7 @@ async def test_telegram_channel_routes_bound_inbound_to_role_session(
         token="token",
         bus=bus,
         session_manager=session_manager,
+        channel_hub=ChannelHub(session_manager, {"telegram": ["1", "Alice"]}),
         allow_from=["1"],
         event_bus=event_bus,
         interrupt_controller=interrupt_controller,
@@ -1023,11 +977,11 @@ async def test_telegram_channel_routes_bound_inbound_to_role_session(
     await channel._on_message(update, context)
 
     assert len(bus.inbound) == 1
-    assert bus.inbound[0].session_key == "role:mira"
-    assert bus.inbound[0].metadata["role_id"] == "mira"
-    assert bus.inbound[0].metadata["thread_id"] == "thread:mira:telegram:123"
-    assert bus.inbound[0].metadata["transport_channel"] == "telegram"
-    assert bus.inbound[0].metadata["transport_chat_id"] == "123"
+    assert bus.inbound[0].session_key == "telegram:123"
+    assert "role_id" not in bus.inbound[0].metadata
+    assert "thread_id" not in bus.inbound[0].metadata
+    assert "transport_channel" not in bus.inbound[0].metadata
+    assert "transport_chat_id" not in bus.inbound[0].metadata
     await channel.stop()
 
 
@@ -1044,6 +998,7 @@ async def test_qq_private_trace_sends_forward_then_final_and_clears_state(
         "42",
         bus,
         session_manager,
+        channel_hub=ChannelHub(session_manager, {"qq": ["1"]}),
         allow_from=["1"],
         event_bus=event_bus,
         http_requester=SimpleNamespace(get=AsyncMock()),
@@ -1141,6 +1096,7 @@ async def test_qq_private_trace_skips_empty_trace(monkeypatch: pytest.MonkeyPatc
         "42",
         bus,
         session_manager,
+        channel_hub=ChannelHub(session_manager, {"qq": ["1"]}),
         allow_from=["1"],
         event_bus=event_bus,
         http_requester=SimpleNamespace(get=AsyncMock()),
@@ -1201,19 +1157,12 @@ async def test_qq_channel_records_failed_delivery_status(
         "42",
         bus,
         session_manager,
+        channel_hub=ChannelHub(session_manager, {"qq": ["1"]}),
         allow_from=["1"],
         event_bus=EventBus(),
         http_requester=SimpleNamespace(get=AsyncMock()),
     )
     await channel.start()
-    channel._channel_hub._conversation.ensure_thread_for_session(
-        LegacySessionDescriptor(
-            session_key="qq:1",
-            role_id="mira",
-            channel="qq",
-            chat_id="1",
-        )
-    )
 
     async def _drain(coro):
         return await coro
@@ -1240,10 +1189,8 @@ async def test_qq_channel_records_failed_delivery_status(
 
     assert session_manager.delivery_updates[-1] == {
         "session_key": "role:mira",
-        "thread_id": "thread:mira:qq:1",
+        "thread_id": "",
         "delivery_status": "failed",
         "external_message_id": "",
     }
     await channel.stop()
-
-

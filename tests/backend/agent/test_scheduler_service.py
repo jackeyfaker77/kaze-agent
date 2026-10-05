@@ -55,7 +55,7 @@ async def test_instant_push_receives_correct_args(
     await drain_tasks()
 
     mock_push.execute.assert_called_once_with(
-        channel="telegram", chat_id="999", message="喝水了", role_id="mira"
+        channel="telegram", chat_id="999", message="喝水了", session_key="mira"
     )
 
 
@@ -114,7 +114,8 @@ async def test_soft_sends_ai_response_via_push(
         channel=job.channel,
         chat_id=job.chat_id,
         message="北京今天晴，15°C",
-        role_id="mira",
+        already_persisted=True,
+        session_key="mira",
     )
 
 
@@ -388,7 +389,7 @@ def test_misfire_within_grace_loaded(tmp_path, mock_push, mock_loop, fixed_now):
     assert job.id in svc._jobs
 
 
-def test_job_store_rejects_legacy_desktop_job_without_role_id(tmp_path):
+def test_job_store_rejects_legacy_desktop_job_without_session_key(tmp_path):
     path = tmp_path / "jobs.json"
     path.write_text(
         json.dumps(
@@ -407,11 +408,11 @@ def test_job_store_rejects_legacy_desktop_job_without_role_id(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="role_id"):
+    with pytest.raises(ValueError, match="session_key"):
         JobStore(path).load()
 
 
-def test_job_store_rejects_legacy_transport_job_without_role_id(tmp_path):
+def test_job_store_rejects_legacy_transport_job_without_session_key(tmp_path):
     path = tmp_path / "jobs.json"
     path.write_text(
         json.dumps(
@@ -430,7 +431,7 @@ def test_job_store_rejects_legacy_transport_job_without_role_id(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="role_id"):
+    with pytest.raises(ValueError, match="session_key"):
         JobStore(path).load()
 
 
@@ -448,7 +449,7 @@ def test_create_job_validates_and_persists_complete_schedule(
         timezone_name="Asia/Shanghai",
         channel="desktop",
         chat_id="role:mira",
-        role_id="mira",
+        session_key="mira",
     )
 
     assert job.when == "2026-07-18T09:30"
@@ -457,7 +458,7 @@ def test_create_job_validates_and_persists_complete_schedule(
     assert job.fire_at.isoformat() == "2026-07-18T09:30:00+08:00"
     restored = JobStore(tmp_path / "jobs.json").load()
     assert [item.id for item in restored] == [job.id]
-    assert restored[0].role_id == "mira"
+    assert restored[0].session_key == "mira"
 
 
 def test_update_job_atomically_replaces_idle_role_schedule(
@@ -473,12 +474,12 @@ def test_update_job_atomically_replaces_idle_role_schedule(
         timezone_name="Asia/Shanghai",
         channel="desktop",
         chat_id="role:mira",
-        role_id="mira",
+        session_key="mira",
     )
 
     updated = svc.update_job(
         original.id,
-        role_id="mira",
+        session_key="mira",
         name="每日总结",
         tier="soft",
         trigger="every",
@@ -497,9 +498,9 @@ def test_update_job_atomically_replaces_idle_role_schedule(
     assert JobStore(tmp_path / "jobs.json").load()[0].name == "每日总结"
 
 
-@pytest.mark.parametrize("role_id,active", [("other", False), ("mira", True)])
+@pytest.mark.parametrize("session_key,active", [("other", False), ("mira", True)])
 def test_update_job_rejects_cross_role_and_running_jobs_without_changes(
-    tmp_path, mock_push, mock_loop, fixed_now, role_id, active
+    tmp_path, mock_push, mock_loop, fixed_now, session_key, active
 ):
     svc = make_service(tmp_path, mock_push, mock_loop, fixed_now)
     original = svc.create_job(
@@ -511,7 +512,7 @@ def test_update_job_rejects_cross_role_and_running_jobs_without_changes(
         timezone_name="UTC",
         channel="desktop",
         chat_id="role:mira",
-        role_id="mira",
+        session_key="mira",
     )
     if active:
         svc._in_flight.add(original.id)
@@ -519,7 +520,7 @@ def test_update_job_rejects_cross_role_and_running_jobs_without_changes(
     with pytest.raises((KeyError, RuntimeError)):
         svc.update_job(
             original.id,
-            role_id=role_id,
+            session_key=session_key,
             name="新名称",
             tier="instant",
             trigger="after",
@@ -548,7 +549,7 @@ def test_create_job_keeps_memory_unchanged_when_persistence_fails(
             timezone_name="UTC",
             channel="desktop",
             chat_id="role:mira",
-            role_id="mira",
+            session_key="mira",
         )
 
     assert svc.list_jobs() == []
@@ -559,13 +560,13 @@ def test_legacy_role_job_metadata_gets_stable_context_defaults(
 ):
     svc = make_service(tmp_path, mock_push, mock_loop, fixed_now)
     job = make_job(channel="desktop", chat_id="role:mira")
-    job.role_id = "mira"
+    job.session_key = "mira"
 
-    metadata = svc._job_role_metadata(job)
+    metadata = svc._job_metadata(job)
 
-    assert metadata["thread_id"] == f"thread:mira:scheduler:{job.id}"
-    assert metadata["delivery_key"] == job.id
-    assert metadata["role_work_kind"] == "scheduled_job"
+    assert metadata["session_key_override"] == job.session_key
+    assert metadata["request_id"] == job.id
+    assert metadata["source"] == "scheduler"
 
 
 def test_misfire_beyond_grace_discarded(tmp_path, mock_push, mock_loop, fixed_now):

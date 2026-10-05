@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from agent.context import ContextBuilder, ContextRequest
-from core.roles import RoleStore
 from session.manager.models import INTERRUPTED_TURN_METADATA_KEY
 
 
@@ -42,11 +41,6 @@ def test_context_builder_injects_interrupted_turn_as_separate_frame(
     )
     monkeypatch.setattr(
         "agent.context.build_skills_catalog_prompt", lambda text: text
-    )
-    RoleStore(tmp_path).create_role(
-        role_id="mira",
-        name="Mira",
-        system_prompt="test role",
     )
     builder = ContextBuilder(tmp_path, _Memory())  # type: ignore[arg-type]
     result = builder.render(

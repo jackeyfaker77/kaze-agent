@@ -160,12 +160,11 @@ def test_init_workspace_creates_expected_assets(tmp_path):
 
     assert config_path.exists()
     config_text = config_path.read_text(encoding="utf-8")
-    assert config_text.count("[[llm.registrations]]") == 2
+    assert config_text.count("[[llm.registrations]]") == 1
     registrations = tomllib.loads(config_text)["llm"]["registrations"]
     assert all("name" not in registration for registration in registrations)
     assert [registration["model"] for registration in registrations] == [
         "deepseek-v4-flash",
-        "qwen-vl-plus",
     ]
     assert "[llm.vl]" not in config_text
     assert (workspace / "sessions.db").exists()
@@ -177,15 +176,12 @@ def test_init_workspace_creates_expected_assets(tmp_path):
         (workspace / "mcp_servers.json").read_text(encoding="utf-8")
     ) == {"servers": {}}
     assert json.loads(
-        (workspace / "proactive_sources.json").read_text(encoding="utf-8")
-    ) == {"sources": []}
+        (workspace / "channels.json").read_text(encoding="utf-8")
+    ) == {"allow_from": {}}
     assert (workspace / "skills").is_dir()
     assert not (workspace / "drift" / "skills").exists()
-    assert (workspace / "roles" / "roles.json").exists()
-    assert json.loads(
-        (workspace / "roles" / "roles.json").read_text(encoding="utf-8")
-    ) == {"version": 2, "roles": []}
-    assert (workspace / "roles" / "assets").is_dir()
+    assert (workspace / "pets").is_dir()
+    assert not (workspace / "roles").exists()
     assert any(path == config_path for path in summary.created)
 
 

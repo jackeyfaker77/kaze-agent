@@ -23,9 +23,7 @@ from agent.provider import (
 from agent.tool_runtime import append_assistant_tool_calls
 from infra.channels.group_filter import DefaultGroupFilter, strip_at_segments
 from memory2.models import MemoryItem
-from proactive_v2.anyaction import AnyActionGate, QuotaStore
 from proactive_v2.config import ProactiveConfig
-from proactive_v2.memory_sampler import sample_memory_chunks, split_memory_chunks
 from bootstrap.app import AppRuntime, DESKTOP_RUNTIME_FEATURES
 from bootstrap.providers import build_providers
 from bus.event_bus import EventBus
@@ -620,7 +618,7 @@ async def _collect_delta(bucket: list, chunk) -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_registry_anyaction_and_sampler_cover_core_paths(
+async def test_mcp_registry_covers_connect_persist_and_remove(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     class _Client:
@@ -665,119 +663,7 @@ async def test_mcp_registry_anyaction_and_sampler_cover_core_paths(
     )
     await registry.load_and_connect_all()
 
-    quota = QuotaStore(tmp_path / "quota.json")
-    now = datetime(2025, 6, 1, 12, tzinfo=timezone.utc)
-    snap = quota.snapshot(now_utc=now, reset_hour=8, timezone_name="UTC")
-    assert snap.used == 0
-    quota.record_action(now_utc=now, reset_hour=8, timezone_name="UTC")
-    snap = quota.snapshot(now_utc=now, reset_hour=8, timezone_name="UTC")
-    assert snap.used == 1
-
-    cfg = SimpleNamespace(
-        anyaction_reset_hour_local=8,
-        anyaction_timezone="UTC",
-        anyaction_daily_max_actions=1,
-        anyaction_min_interval_seconds=300,
-        anyaction_idle_scale_minutes=60.0,
-        anyaction_probability_min=0.1,
-        anyaction_probability_max=0.9,
-    )
-    gate = AnyActionGate(
-        cfg=cfg, quota_store=quota, rng=cast(Any, SimpleNamespace(random=lambda: 0.0))
-    )
-    act, meta = gate.should_act(now_utc=now, last_user_at=now - timedelta(hours=2))
-    assert act is False
-    assert meta["reason"] == "quota_exhausted"
-
-    cfg.anyaction_daily_max_actions = 3
-    act, meta = gate.should_act(now_utc=now + timedelta(seconds=10), last_user_at=now)
-    assert act is False
-    assert meta["reason"] == "min_interval"
-
-    quota = QuotaStore(tmp_path / "quota2.json")
-    gate = AnyActionGate(
-        cfg=cfg, quota_store=quota, rng=cast(Any, SimpleNamespace(random=lambda: 0.0))
-    )
-    act, meta = gate.should_act(now_utc=now, last_user_at=now - timedelta(hours=2))
-    assert act is True
-    assert meta["reason"] == "probability"
-    gate.record_action(now_utc=now)
-
-    text = "## A\n\n第一段\n\n- 一\n- 二\n\n## B\n\n很长内容 " + ("句子。" * 80)
-    chunks = split_memory_chunks(text, max_chunk_chars=30)
-    assert chunks
-    sampled = sample_memory_chunks(text, 2, rng=__import__("random").Random(1))
-    assert len(sampled) == 2
-    assert sample_memory_chunks("", 2) == []
-
-
-@pytest.mark.asyncio
-async def test_app_runtime_start_passes_markdown_store_to_memory_optimizer(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
-    engine = MagicMock(name="engine")
-    markdown_store = MagicMock(name="markdown_store")
-    memory_runtime = SimpleNamespace(
-        engine=engine,
-        markdown=SimpleNamespace(store=markdown_store),
-        aclose=AsyncMock(),
-    )
-    async def _loop_task() -> None:
-        return None
-
-    async def _bus_task() -> None:
-        return None
-
-    async def _scheduler_task() -> None:
-        return None
-
-    core = SimpleNamespace(
-        loop=SimpleNamespace(run=_loop_task, stop=MagicMock()),
-        bus=SimpleNamespace(dispatch_outbound=_bus_task, stop=MagicMock()),
-        event_bus=EventBus(),
-        tools=MagicMock(),
-        push_tool=MagicMock(),
-        session_manager=MagicMock(),
-        scheduler=SimpleNamespace(run=_scheduler_task, stop=MagicMock()),
-        provider=MagicMock(),
-        light_provider=MagicMock(),
-        mcp_registry=MagicMock(),
-        memory_runtime=memory_runtime,
-        presence=MagicMock(),
-        relationship_runtime=None,
-        peer_process_manager=None,
-        peer_poller=None,
-        start=AsyncMock(),
-        stop=AsyncMock(),
-    )
-    monkeypatch.setattr(
-        "bootstrap.app.build_core_runtime", lambda *args, **kwargs: core
-    )
-    monkeypatch.setattr(
-        "bootstrap.app.start_channels",
-        AsyncMock(
-            return_value=SimpleNamespace(start_all=AsyncMock(), stop_all=AsyncMock())
-        ),
-    )
-    build_proactive_runtime = MagicMock(return_value=([], {}))
-    monkeypatch.setattr(
-        "bootstrap.app.build_proactive_runtime", build_proactive_runtime
-    )
-    memory_optimizer = MagicMock()
-    build_memory_optimizer_task = MagicMock(return_value=([], memory_optimizer))
-    monkeypatch.setattr(
-        "bootstrap.app.build_memory_optimizer_task", build_memory_optimizer_task
-    )
-
-    app = AppRuntime(
-        config=cast(Any, SimpleNamespace()),
-        workspace=tmp_path,
-    )
-    await app.start()
-
-    build_memory_optimizer_task.assert_called_once()
-    assert build_memory_optimizer_task.call_args.kwargs["memory_store"] is markdown_store
-    assert app._memory_optimizer is memory_optimizer
+    await registry.shutdown()
 
 
 @pytest.mark.asyncio
@@ -828,23 +714,15 @@ async def test_app_runtime_desktop_mode_enables_message_channels(
         return SimpleNamespace(start_all=AsyncMock(), stop_all=AsyncMock())
 
     monkeypatch.setattr("bootstrap.app.start_channels", _fake_start_channels)
-    monkeypatch.setattr(
-        "bootstrap.app.build_memory_optimizer_task",
-        MagicMock(return_value=([], {})),
-    )
-    monkeypatch.setattr(
-        "bootstrap.app.build_proactive_runtime",
-        MagicMock(return_value=([], None)),
-    )
-
     app = AppRuntime(
-        config=cast(Any, SimpleNamespace()),
+        config=cast(Any, SimpleNamespace(proactive=SimpleNamespace(enabled=False))),
         workspace=tmp_path,
         features=DESKTOP_RUNTIME_FEATURES,
     )
     await app.start()
 
     assert observed["enable_message_channels"] is True
+    await app.shutdown()
 
 
 @pytest.mark.asyncio
@@ -905,102 +783,3 @@ async def test_bootstrap_trigger_and_entrypoints_cover_paths(
     with pytest.raises(SystemExit) as exc:
         runpy.run_module("main", run_name="__main__")
     assert exc.value.code == 0
-
-
-def test_bootstrap_proactive_builders_cover_enabled_and_disabled_paths(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
-    from bootstrap.proactive import build_memory_optimizer_task, build_proactive_runtime
-
-    cfg = SimpleNamespace(
-        proactive=ProactiveConfig(enabled=True),
-        memory_optimizer_enabled=False,
-        memory_optimizer_interval_seconds=3600,
-        model="m",
-        max_tokens=128,
-        light_model="lm",
-    )
-    tasks, loops = build_proactive_runtime(
-        cast(Any, cfg),
-        tmp_path,
-        session_manager=MagicMock(),
-        provider=MagicMock(),
-        light_provider=None,
-        push_tool=MagicMock(),
-        memory_store=None,
-        presence=MagicMock(),
-        agent_loop=cast(Any, SimpleNamespace(processing_state=None)),
-    )
-    assert tasks == []
-    assert loops == {}
-    mem_tasks, mem_optimizer = build_memory_optimizer_task(
-        cast(Any, cfg),
-        provider=MagicMock(),
-        memory_store=MagicMock(),
-    )
-    assert mem_tasks == []
-    assert mem_optimizer is None
-
-    proactive_loop = SimpleNamespace(
-        run=lambda: "loop-task",
-    )
-    monkeypatch.setattr(
-        "bootstrap.proactive.ProactiveLoop", lambda **kwargs: proactive_loop
-    )
-    monkeypatch.setattr(
-        "bootstrap.proactive.RoleStore",
-        lambda workspace: SimpleNamespace(
-            list_roles=lambda: [
-                SimpleNamespace(
-                    id="mira",
-                    proactive=SimpleNamespace(
-                        enabled=True,
-                        target_channel="telegram",
-                        target_chat_id="42",
-                    ),
-                )
-            ]
-        ),
-    )
-    monkeypatch.setattr("bootstrap.proactive.ProactiveStateStore", lambda path: path)
-    monkeypatch.setattr(
-        "bootstrap.proactive.MemoryOptimizer",
-        lambda **kwargs: SimpleNamespace(**kwargs),
-    )
-    monkeypatch.setattr(
-        "bootstrap.proactive.MemoryOptimizerLoop",
-        lambda opt, interval_seconds: SimpleNamespace(
-            run=lambda: ("mem-task", interval_seconds)
-        ),
-    )
-    cfg = SimpleNamespace(
-        proactive=ProactiveConfig(enabled=True),
-        memory_optimizer_enabled=True,
-        memory_optimizer_interval_seconds=7200,
-        model="m",
-        max_tokens=128,
-        light_model="lm",
-    )
-    tasks, loops = build_proactive_runtime(
-        cast(Any, cfg),
-        tmp_path,
-        session_manager=MagicMock(),
-        provider=MagicMock(),
-        light_provider=MagicMock(),
-        push_tool=MagicMock(),
-        memory_store=MagicMock(),
-        presence=MagicMock(),
-        agent_loop=cast(Any, SimpleNamespace(
-            processing_state=SimpleNamespace(is_busy=lambda: False),
-            role_runtime_registry=MagicMock(),
-        )),
-    )
-    assert tasks == ["loop-task"]
-    assert loops == {"mira": proactive_loop}
-    mem_tasks, mem_optimizer = build_memory_optimizer_task(
-        cast(Any, cfg),
-        provider=MagicMock(),
-        memory_store=MagicMock(),
-    )
-    assert mem_tasks == [("mem-task", 7200)]
-    assert mem_optimizer is not None

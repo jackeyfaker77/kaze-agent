@@ -18,7 +18,6 @@ from agent.tools.web_search import WebSearchTool
 from bus.events import InboundMessage, OutboundMessage
 from bus.queue import MessageBus
 from core.common import timekit
-from core.roles import RoleStore
 from plugins.default_memory.engine import DefaultMemoryEngine
 from memory2.memorizer import Memorizer
 from memory2.store import MemoryStore2
@@ -472,16 +471,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
     image = tmp_path / "a.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\n")
     now = datetime.now(timezone.utc)
-    role_store = RoleStore(tmp_path)
-    role_store.create_role(
-        role_id="mira",
-        name="Mira",
-        description="desktop role",
-        system_prompt="你现在要用更温柔的风格说话。",
-        background="来自深海城的向导。",
-        runtime_config={"shared_memory_enabled": True, "model": "deepseek-chat"},
-    )
-    role_metadata = {"role_id": "mira"}
+    session_metadata = {"session_key": "desktop:default"}
 
     builder = ContextBuilder(tmp_path, _Memory())  # type: ignore[arg-type]
     result = builder.render(
@@ -492,7 +482,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
             message_timestamp=now,
             retrieved_memory_block="retrieved",
         ),
-        session_metadata=role_metadata,
+        session_metadata=session_metadata,
     )
     prompt = result.system_prompt
     context_frame = result.messages[-2]["content"]
@@ -502,15 +492,15 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
     assert context_frame.startswith(SYSTEM_CONTEXT_FRAME_MARKER)
     assert "retrieved" in context_frame
     assert "memory block" in prompt
-    assert "角色自我认知" in prompt
+    assert "self note" in prompt
     assert "## 环境" in prompt
     assert "# Memes" not in prompt
     assert "<meme:shy>" not in prompt
     assert "catalog:skill summary" in prompt
     assert [item.name for item in builder.last_debug_breakdown][:3] == [
-        "role_cache_prefix",
-        "active_role",
         "identity",
+        "behavior_rules",
+        "skills_catalog",
     ]
 
     result2 = builder.render(
@@ -521,7 +511,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
             message_timestamp=now,
             retrieved_memory_block="retrieved",
         ),
-        session_metadata=role_metadata,
+        session_metadata=session_metadata,
     )
     assert result2.system_prompt
     identity_meta = next(
@@ -538,7 +528,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
             channel="telegram",
             chat_id="42",
         ),
-        session_metadata=role_metadata,
+        session_metadata=session_metadata,
     ).messages
     assert messages[0]["role"] == "system"
     assert "## 环境" in messages[0]["content"]
@@ -567,7 +557,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
             message_timestamp=now,
             turn_injection_prompt="pref",
         ),
-        session_metadata=role_metadata,
+        session_metadata=session_metadata,
     )
     assert render_result.system_prompt
     assert render_result.turn_injection_context == turn_injection
@@ -584,7 +574,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
             chat_id="42",
             message_timestamp=now,
         ),
-        session_metadata=role_metadata,
+        session_metadata=session_metadata,
     )
     assert "telegram prompt" in custom_telegram.messages[0]["content"]
 
@@ -596,7 +586,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
             chat_id="c2c:user-1",
             message_timestamp=now,
         ),
-        session_metadata=role_metadata,
+        session_metadata=session_metadata,
     )
     assert "## 官方 QQBot 渠道规则（硬性）" in qqbot.messages[0]["content"]
     assert "必须使用 `message_push` 的 `channel=qqbot`" in qqbot.messages[0]["content"]
@@ -611,7 +601,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
             skill_names=["extra"],
             message_timestamp=now,
         ),
-        session_metadata=role_metadata,
+        session_metadata=session_metadata,
     ).messages
     media_only_text = media_only_messages[-1]["content"][-1]["text"]
     assert media_only_text.startswith("[当前消息时间:")
@@ -631,7 +621,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
             skill_names=["extra"],
             message_timestamp=now,
         ),
-        session_metadata=role_metadata,
+        session_metadata=session_metadata,
     ).messages
     text_media_content = text_media_messages[-1]["content"]
     assert isinstance(text_media_content, str)
@@ -649,7 +639,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
             skill_names=["extra"],
             message_timestamp=now,
         ),
-        session_metadata=role_metadata,
+        session_metadata=session_metadata,
     ).messages
     text_attachment_content = text_attachment_messages[-1]["content"]
     assert isinstance(text_attachment_content, str)
@@ -665,7 +655,7 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
             skill_names=["extra"],
             message_timestamp=now,
         ),
-        session_metadata=role_metadata,
+        session_metadata=session_metadata,
     ).messages
     mixed_media_content = mixed_media_messages[-1]["content"]
     assert isinstance(mixed_media_content, list)
@@ -687,11 +677,11 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
         session_metadata={"role_id": "mira"},
     ).messages
     role_prompt = role_messages[0]["content"]
-    assert "role_id=mira" in role_prompt
-    assert "[role_background]" in role_prompt
-    assert "[role_runtime_config]" in role_prompt
-    assert "## Active Role: Mira" in role_prompt
-    assert "你现在要用更温柔的风格说话。" in role_prompt
+    assert "role_id=mira" not in role_prompt
+    assert "[role_background]" not in role_prompt
+    assert "[role_runtime_config]" not in role_prompt
+    assert "## Active Role: Mira" not in role_prompt
+    assert "你现在要用更温柔的风格说话。" not in role_prompt
     assert "你是一个用户创建的角色" not in role_prompt
     assert "Akashic 是用户的一位朋友" not in role_prompt
     assert "不要把他解释成你的内部底座" not in role_prompt
@@ -708,11 +698,14 @@ def test_context_builder_builds_prompt_messages_and_assistant_blocks(
         ),
         session_metadata={"role_id": "mira"},
     ).messages[0]["content"]
-    assert "role_id=mira" in role_prompt_cross_channel
-    assert "[role_background]" in role_prompt_cross_channel
+    assert "role_id=mira" not in role_prompt_cross_channel
+    assert "[role_background]" not in role_prompt_cross_channel
     role_prefix = role_prompt.split("## Active Role: Mira", 1)[0]
     role_prefix_cross_channel = role_prompt_cross_channel.split("## Active Role: Mira", 1)[0]
-    assert role_prefix == role_prefix_cross_channel
+    assert "self note" in role_prefix
+    assert "self note" in role_prefix_cross_channel
+    assert "来自深海城的向导" not in role_prefix
+    assert "来自深海城的向导" not in role_prefix_cross_channel
 
 
 def test_context_builder_reproduces_temporal_conflict_baseline(
@@ -755,11 +748,6 @@ def test_context_builder_reproduces_temporal_conflict_baseline(
     (tmp_path / "memes" / "manifest.json").write_text(
         '{"version":1,"categories":{}}',
         encoding="utf-8",
-    )
-    RoleStore(tmp_path).create_role(
-        role_id="mira",
-        name="Mira",
-        system_prompt="你是 Mira。",
     )
 
     builder = ContextBuilder(tmp_path, _Memory())  # type: ignore[arg-type]

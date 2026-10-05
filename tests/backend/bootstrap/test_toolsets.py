@@ -95,7 +95,7 @@ def test_build_registered_tools_uses_toolset_providers(monkeypatch, tmp_path: Pa
     )
     tools, push_tool, scheduler, mcp_registry, memory_runtime, screen_observation = (
         build_registered_tools(
-            config=cast(Any, SimpleNamespace(spawn_enabled=False, proactive=SimpleNamespace())),
+            config=cast(Any, SimpleNamespace(spawn_enabled=False, model="test", multimodal=False, proactive=SimpleNamespace())),
             workspace=tmp_path,
             http_resources=cast(Any, SimpleNamespace()),
             bus=cast(Any, SimpleNamespace()),

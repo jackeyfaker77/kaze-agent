@@ -69,5 +69,8 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
+      - name: Run packaging tests
+        run: pnpm --filter kaze-desktop --fail-if-no-match run test:package
+
       - name: Run production build
         run: pnpm run build

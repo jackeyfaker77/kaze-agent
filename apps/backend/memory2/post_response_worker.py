@@ -280,7 +280,6 @@ class PostResponseMemoryWorker:
                             source_ref=source_ref,
                             action="supersede",
                             superseded_ids=supersede_ids,
-                            role_id=run_context.role_id,
                         )
                     )
         return token_budget

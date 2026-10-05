@@ -1,0 +1,1273 @@
+[
+  {
+    "path": "tests/backend/core/roles/relationship_runtime/test_service.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_normalize_message_count_accepts_json_scalars",
+      "test_snapshot_rejects_non_first_person_self_view",
+      "test_user_message_clears_unanswered_state_and_reduces_loneliness",
+      "test_snapshot_growth_profile_is_raised_to_default_floor",
+      "test_current_loneliness_runtime_grows_once_per_complete_ten_minute_tick",
+      "test_current_loneliness_runtime_adds_unanswered_growth_per_tick",
+      "test_non_close_roles_do_not_accumulate_loneliness_and_clear_awaiting_state",
+      "test_proactive_sent_marks_unanswered_and_sets_cooldown",
+      "test_should_trigger_proactive_respects_threshold",
+      "test_should_trigger_proactive_reports_active_cooldown",
+      "test_should_trigger_proactive_accepts_positional_now_argument",
+      "test_should_trigger_proactive_requires_closeness_threshold",
+      "test_loneliness_heartbeat_loop_defaults_to_ten_minutes",
+      "test_generate_snapshot_via_llm_accepts_prompt_json_example",
+      "test_refresh_snapshot_after_consolidation_updates_session_metadata"
+    ],
+    "sha256": "12cd460d8d27fd93fd18bed802cb3a07781425446298938b552d0b773e004bae"
+  },
+  {
+    "path": "tests/backend/core/roles/relationship_runtime/test_snapshot.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_optimizer_uses_the_role_dialogue_model_snapshot"
+    ],
+    "sha256": "61b1ff9d5a550d41b648f6d3785d89d1bbc176164dceb1c307c105647e464b66"
+  },
+  {
+    "path": "tests/backend/core/roles/test_assets.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_asset_store_rejects_paths_outside_role_assets",
+      "test_asset_store_rejects_duplicate_category_names"
+    ],
+    "sha256": "2cad4dfdc6a999b73b965e8154fa7b53ec7922dd81ab60e8ae8bf9535adfba3b"
+  },
+  {
+    "path": "tests/backend/core/roles/test_binding_policy.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_binding_policy_rejects_external_channel_without_single_contact",
+      "test_binding_policy_rejects_channel_owned_by_another_role",
+      "test_binding_policy_disables_removed_proactive_target"
+    ],
+    "sha256": "76ece878de63ae61a6dca977c92263f132575a3db96ed0f656e3dca745af069a"
+  },
+  {
+    "path": "tests/backend/core/roles/test_model_runtime.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_runtime_resolves_dialogue_and_visual_fallback",
+      "test_runtime_snapshot_stays_stable_after_role_selection_changes",
+      "test_runtime_uses_role_dialogue_effort_override"
+    ],
+    "sha256": "9d1ca00e15fd410f6e354816150a71622d518b434517b08b5846b0018d623e96"
+  },
+  {
+    "path": "tests/backend/core/roles/test_pet_state.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_pet_state_enables_only_one_role"
+    ],
+    "sha256": "ebabdd41cdd35cb1f07bbfea596da1c3c9b2d8320fbe87715a1b6e8cc3623ffe"
+  },
+  {
+    "path": "tests/backend/core/roles/test_role_runtime.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_registry_serializes_work_in_the_same_thread",
+      "test_registry_serializes_different_transport_threads_for_one_role",
+      "test_registry_allows_different_roles_to_execute_independently",
+      "test_role_runtime_owns_role_model_activation",
+      "test_role_runtime_rejects_model_activation_when_capability_is_missing",
+      "test_role_capabilities_reject_the_wrong_work_kind",
+      "test_registry_refreshes_configuration_without_replacing_the_runtime",
+      "test_registry_builds_direct_context_from_authoritative_role"
+    ],
+    "sha256": "0fa5cfa1ebe2a2c0eff25df892f3af39ddb10f36b78f06c706e0581c6b901ea7"
+  },
+  {
+    "path": "tests/backend/core/roles/test_scene_followup_runtime.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_user_message_arms_first_followup_after_five_minutes",
+      "test_successive_followups_accelerate_and_stop_after_third_send",
+      "test_new_user_message_resets_followup_chain_from_latest_interaction",
+      "test_stale_scene_expires_instead_of_catching_up_after_restart",
+      "test_scene_change_closes_pending_followups",
+      "test_shared_scene_decision_updates_key_and_closes_on_transition",
+      "test_started_scene_keeps_pending_followup_and_records_scene_key",
+      "test_none_scene_closes_pending_followups"
+    ],
+    "sha256": "ff9086cf311d154c12aafdf09ad08135767d7b750075630151eeb008b3b2cdd5"
+  },
+  {
+    "path": "tests/backend/core/roles/test_self_seed.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_self_seed_uses_the_role_dialogue_model_snapshot"
+    ],
+    "sha256": "7a974d4963b5feae9fa751162a82eaf99045a785ec2a37a8f3e07dddcb5c6839"
+  },
+  {
+    "path": "tests/backend/core/roles/test_services.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_role_deletion_requires_a_lifecycle_listener",
+      "test_role_deletion_listener_can_be_removed"
+    ],
+    "sha256": "150346cafeee9eaa45c23ba117dd76337fadd428a8f1236a4b30b46c73bb1db5"
+  },
+  {
+    "path": "tests/backend/core/roles/test_store.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_role_store_raises_for_corrupted_manifest",
+      "test_role_store_rejects_invalid_manifest_shape",
+      "test_role_store_persists_proactive_policy_and_keeps_it_when_target_is_removed"
+    ],
+    "sha256": "b93235176c78d7c052e7342b167db008c476044dea68a31b5c9426e45e2fa583"
+  },
+  {
+    "path": "tests/backend/core/roles/test_store_integration.py",
+    "retired_source": "core/roles",
+    "tests": [
+      "test_role_store_creates_manifest_and_assets_layout",
+      "test_role_store_creates_role_and_copies_assets",
+      "test_role_store_assigns_uploaded_assets_and_moves_between_categories",
+      "test_role_store_rejects_removing_category_still_used_by_assets",
+      "test_role_store_accepts_category_removal_with_reassigned_bindings",
+      "test_role_store_deletes_category_assets_when_paths_are_removed_together",
+      "test_role_store_updates_and_deletes_role",
+      "test_role_store_keeps_desktop_pet_enablement_exclusive",
+      "test_role_store_persists_runtime_config_updates",
+      "test_role_store_keeps_single_contact_channel_access_and_proactive_target_on_the_role",
+      "test_role_store_rejects_duplicate_qq_group_binding_formats",
+      "test_role_store_rejects_proactive_target_outside_its_bindings",
+      "test_role_store_disables_proactive_when_its_target_binding_is_removed",
+      "test_role_store_rejects_desktop_binding_for_another_role_session",
+      "test_role_store_rejects_allow_list_for_desktop_binding",
+      "test_role_store_requires_exactly_one_external_contact",
+      "test_role_store_delete_role_removes_role_runtime_directory",
+      "test_role_aggregate_service_notifies_role_deleted_after_cleanup",
+      "test_role_store_delete_role_keeps_other_role_runtime_directories",
+      "test_role_store_replaces_and_clears_old_assets",
+      "test_role_store_removes_selected_illustration_only",
+      "test_role_store_rejects_out_of_root_asset_deletion",
+      "test_role_store_can_select_avatar_and_chat_background_from_asset_library",
+      "test_role_store_clears_selected_assets_when_underlying_asset_removed",
+      "test_role_aggregate_service_initializes_role_first_memory_space",
+      "test_role_aggregate_service_updates_background_without_losing_history",
+      "test_role_self_seed_generator_does_not_override_existing_self",
+      "test_role_aggregate_service_user_edit_first_impression_becomes_baseline",
+      "test_role_aggregate_service_system_derived_cannot_override_user_relationship_baseline",
+      "test_role_binding_service_requires_explicit_binding",
+      "test_route_inbound_by_role_rewrites_legacy_channel_to_role_session",
+      "test_route_inbound_by_role_rejects_unbound_channel"
+    ],
+    "sha256": "b948c9248720f9da6cc8c4ca1b4b1460eddf203880a35a24e5464c398b0eaaea"
+  },
+  {
+    "path": "tests/backend/core/integrations/novelai/test_novelai_store.py",
+    "retired_source": "core/integrations/novelai",
+    "tests": [
+      "test_find_generation_source_by_output_path_loads_exact_request_snapshot",
+      "test_find_generation_source_by_output_path_rejects_untracked_image",
+      "test_list_records_preserves_stored_workspace_paths"
+    ],
+    "sha256": "295ec9c773cc3316495eac8d89598b32f88f7b9f1c67826637160daacba4ab0b"
+  },
+  {
+    "path": "tests/backend/core/integrations/novelai/test_prompt_tags.py",
+    "retired_source": "core/integrations/novelai",
+    "tests": [
+      "test_prompt_tag_store_upserts_and_retrieves_ranked_tags",
+      "test_prompt_tag_store_filters_adult_entries_without_nsfw_mode",
+      "test_prompt_tag_store_rejects_invalid_entries"
+    ],
+    "sha256": "1d6b4ab2c457ce87b4fe43f9456a0a904d1e44d3d7f52771cf0543d0ee76db16"
+  },
+  {
+    "path": "tests/backend/core/integrations/novelai/test_prompt_validation.py",
+    "retired_source": "core/integrations/novelai",
+    "tests": [
+      "test_validate_novelai_prompt_accepts_ascii_tag_syntax",
+      "test_validate_novelai_prompt_rejects_non_ascii_tags"
+    ],
+    "sha256": "8e4b42296aa782a59facaa3105a8003afae565730d229a194d1e2e654052033e"
+  },
+  {
+    "path": "tests/backend/core/integrations/novelai/test_service.py",
+    "retired_source": "core/integrations/novelai",
+    "tests": [
+      "test_regenerate_reuses_exact_request_parameters_with_fresh_seed",
+      "test_service_persists_generated_image_and_metadata",
+      "test_service_rejects_non_english_tags_before_external_call",
+      "test_service_expands_prompts_from_tag_knowledge_base",
+      "test_service_does_not_match_prompt_tags_without_source_text",
+      "test_service_img2img_requires_base_image_path",
+      "test_service_img2img_uses_custom_strength_and_noise",
+      "test_service_auto_writeback_updates_role_assets",
+      "test_service_rewrites_v45_subscription_error",
+      "test_service_uses_nsfw_model_when_switch_enabled"
+    ],
+    "sha256": "1e823215c4b17e99645b5c4cbbf2d50fbedb84eee1af8eb50df404c539593b2e"
+  },
+  {
+    "path": "tests/backend/story_simulation/test_director.py",
+    "retired_source": "story_simulation",
+    "tests": [
+      "test_director_parser_keeps_only_an_explicit_time_band",
+      "test_director_parser_accepts_character_visual_type",
+      "test_director_parser_rejects_unknown_visual_type",
+      "test_director_prompt_requires_novelai_v45_directional_tags",
+      "test_director_request_carries_the_persisted_current_scene",
+      "test_director_parser_requires_current_scene",
+      "test_director_parser_requires_a_chinese_scene_name"
+    ],
+    "sha256": "e6bd7d6738c20a0c1c9512267ea57eb33a72a0f786d9f6c848ccf1fb5b3c2bfc"
+  },
+  {
+    "path": "tests/backend/story_simulation/test_repository.py",
+    "retired_source": "story_simulation",
+    "tests": [
+      "test_story_repository_replaces_legacy_english_scene_names_at_the_read_boundary",
+      "test_story_repository_freezes_opening_profile_and_replays_same_turn",
+      "test_story_repository_advances_the_story_date_when_period_wraps_midnight",
+      "test_story_repository_resets_an_interrupted_generation_to_pending"
+    ],
+    "sha256": "915f7723325904252f8431e4e16fe15c1497ee70bdc7d8885f47dca1ab519185"
+  },
+  {
+    "path": "tests/backend/story_simulation/test_service.py",
+    "retired_source": "story_simulation",
+    "tests": [
+      "test_service_retries_invalid_draft_once_before_committing",
+      "test_service_replaces_a_generic_dialogue_speaker_with_the_story_role_name",
+      "test_service_does_not_commit_beats_after_final_failure",
+      "test_service_rejects_characters_outside_the_current_scene_contract"
+    ],
+    "sha256": "54d5e71764b11921beff72438cab6940350ae9f7a14e6266a9f42c4818796b4f"
+  },
+  {
+    "path": "tests/backend/story_simulation/test_story_time.py",
+    "retired_source": "story_simulation",
+    "tests": [
+      "test_next_story_time_band_keeps_the_current_period_without_director_change",
+      "test_next_story_time_band_accepts_only_an_explicit_period_change",
+      "test_next_story_clock_keeps_the_selected_date_when_period_moves_forward",
+      "test_next_story_clock_advances_the_selected_date_when_period_wraps_midnight",
+      "test_normalize_story_time_band_rejects_exact_timestamps"
+    ],
+    "sha256": "4ea4580271dbf2b933d4092b0ecebfbc3719359d45fa0d01eaf3b093c9a98d60"
+  },
+  {
+    "path": "tests/backend/plugins/meme/test_plugin.py",
+    "retired_source": "plugins/meme",
+    "tests": [
+      "test_meme_prompt_module_injects_bottom_section",
+      "test_plugin_manager_collects_meme_prompt_module_before_initialize",
+      "test_meme_plugin_decorates_after_reasoning",
+      "test_meme_plugin_strips_empty_protocol_tag",
+      "test_role_reactions_use_sendable_assets_and_global_emoji",
+      "test_role_reactions_reject_disabled_category_and_unknown_emoji"
+    ],
+    "sha256": "e89fbd9d035834ebe470b1e1f9874361dc4e3b704f238ad67a44012d66e21788"
+  },
+  {
+    "path": "tests/backend/plugins/meme/test_system.py",
+    "retired_source": "plugins/meme",
+    "tests": [
+      "test_load_common_emojis_prefers_packaged_resource",
+      "test_catalog_no_manifest_returns_empty",
+      "test_catalog_loads_enabled_categories",
+      "test_catalog_filters_disabled_categories",
+      "test_catalog_prompt_block_contains_categories",
+      "test_catalog_reloads_after_manifest_change",
+      "test_catalog_clears_on_manifest_deletion",
+      "test_catalog_does_not_reload_without_mtime_change",
+      "test_pick_image_returns_none_for_unknown_tag",
+      "test_pick_image_returns_none_for_disabled_category",
+      "test_pick_image_returns_none_for_empty_directory",
+      "test_pick_image_returns_path_when_image_exists",
+      "test_pick_image_case_insensitive",
+      "test_decorator_no_tag_passes_through",
+      "test_decorator_uses_explicit_tag",
+      "test_decorator_tag_only_gives_empty_content",
+      "test_decorator_unknown_tag_has_no_media",
+      "test_decorator_empty_dir_has_no_media",
+      "test_decorator_picks_image_for_parsed_tag",
+      "test_decorator_case_insensitive_tag",
+      "test_decorator_reflects_hot_reload"
+    ],
+    "sha256": "61339f4c761544580f60fe57a966ea0fcb2a2e363beed01046dddb1a3a39414f"
+  },
+  {
+    "path": "tests/backend/plugins/novelai/test_auto_cg.py",
+    "retired_source": "plugins/novelai",
+    "tests": [
+      "test_auto_cg_policy_enforces_cooldown_dedup_and_manual_bypass",
+      "test_auto_cg_policy_requires_scene_key_and_isolates_sessions",
+      "test_auto_cg_policy_reports_current_cooldown",
+      "test_auto_cg_policy_allows_new_visual_beat_after_cooldown",
+      "test_auto_cg_third_person_terms_are_idempotent"
+    ],
+    "sha256": "b18cea7459622ccce36ab223da4011a58eda965863c06b72ee8e41630ecd4306"
+  },
+  {
+    "path": "tests/backend/plugins/novelai/test_auto_cg_controller.py",
+    "retired_source": "plugins/novelai",
+    "tests": [
+      "test_controller_advances_cooldown_for_passive_observations",
+      "test_new_observation_cancels_stale_in_flight_task",
+      "test_controller_records_state_only_after_image_push_succeeds",
+      "test_controller_retries_generation_once_and_pushes_one_image",
+      "test_controller_abandons_after_one_generation_retry"
+    ],
+    "sha256": "4f76f0cd97b7a7f8fdcf8e83ee36e2e0f356f7cf7ef62f12de5cfeb25c81c4d4"
+  },
+  {
+    "path": "tests/backend/plugins/novelai/test_plugin.py",
+    "retired_source": "plugins/novelai",
+    "tests": [
+      "test_plugin_registers_tool_and_attaches_generated_media",
+      "test_plugin_does_not_attach_media_already_sent_by_message_push",
+      "test_plugin_generates_required_scene_cg_from_observation",
+      "test_required_scene_change_bypasses_cooldown",
+      "test_same_scene_respects_manual_generation_and_cooldown",
+      "test_plugin_records_auto_cg_state_only_after_successful_media"
+    ],
+    "sha256": "b458dc1ce73fe204dd8642ff46c0bfc4f9168a8ca22570915d6a511f6560a246"
+  },
+  {
+    "path": "tests/backend/plugins/relationship_proactive/test_plugin.py",
+    "retired_source": "plugins/relationship_proactive",
+    "tests": [
+      "test_scene_gate_claims_tick_and_advances_only_after_delivery",
+      "test_loneliness_gate_blocks_when_relationship_runtime_rejects",
+      "test_plugin_applies_shared_scene_observation"
+    ],
+    "sha256": "cdbf0b89e7d5311ac5380d6e7d37a4fe6871b6400d831ab3678b121074268071"
+  },
+  {
+    "path": "tests/backend/plugins/scene_awareness/test_contracts.py",
+    "retired_source": "plugins/scene_awareness",
+    "tests": [
+      "test_parse_tool_call_returns_validated_started_decision",
+      "test_parse_tool_call_accepts_empty_terminal_decision",
+      "test_parse_tool_call_rejects_invalid_protocol",
+      "test_parse_tool_call_accepts_new_visual_beat_in_same_scene",
+      "test_parse_tool_call_rejects_same_visual_beat_as_new_image"
+    ],
+    "sha256": "c34cfca0d91fe64e6e313bcc5ba2098732f9cb6713e21ee7c21017919b3c93f2"
+  },
+  {
+    "path": "tests/backend/plugins/scene_awareness/test_controller.py",
+    "retired_source": "plugins/scene_awareness",
+    "tests": [
+      "test_passive_turn_publishes_started_scene_and_persists_scene_key",
+      "test_passive_turn_observes_reply_returned_by_desktop_bridge",
+      "test_passive_turn_publishes_none_without_persisting_scene_key",
+      "test_invalid_scene_protocol_does_not_publish_observation",
+      "test_proactive_message_is_observed_with_shared_scene_state"
+    ],
+    "sha256": "b8ecf79b714261dec5284cc65d204eb417fea55a4a8247578c3189e4a6954dc7"
+  },
+  {
+    "path": "tests/backend/plugins/scene_awareness/test_decision.py",
+    "retired_source": "plugins/scene_awareness",
+    "tests": [
+      "test_decide_scene_forces_observer_tool_with_isolated_system_prompt",
+      "test_decide_scene_repairs_invalid_tool_protocol_once",
+      "test_decide_scene_repairs_malformed_tool_arguments_once"
+    ],
+    "sha256": "cf9556fe2e0de518d8afa7e389ad15954a7b376602356ccecd6f112a5578684c"
+  },
+  {
+    "path": "tests/backend/agent/core/proactive_turn/test_delivery.py",
+    "retired_source": "agent/core/proactive_turn/delivery.py",
+    "tests": [
+      "test_role_target_resolver_failure_does_not_fall_back_to_global_target",
+      "test_role_target_resolver_empty_result_does_not_fall_back_to_global_target",
+      "test_role_transport_list_failure_does_not_fall_back_to_global_target",
+      "test_global_target_resolver_failure_can_use_global_fallback"
+    ],
+    "sha256": "cb03b89255d7659815c1eb89710c8542061f0990f7c8c372c7877e8fe301a07e",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/agent/core/proactive_turn/test_judge.py",
+    "retired_source": "proactive_v2/gateway.py",
+    "tests": [
+      "test_scene_followup_retries_plain_text_response_as_required_tool_call",
+      "test_scene_followup_protocol_failure_preserves_pending_scene"
+    ],
+    "sha256": "6b66d8cee444623c9fb27d8ef347c0b2d26fe563a185870ba003c86ab1976d6e",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/agent/core/proactive_turn/test_prompt_context.py",
+    "retired_source": "agent/core/proactive_turn/prompt_context.py",
+    "tests": [
+      "test_proactive_system_prompt_rejects_missing_role_identity"
+    ],
+    "sha256": "fbfb646e9e8b00ff2aadbe711bbb8752a47115376ddcb20816b5d01b1a602d19",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/agent/core/test_mood_resolver.py",
+    "retired_source": "agent/core/mood_resolver.py",
+    "tests": [
+      "test_resolve_role_mood_returns_catalog_item_from_llm_json",
+      "test_resolve_role_mood_falls_back_to_default_for_unknown_label"
+    ],
+    "sha256": "843b55f37ecfa8da773bd54b79ef7bb1f2eca69990c4af7bf647d0ea83e835f9",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/agent/plugins/test_role_prompt.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_role_system_section_contains_only_role_prompt_and_mood_contract",
+      "test_role_cache_prefix_does_not_duplicate_memory_sections",
+      "test_role_system_section_rejects_missing_role_context"
+    ],
+    "sha256": "13f981a599656ea7aeec51d2beba02e9c5d393662032dbee105894adc89bd1f3",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/agent/tools/test_image_generate.py",
+    "retired_source": "agent/tools/image_generate.py",
+    "tests": [
+      "test_generate_image_tool_requires_english_novelai_tags",
+      "test_generate_image_tool_defaults_to_user_requested_intent",
+      "test_generate_image_tool_uses_runtime_user_message_for_tag_matching",
+      "test_generate_image_tool_requires_scene_key_for_auto_cg"
+    ],
+    "sha256": "74087465979cebc69580c96c5292269efd183c3b41ebe986adfe049ebf501cd0",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/bootstrap/test_conversation.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_qq_group_binding_accepts_bare_role_chat_id"
+    ],
+    "sha256": "cc6a466d2200a48300a92c9f94d4bd29822998370e3aa66d37435f2193be1ebf",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/bootstrap/test_proactive_facade.py",
+    "retired_source": "proactive_v2/context.py",
+    "tests": [
+      "test_build_proactive_runtime_accepts_facade_memory",
+      "test_build_proactive_provider_strips_enable_thinking",
+      "test_sensor_requires_default_role_id_for_memory_reads",
+      "test_sensor_reads_role_long_term_from_facade_when_default_role_id_present",
+      "test_agent_tick_prompt_keeps_self_block_with_facade",
+      "test_agent_tick_prompt_binds_role_metadata_for_memory_reads"
+    ],
+    "sha256": "72cc0f4f4b114a50d2271de191dd136391d1d7dc79c2f91cb44107f9bcdc8d73",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/conversation/test_store.py",
+    "retired_source": "conversation/service.py",
+    "tests": [
+      "test_conversation_store_ensures_schema_and_message_columns",
+      "test_session_store_message_roundtrip_preserves_conversation_fields",
+      "test_session_store_updates_latest_assistant_delivery_by_thread",
+      "test_conversation_service_resolves_thread_runtime_key",
+      "test_conversation_service_archives_old_role_thread_on_channel_rebind"
+    ],
+    "sha256": "cae06fbda98feacca1fb94d2331220e00a574ac8455a30274734cbe0f443c5d1",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/session/test_manager_conversation_store.py",
+    "retired_source": "conversation/service.py",
+    "tests": [
+      "test_session_manager_exposes_shared_conversation_store",
+      "test_full_message_sync_preserves_conversation_columns",
+      "test_role_session_persistence_refreshes_source_thread_projection"
+    ],
+    "sha256": "9fb5ad5e56af6fb6f575654d6d1d63228113d81dc4985028665a7455436f0229",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/voice/test_role_tts_settings.py",
+    "retired_source": "desktop_bridge/voice/role_tts_settings.py",
+    "tests": [
+      "test_resolve_role_tts_settings_uses_one_mood_snapshot_and_valid_mapping"
+    ],
+    "sha256": "b6999015b681e4d13a6e805362677e4c47df6ce2ab50139df25f3bce62ae49e9",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/voice/test_tts_coordinator.py",
+    "retired_source": "desktop_bridge/voice/role_tts_settings.py",
+    "tests": [
+      "test_coordinator_emits_audio_in_sentence_order",
+      "test_tts_provider_failure_emits_diagnostic_without_raising",
+      "test_provider_failure_stops_later_sentences_in_the_same_turn",
+      "test_tts_event_emission_failure_propagates",
+      "test_role_without_voice_id_does_not_start_provider_work",
+      "test_disabled_role_voice_does_not_start_provider_work",
+      "test_role_provider_mismatch_does_not_start_provider_work",
+      "test_cancel_permanently_rejects_late_reply_deltas",
+      "test_cancel_signals_in_flight_provider_stream"
+    ],
+    "sha256": "c66e79e32e233f0e81e7ea35d05e1808cc075ebc4dadd4eb25d6ac6cbfa33d3d",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_app_service_integration.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_desktop_app_service_open_role_session_ensures_formal_thread"
+    ],
+    "sha256": "ed37094a70a5b24f8e591057ee8bb110ba5f8cc83f4791144def0c6eee542923",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_chat_service.py",
+    "retired_source": "desktop_bridge/chat_service.py",
+    "tests": [
+      "test_chat_service_bridges_tool_call_lifecycle_for_current_session",
+      "test_chat_service_truncates_tool_result_preview_for_desktop",
+      "test_chat_service_does_not_bridge_live_tool_events_when_streaming_disabled",
+      "test_chat_service_allows_only_one_turn_per_session",
+      "test_cancel_chat_turn_interrupts_only_the_matching_session_and_turn",
+      "test_cancel_chat_turn_waits_for_old_listener_cleanup_before_follow_up",
+      "test_cancel_chat_turn_keeps_naturally_completed_turn_when_interrupt_is_idle",
+      "test_cancel_chat_turn_stops_the_associated_voice_tts_coordinator",
+      "test_cancel_chat_turn_persists_partial_reply_and_reasoning",
+      "test_chat_service_close_awaits_task_listener_cleanup",
+      "test_cancel_voice_turn_rejects_late_tts_delta",
+      "test_non_streamed_voice_reply_synthesizes_final_response",
+      "test_streamed_voice_reply_does_not_synthesize_final_response_twice",
+      "test_voice_reply_finishes_when_tts_is_disabled",
+      "test_chat_service_disables_model_stream_events_from_config",
+      "test_chat_failure_terminates_voice_lifecycle",
+      "test_cancelled_chat_task_terminates_voice_lifecycle"
+    ],
+    "sha256": "11dd31daab23b1e2c392b1cd57062cf4a59ea08c68883bd402476779917c4c22",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_chat_service_integration.py",
+    "retired_source": "desktop_bridge/chat_service.py",
+    "tests": [
+      "test_desktop_chat_service_emits_chat_error_event",
+      "test_cancelled_reply_survives_session_manager_reload"
+    ],
+    "sha256": "80865b5a9c42d2d7226117f192a329fbef1073319bc163a3b7b968c2e84a2dbf",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_image_service.py",
+    "retired_source": "desktop_bridge/image_service.py",
+    "tests": [
+      "test_regenerate_message_media_replaces_only_the_selected_slot",
+      "test_regenerate_message_media_failure_preserves_old_media",
+      "test_regenerate_message_media_rejects_concurrent_same_slot",
+      "test_regenerate_message_media_rejects_non_novelai_image"
+    ],
+    "sha256": "f91409e4aefcbb15f8ea56d8b61afb5202a7bdf8589da0f4247b0e007aa2cd69",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_image_service_integration.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_desktop_image_service_generates_with_role_session_key",
+      "test_desktop_image_service_history_filters_by_role"
+    ],
+    "sha256": "d46034fc1ed743e842d14951422e80013bddce85654f90a68361f2289902d5ac",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_integration.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_desktop_bridge_role_lifecycle_and_chat_send",
+      "test_desktop_bridge_chat_send_merges_reply_context_for_agent",
+      "test_desktop_bridge_role_create_initializes_role_first_self",
+      "test_desktop_bridge_role_create_initializes_self_with_async_seed_configured",
+      "test_desktop_bridge_returns_role_not_found",
+      "test_desktop_bridge_chat_listeners_are_removed_after_send",
+      "test_desktop_bridge_chat_send_accepts_media_only",
+      "test_desktop_bridge_chat_send_updates_presence_and_loneliness_runtime",
+      "test_desktop_bridge_chat_send_rolls_back_runtime_side_effects_when_persist_fails",
+      "test_desktop_bridge_chat_send_rejects_empty_content_and_media",
+      "test_desktop_bridge_emits_session_updated_for_background_desktop_push",
+      "test_desktop_bridge_push_rolls_back_runtime_side_effects_when_persist_fails",
+      "test_desktop_bridge_desktop_push_does_not_duplicate_existing_proactive_message",
+      "test_desktop_bridge_push_does_not_treat_subset_media_as_duplicate",
+      "test_desktop_bridge_server_streams_requests_and_responses",
+      "test_desktop_bridge_server_returns_invalid_request_and_keeps_stream_open",
+      "test_desktop_bridge_server_wraps_handler_errors_without_closing_stream",
+      "test_desktop_bridge_updates_role_display_state",
+      "test_desktop_bridge_open_role_emits_session_updated",
+      "test_desktop_bridge_role_create_and_update_copy_assets",
+      "test_desktop_bridge_updates_role_asset_categories_and_send_permission",
+      "test_desktop_bridge_role_update_removes_selected_illustration",
+      "test_desktop_bridge_role_update_selects_avatar_and_chat_background_from_library",
+      "test_desktop_bridge_role_update_clears_selected_slots_when_asset_removed",
+      "test_desktop_bridge_chat_cancel_uses_interrupt_controller",
+      "test_desktop_bridge_normalizes_stale_active_illustration_on_role_update",
+      "test_desktop_bridge_syncs_role_metadata_into_session_on_open_and_update",
+      "test_desktop_bridge_recomputes_loneliness_runtime_for_roles_and_sessions_on_read",
+      "test_desktop_bridge_role_delete_removes_role_session",
+      "test_desktop_bridge_novelai_generate_and_history"
+    ],
+    "sha256": "effbe3cf0e074defc67777ef2bbe4eedfda723541e856d6dd83fe211ee3a4780",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_request_router.py",
+    "retired_source": "desktop_bridge/request_router.py",
+    "tests": [
+      "test_request_router_routes_health_without_a_story_handler_match",
+      "test_request_router_stops_after_the_owning_handler_matches",
+      "test_request_router_stops_after_story_handler_matches"
+    ],
+    "sha256": "8747d47bab64d04369d4a41928b758e0075cb078b6fc4e766c4150888d1e8705",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_role_difference_service.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_generates_all_differences_from_one_base_and_persists_one_category",
+      "test_generated_differences_bind_standard_moods_and_preserve_custom_moods",
+      "test_generation_failure_does_not_persist_partial_category"
+    ],
+    "sha256": "eb64c8aaadb22013b36c7da8e95c094398c24cc0a7ade508720460f2a022fafd",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_role_presenter_integration.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_role_presenter_serializes_desktop_asset_fields"
+    ],
+    "sha256": "6f604f3c19bd35e667732ceef151fe81a665b0a3d10b3051199d07204c3352e8",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_role_requests.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_role_difference_rpc_publishes_progress_and_returns_updated_role"
+    ],
+    "sha256": "d634e2ca891442cf56ef38ce2ae84de9492179b7063b43b9b6c7898020391c9b",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_role_task_service.py",
+    "retired_source": "desktop_bridge/role_task_service.py",
+    "tests": [
+      "test_role_task_service_lists_only_tasks_owned_by_role",
+      "test_role_task_service_creates_and_updates_desktop_schedule_binding",
+      "test_role_task_service_cancels_only_matching_role_subagent",
+      "test_role_task_service_rejects_cross_role_schedule_cancellation"
+    ],
+    "sha256": "05294ce2d8d5ee6ff6e317b4311a000839cf492f8779c45073e2ba2441ab7589",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_service.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_injected_role_service_publishes_role_deleted",
+      "test_novelai_regenerate_message_media_returns_updated_session",
+      "test_observation_bridge_routes_only_through_the_owned_service",
+      "test_chat_send_returns_busy_before_persisting_second_message",
+      "test_chat_send_preserves_voice_turn_identity_in_metadata",
+      "test_voice_transcribe_returns_structured_metrics",
+      "test_voice_transcribe_error_returns_structured_metrics",
+      "test_voice_provider_call_does_not_block_bridge_event_loop",
+      "test_voice_turn_cancel_targets_only_the_requested_turn",
+      "test_voice_delete_preserves_provider_and_ownership_guard",
+      "test_external_turn_committed_broadcasts_role_session_once",
+      "test_external_proactive_media_commit_broadcasts_role_session",
+      "test_external_image_push_persists_and_broadcasts_desktop_session",
+      "test_session_read_bridge_methods_return_bounded_desktop_projections",
+      "test_session_image_history_returns_media_only_projection"
+    ],
+    "sha256": "8c74a14ad15a90d5124f15e8b8241968b6ad84fe5a01badfd8c3a52eb1cb53ce",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_service_tasks.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_desktop_bridge_lists_and_cancels_role_subagent_tasks",
+      "test_desktop_bridge_creates_updates_and_emits_role_task_events",
+      "test_desktop_bridge_rejects_cross_role_and_running_schedule_updates"
+    ],
+    "sha256": "d63ecced82824180140e4e806fff786edb602e2e051b016ed2e55f74a0c67f3f",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_session_presenter_integration.py",
+    "retired_source": "desktop_bridge/session_presenter.py",
+    "tests": [
+      "test_session_presenter_keeps_sanitized_turn_metrics",
+      "test_session_presenter_serializes_sanitized_tool_chain",
+      "test_session_presenter_truncates_results_and_skips_unidentified_tools",
+      "test_session_presenter_page_and_summary_use_store_projection",
+      "test_session_presenter_search_and_around_serialize_light_results",
+      "test_session_presenter_image_history_excludes_chat_content"
+    ],
+    "sha256": "868396c247ace9882c3a279f6bf6447b2e6d78c4c536a596c755836f7ee4b8d3",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_story_image_generator.py",
+    "retired_source": "desktop_bridge/story_image_generator.py",
+    "tests": [
+      "test_uses_registered_plugin_tool_for_story_scene_cg",
+      "test_passes_a_model_ready_character_prompt_without_rewriting_it",
+      "test_passes_a_model_ready_scene_prompt_without_removing_tags",
+      "test_passes_player_appearance_tags_from_the_model_without_injection",
+      "test_rejects_non_ascii_prompt_before_calling_plugin_tool"
+    ],
+    "sha256": "525fd1df0ceb71278a9b6e1d9a1d9c0ec25ad05fa9703c4cb15db9ce4728f60e",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/desktop_bridge/test_story_simulation_handler.py",
+    "retired_source": "desktop_bridge/story_simulation_handler.py",
+    "tests": [
+      "test_create_story_generates_opening_and_replays_request",
+      "test_create_story_requires_a_non_blank_creation_id",
+      "test_story_turns_capture_the_role_dialogue_model_inside_each_task",
+      "test_story_turn_fails_when_the_role_model_registration_is_missing",
+      "test_opening_background_is_saved_to_its_story_visual_gallery",
+      "test_progression_visual_prompt_creates_async_cg_instead_of_opening_background",
+      "test_failed_progression_cg_can_retry_without_creating_a_new_turn",
+      "test_ready_cg_regeneration_replaces_the_existing_gallery_resource",
+      "test_repeated_character_visual_does_not_create_another_cg_for_the_same_scene",
+      "test_failed_opening_keeps_story_without_a_visual_resource",
+      "test_failed_opening_retries_with_the_same_creation_request",
+      "test_story_recovery_restarts_an_interrupted_player_turn",
+      "test_create_story_rejects_exact_time_as_a_story_period",
+      "test_create_story_recovers_from_an_interrupted_initialization",
+      "test_create_story_reuses_a_provisioning_entry_after_process_restart",
+      "test_create_story_repairs_an_opening_turn_left_before_activation",
+      "test_story_list_quarantines_an_active_entry_with_a_missing_database"
+    ],
+    "sha256": "309b9205fda2d5af4ac9c43eee485f44b44737a702c4b146c49fb7435d94f1a1",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/conftest.py",
+    "retired_source": "proactive_v2/gateway.py",
+    "tests": [],
+    "sha256": "ba9335c7be3656e76cc20410612aa5f6e49be5d1d9e5df37ab941e72fff71ff2",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_agent_loop.py",
+    "retired_source": "proactive_v2/context.py",
+    "tests": [
+      "test_runtime_context_includes_current_beijing_time_anchor",
+      "test_loop_stops_at_max_steps",
+      "test_loop_max_steps_configurable",
+      "test_loop_stops_when_llm_returns_none",
+      "test_loop_puts_runtime_context_frame_before_kickoff",
+      "test_loop_stops_after_partial_sequence_then_none",
+      "test_loop_with_no_llm_fn_executes_nothing",
+      "test_send_message_stops_loop_immediately",
+      "test_skip_stops_loop_immediately",
+      "test_only_first_terminal_counts",
+      "test_send_message_writes_final_message",
+      "test_tool_chain_step_logs_capture_args_and_results",
+      "test_send_message_writes_cited_ids",
+      "test_send_message_cited_added_to_interesting",
+      "test_skip_writes_reason",
+      "test_skip_writes_note",
+      "test_alert_path_send_sets_terminal",
+      "test_alert_stored_in_ctx_fetched_alerts",
+      "test_alert_fn_called_once_even_if_llm_calls_twice",
+      "test_content_stored_in_ctx_fetched_contents",
+      "test_content_fn_called_with_configured_limit",
+      "test_content_path_send_interesting_tracked",
+      "test_mark_not_interesting_in_loop_writes_discarded",
+      "test_mark_not_interesting_multiple_items",
+      "test_context_data_fn_called_only_once_in_loop",
+      "test_recall_memory_in_loop",
+      "test_user_busy_skip",
+      "test_llm_receives_growing_message_history",
+      "test_llm_receives_system_message",
+      "test_unknown_tool_breaks_loop_gracefully",
+      "test_steps_taken_counts_all_tool_calls",
+      "test_main_loop_uses_auto_tool_choice",
+      "test_alert_present_llm_called_with_auto_tool_choice",
+      "test_main_loop_stops_when_auto_tool_call_is_empty",
+      "test_finish_turn_error_stops_under_auto_tool_choice"
+    ],
+    "sha256": "3e278b2670d0ad2b6e7e265eb9729a3dca3fc2c0aca26fdd19289ffbc468c3f3",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_agent_tick_factory.py",
+    "retired_source": "proactive_v2/agent_tick_factory.py",
+    "tests": [
+      "test_agent_tick_factory_build_requires_pool",
+      "test_agent_tick_factory_build_returns_tick",
+      "test_agent_tick_factory_prefers_role_session_key_when_default_role_id_present",
+      "test_agent_tick_factory_builds_drift_pipeline_when_enabled",
+      "test_agent_tick_factory_binds_drift_step_recorder_to_tick_store",
+      "test_agent_tick_factory_requires_default_role_id",
+      "test_build_proactive_runtime_accepts_light_agent_loop_stub",
+      "test_agent_tick_factory_llm_fn_forces_disable_thinking",
+      "test_agent_tick_factory_llm_fn_honors_disable_thinking_without_schemas"
+    ],
+    "sha256": "28abb49e17ff241f2d8fb1edc167d1ee7d370435e17b703b85d72eb1ad15d3b5",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_context.py",
+    "retired_source": "proactive_v2/context.py",
+    "tests": [
+      "test_tick_id_is_8_chars",
+      "test_tick_id_is_alphanumeric",
+      "test_tick_ids_are_unique",
+      "test_now_utc_is_timezone_aware",
+      "test_now_utc_is_utc",
+      "test_session_key_defaults_empty",
+      "test_context_as_fallback_open_defaults_false",
+      "test_terminal_action_defaults_none",
+      "test_skip_reason_defaults_empty",
+      "test_skip_note_defaults_empty",
+      "test_final_message_defaults_empty",
+      "test_cited_item_ids_defaults_empty_list",
+      "test_steps_taken_defaults_zero",
+      "test_interesting_item_ids_defaults_empty_set",
+      "test_discarded_item_ids_defaults_empty_set",
+      "test_fetched_alerts_defaults_empty_list",
+      "test_fetched_contents_defaults_empty_list",
+      "test_fetched_context_defaults_empty_list",
+      "test_alerts_fetched_defaults_false",
+      "test_contents_fetched_defaults_false",
+      "test_context_fetched_defaults_false",
+      "test_interesting_set_is_independent_per_instance",
+      "test_discarded_set_is_independent_per_instance",
+      "test_cited_item_ids_is_independent_per_instance",
+      "test_fetched_alerts_is_independent_per_instance",
+      "test_compound_key_format_from_event",
+      "test_alert_content_same_id_no_collision",
+      "test_ack_split_by_set_intersection",
+      "test_interesting_set_stores_compound_keys",
+      "test_terminal_action_accepts_reply",
+      "test_terminal_action_accepts_skip",
+      "test_context_as_fallback_open_can_be_set",
+      "test_context_as_fallback_open_false_by_default_for_each_new_ctx"
+    ],
+    "sha256": "875c7cfcc122adea486f90a2f56fc868d2a4c2a56dafea0525ec1214982a14bd",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_contracts.py",
+    "retired_source": "proactive_v2/contracts.py",
+    "tests": [
+      "test_normalize_alert_supports_body_alias_and_default_severity",
+      "test_alert_prompt_line_hides_empty_severity",
+      "test_normalize_alert_metrics_trimmed_by_keys_and_value_len",
+      "test_normalize_content_source_alias_and_url_validation",
+      "test_normalize_context_keeps_raw_and_adds_awake_prob",
+      "test_normalize_context_adds_local_time_fields_for_aware_timestamps",
+      "test_normalize_context_accepts_other_local_timezones",
+      "test_normalize_context_skips_local_time_for_naive_timestamp",
+      "test_generic_alert_event_from_mcp_payload"
+    ],
+    "sha256": "8147bb24c2535d0f4d7aec2496c03b7224185702aa35fa45c028163d4a977164",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_drift.py",
+    "retired_source": "proactive_v2/context.py",
+    "tests": [
+      "test_drift_tool_schemas_include_reused_tools",
+      "test_drift_message_push_schema_supports_media",
+      "test_drift_message_push_sends_media",
+      "test_drift_system_prompt_discourages_stuck_skill_and_lists_new_tools",
+      "test_drift_system_prompt_rejects_missing_role_identity",
+      "test_drift_runtime_context_binds_role_memory_from_ctx",
+      "test_drift_stops_when_role_memory_read_fails",
+      "test_drift_web_fetch_keeps_drift_level_truncation",
+      "test_drift_readfile_accepts_outside_path",
+      "test_drift_readfile_accepts_skill_shorthand_path",
+      "test_drift_readfile_accepts_absolute_path_inside_drift_dir",
+      "test_finish_drift_rejects_unknown_skill",
+      "test_finish_drift_requires_message_result_to_match_actual_send",
+      "test_finish_drift_rejects_missing_message_result",
+      "test_finish_drift_rejects_silent_after_message_sent",
+      "test_finish_drift_saves_silent_message_result",
+      "test_drift_writefile_returns_json_error_on_directory_target",
+      "test_drift_state_store_scan_skills_reads_frontmatter",
+      "test_drift_pipeline_runs_and_finishes",
+      "test_drift_pipeline_restricts_tools_after_send_message",
+      "test_drift_pipeline_does_not_force_finish_at_step_limit",
+      "test_agent_tick_enters_drift_and_records_steps",
+      "test_agent_tick_drift_send_message_skips_normal_post_loop",
+      "test_skill_meta_requires_mcp_parsed_inline",
+      "test_skill_meta_requires_mcp_parsed_yaml_list",
+      "test_skill_meta_requires_mcp_empty_when_missing",
+      "test_drift_state_store_includes_builtin_skills_when_enabled",
+      "test_drift_readfile_accepts_builtin_skill_shorthand_path",
+      "test_drift_pipeline_filters_skills_by_mcp",
+      "test_drift_pipeline_keeps_skills_when_mcp_available",
+      "test_mount_server_adds_tools_and_schemas",
+      "test_mount_server_idempotent",
+      "test_mount_server_rejects_unknown_server",
+      "test_mount_server_not_registered_without_mcp",
+      "test_drift_pipeline_executes_mounted_mcp_tool",
+      "test_system_prompt_includes_mcp_directory",
+      "test_system_prompt_no_mcp_block_without_servers",
+      "test_system_prompt_skill_requires_mcp_annotation",
+      "test_factory_drift_send_message_returns_false_when_send_fails",
+      "test_factory_drift_send_message_marks_delivery_on_success",
+      "test_factory_drift_send_message_uses_bound_transport_from_role"
+    ],
+    "sha256": "95dd4eb7597c8a6bbd376e7351ea9e238027b1246eb8c2e8c1f830cfc385b1d0",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_energy.py",
+    "retired_source": "proactive_v2/energy.py",
+    "tests": [
+      "test_energy_is_one_at_t_zero",
+      "test_energy_is_zero_when_never_messaged",
+      "test_energy_decays_below_half_after_one_hour",
+      "test_energy_below_cool_threshold_after_24h",
+      "test_energy_below_crisis_threshold_after_72h",
+      "test_energy_is_strictly_decreasing",
+      "test_energy_stays_positive_after_long_time",
+      "test_energy_accepts_custom_decay_params"
+    ],
+    "sha256": "516a0ba9a29948bf3c1dc895d7f1c7c8871caaf12a41f4d73e1c3d78b9750160",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_hltv_whitelist_verification.py",
+    "retired_source": "proactive_v2/gateway.py",
+    "tests": [
+      "test_system_prompt_contains_training_data_warning",
+      "test_system_prompt_rule8_covers_ranking_verification"
+    ],
+    "sha256": "902c2b0299f6a933f8ea0311ce924fe26adee3a98038fd09f65762befb65b913",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_integration.py",
+    "retired_source": "proactive_v2/loop.py",
+    "tests": [
+      "test_tick_calls_pipeline",
+      "test_tick_return_is_propagated",
+      "test_tick_called_with_no_args",
+      "test_pipeline_is_initialized",
+      "test_real_loop_has_pipeline_attr",
+      "test_v2_route_stable_across_multiple_ticks",
+      "test_turn_started_cancels_matching_session_retries"
+    ],
+    "sha256": "a42b08e6c45dc72886657f216bbfa5b3ff0594cc15e2f5bb68f5483fb5ef1650",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_judge.py",
+    "retired_source": "proactive_v2/judge.py",
+    "tests": [
+      "test_judge_uses_complete_migrated_scoring_contract"
+    ],
+    "sha256": "8e5ef44236b964b103b06cfb4817d213456c5f65144b49f15c1e524d556a7b96",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_loop.py",
+    "retired_source": "proactive_v2/loop.py",
+    "tests": [
+      "test_proactive_trace_uses_global_subject_without_role",
+      "test_proactive_trace_uses_role_subject_when_configured"
+    ],
+    "sha256": "7c6742af5c1a6e2cac7efcee26345287d7aa184b58f4c91f6297c146bc75ede6",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_mcp_sources_async.py",
+    "retired_source": "proactive_v2/mcp_sources.py",
+    "tests": [
+      "test_sync_api_tombstones_raise_migration_error",
+      "test_fetch_alert_events_async_filters_kind_and_sets_ack_server",
+      "test_fetch_content_events_async_keeps_default_compat_channel_filter",
+      "test_fetch_context_data_async_accepts_dict_and_list",
+      "test_fetch_context_data_async_isolates_invalid_top_level_source",
+      "test_poll_content_feeds_async_raises_when_any_source_failed",
+      "test_mcp_pool_disconnects_timeout_client_without_retry",
+      "test_mcp_pool_does_not_retry_transport_failure_by_default",
+      "test_mcp_pool_retries_explicit_read_transport_failure_once",
+      "test_mcp_pool_does_not_retry_json_rpc_tool_error",
+      "test_acknowledge_events_async_groups_by_ack_server",
+      "test_acknowledge_content_entries_async_passes_ttl_hours"
+    ],
+    "sha256": "188fdb0e48bda118e68e65ee4dc4517abf713044cf3653da0791d9af4af0307d",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_memory_optimizer.py",
+    "retired_source": "core/roles.py",
+    "tests": [
+      "test_optimize_skips_when_memory_pending_history_all_empty",
+      "test_optimize_rewrites_memory_from_first_llm_call",
+      "test_optimize_uses_the_role_dialogue_model_snapshot",
+      "test_optimize_rolls_back_snapshot_when_merge_returns_empty",
+      "test_optimize_updates_self_using_pending_only",
+      "test_merge_memory_ignores_history_and_only_uses_pending",
+      "test_update_self_does_not_copy_user_preference_facts_verbatim",
+      "test_request_text_response_uses_expected_chat_kwargs",
+      "test_optimize_reports_busy_instead_of_waiting",
+      "test_optimize_with_role_id_updates_role_markdown_memory",
+      "test_seconds_until_next_tick_aligns_to_interval_boundary",
+      "test_seconds_until_next_tick_always_positive",
+      "test_memory_optimizer_loop_runs_global_and_role_optimizations",
+      "test_memory_optimizer_loop_catches_up_overdue_roles_on_start"
+    ],
+    "sha256": "5ce7cd1f430fe1fe38fb494cf470f463e664220cd7dee462b82fee06aad4198f",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_memory_sampler.py",
+    "retired_source": "proactive_v2/memory_sampler.py",
+    "tests": [
+      "test_split_returns_nonempty_list",
+      "test_split_empty_string_returns_empty",
+      "test_split_chunks_are_nonempty_strings",
+      "test_split_separates_sections",
+      "test_split_preserves_content",
+      "test_split_single_line_memory",
+      "test_sample_returns_requested_count",
+      "test_sample_returns_fewer_when_not_enough_chunks",
+      "test_sample_returns_empty_for_empty_memory",
+      "test_sample_is_deterministic_with_seed",
+      "test_sample_varies_across_different_seeds",
+      "test_sample_n_zero_returns_empty",
+      "test_sample_chunks_are_original_content"
+    ],
+    "sha256": "7f355b667e130e466f0cef83f88ba451fba0fd789e8417bc4bbf3b53dd63bc9f",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_message_quality.py",
+    "retired_source": "proactive_v2/context.py",
+    "tests": [
+      "test_get_recent_chat_filters_out_proactive_pushes",
+      "test_get_recent_chat_keeps_passive_assistant_replies",
+      "test_get_recent_chat_filters_context_frames",
+      "test_get_recent_chat_empty_after_filtering_all_proactive",
+      "test_get_recent_chat_all_user_messages_pass_through",
+      "test_get_recent_chat_adds_beijing_timestamp_for_prompt_context",
+      "test_get_recent_chat_mixed_passive_and_proactive",
+      "test_system_prompt_contains_no_hallucination_rule",
+      "test_system_prompt_no_hallucination_covers_specific_facts",
+      "test_system_prompt_no_hallucination_requires_data_source"
+    ],
+    "sha256": "cbc8665a7f5b4dcac66f886e43f31f1aca51ea83e4d1738116c9a82bf2b557cc",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_post_guard_ack.py",
+    "retired_source": "proactive_v2/context.py",
+    "tests": [
+      "test_delivery_key_from_cited_ids",
+      "test_delivery_key_order_independent",
+      "test_delivery_key_different_item_sets_differ",
+      "test_delivery_key_fallback_to_message_when_no_cited",
+      "test_delivery_key_message_truncated_to_500",
+      "test_delivery_key_is_16_chars",
+      "test_delivery_key_prefers_content_url_over_event_id",
+      "test_delivery_key_falls_back_to_source_and_title_when_url_missing",
+      "test_ack_discarded_720h",
+      "test_ack_discarded_does_not_touch_cited",
+      "test_ack_discarded_empty_set_no_calls",
+      "test_ack_discarded_none_ack_fn_no_error",
+      "test_ack_post_guard_fail_cited_24h",
+      "test_ack_post_guard_fail_uncited_interesting_24h",
+      "test_ack_post_guard_fail_discarded_720h",
+      "test_ack_post_guard_fail_all_three_buckets",
+      "test_ack_on_success_content_cited_168h",
+      "test_ack_on_success_alert_cited_168h",
+      "test_ack_on_success_uncited_interesting_24h",
+      "test_ack_on_success_discarded_720h",
+      "test_ack_on_success_split_alert_content_by_compound_key",
+      "test_ack_on_success_cited_not_in_fetched_not_acked",
+      "test_delivery_dedupe_hit_prevents_send",
+      "test_delivery_dedupe_hit_acks_cited_24h",
+      "test_delivery_dedupe_hit_no_mark_delivery",
+      "test_message_dedupe_hit_prevents_send",
+      "test_message_dedupe_hit_acks_cited_24h",
+      "test_message_dedupe_disabled_skips_check",
+      "test_message_dedupe_called_with_correct_message",
+      "test_send_success_calls_sender",
+      "test_send_success_marks_delivery",
+      "test_send_success_acks_content_168h",
+      "test_send_success_acks_discarded_720h",
+      "test_send_failure_no_mark_delivery",
+      "test_send_failure_no_ack_cited",
+      "test_send_failure_acks_discarded_720h",
+      "test_skip_acks_discarded_720h",
+      "test_skip_no_ack_interesting",
+      "test_no_terminal_action_no_ack_cited",
+      "test_cited_wins_over_discarded_gets_168h_not_720h",
+      "test_ack_post_guard_fail_alert_cited_uses_alert_ack_fn",
+      "test_ack_post_guard_fail_alert_cited_fallback_to_ack_fn_when_no_alert_ack_fn",
+      "test_ack_post_guard_fail_content_cited_and_alert_cited_separate_channels",
+      "test_ack_post_guard_fail_uncited_fetched_alert_also_acked",
+      "test_message_dedupe_receives_recent_proactive_list",
+      "test_message_dedupe_empty_list_when_no_fn",
+      "test_discarded_content_not_in_interesting",
+      "test_ack_on_success_alert_cited_calls_alert_ack_fn",
+      "test_ack_on_success_alert_ack_fn_none_falls_back_to_regular",
+      "test_ack_on_success_content_unaffected_by_alert_ack_fn",
+      "test_tool_schemas_have_openai_format",
+      "test_tool_schemas_no_input_schema_key",
+      "test_run_loop_appends_openai_format_tool_messages",
+      "test_mark_interesting_tool_in_schema",
+      "test_mark_interesting_uncited_acks_24h_on_success",
+      "test_fetched_but_unclassified_not_acked_on_skip",
+      "test_fetched_but_unclassified_not_acked_on_send"
+    ],
+    "sha256": "86ca5a64f19f3e504bca24840ea3dde06c1771ed89d7f3b2d8762ce8abedb031",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_pregate.py",
+    "retired_source": "proactive_v2/context.py",
+    "tests": [
+      "test_no_target_blocks_when_transport_missing",
+      "test_passive_busy_returns_none",
+      "test_passive_busy_false_does_not_block",
+      "test_passive_busy_receives_session_key",
+      "test_target_transport_allows_role_only_desktop_target",
+      "test_multi_channel_delivery_retries_transports_without_recommitting",
+      "test_multi_channel_delivery_stops_when_user_replies",
+      "test_multi_channel_delivery_returns_before_retry_wait_finishes",
+      "test_multi_channel_delivery_cancels_retry_when_user_replies",
+      "test_loneliness_gate_blocks_when_threshold_not_reached",
+      "test_loneliness_gate_passes_when_threshold_reached",
+      "test_due_scene_followup_bypasses_loneliness_and_closes_on_scene_change",
+      "test_successful_scene_followup_advances_only_after_delivery",
+      "test_scene_gate_does_not_advance_when_external_content_is_delivered",
+      "test_pending_scene_that_is_not_due_still_uses_loneliness_gate",
+      "test_empty_candidates_enter_relationship_fallback_when_loneliness_gate_passes",
+      "test_relationship_fallback_takes_priority_over_drift_when_loneliness_gate_passes",
+      "test_yinfeng_relationship_fallback_includes_direct_longing_style_hint",
+      "test_drift_interval_blocks_recent_drift",
+      "test_drift_interval_allows_after_window",
+      "test_pregate_fail_does_not_call_alert_fn",
+      "test_all_gates_pass_returns_non_none"
+    ],
+    "sha256": "50dc205a1088b024d5d112caff460046f82ce7afe23c5b92260e0242b8c65b64",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_role_first_memory_followups.py",
+    "retired_source": "proactive_v2/agent_tick_factory.py",
+    "tests": [
+      "test_background_prompts_reference_role_memory",
+      "test_load_proactive_config_allows_role_target_to_be_owned_by_role_runtime",
+      "test_agent_tick_factory_requires_default_role_id"
+    ],
+    "sha256": "e5509d5b44d10f2c4c692dd6fc12abf31317b2e60845dac3077ca6b3643b50ad",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_role_world_tick.py",
+    "retired_source": "proactive_v2/loop.py",
+    "tests": [
+      "test_proactive_tick_uses_configured_role_dispatcher"
+    ],
+    "sha256": "09d95970b06a145a527a45211d897cb49a6ab94a7062a05f761e80ae3cfe7c29",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_state.py",
+    "retired_source": "proactive_v2/state.py",
+    "tests": [
+      "test_state_store_migrates_and_persists_structured_gate_diagnostics"
+    ],
+    "sha256": "ea013845d3fb68e1616ccef8ade9a9a958e2538f7cab0e8d51e6c3c07343adc5",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  },
+  {
+    "path": "tests/backend/proactive_v2/test_tools.py",
+    "retired_source": "proactive_v2/context.py",
+    "tests": [
+      "test_tool_schemas_is_list",
+      "test_all_tools_present",
+      "test_each_schema_has_openai_format",
+      "test_message_push_schema_evidence_is_array",
+      "test_message_push_schema_message_required",
+      "test_finish_turn_schema_reason_is_supported",
+      "test_message_push_requires_non_empty_message",
+      "test_mark_not_interesting_schema_item_ids_is_array",
+      "test_mark_interesting_schema_item_ids_is_array",
+      "test_web_fetch_schema_url_required",
+      "test_web_search_schema_query_required",
+      "test_recall_memory_schema_query_required",
+      "test_web_fetch_truncates_to_max_chars",
+      "test_web_fetch_short_text_not_truncated",
+      "test_web_fetch_exact_max_chars_not_truncated",
+      "test_web_fetch_error_passthrough",
+      "test_web_fetch_preserves_upstream_truncated_true",
+      "test_web_fetch_calls_execute_with_text_format",
+      "test_web_search_passthrough",
+      "test_web_search_without_tool_returns_error",
+      "test_recall_memory_empty_hits",
+      "test_recall_memory_joins_texts",
+      "test_recall_memory_skips_empty_text",
+      "test_recall_memory_passes_query_to_facade_interest_request",
+      "test_recall_memory_prefers_facade_interest_block",
+      "test_recall_memory_separator_between_hits",
+      "test_message_push_writes_draft_not_final",
+      "test_message_push_decodes_escaped_newlines_for_outbound_text",
+      "test_message_push_keeps_single_literal_escape_text",
+      "test_message_push_second_call_raises",
+      "test_message_push_invalid_evidence_raises",
+      "test_message_push_rejects_prefixed_evidence_when_no_valid_ids",
+      "test_finish_turn_reply_without_message_push_raises",
+      "test_finish_turn_reply_promotes_draft_and_clears_it",
+      "test_finish_turn_skip_sets_reason_and_note",
+      "test_finish_turn_skip_after_message_push_raises",
+      "test_finish_turn_skip_valid_reasons",
+      "test_finish_turn_skip_invalid_reason_raises",
+      "test_finish_turn_skip_requires_reason",
+      "test_mark_not_interesting_adds_to_discarded",
+      "test_mark_not_interesting_single_item",
+      "test_mark_not_interesting_empty_list",
+      "test_mark_not_interesting_accumulates",
+      "test_get_alert_events_caches_on_second_call",
+      "test_get_alert_events_stores_in_ctx",
+      "test_get_alert_events_returns_json_list",
+      "test_get_content_events_caches_on_second_call",
+      "test_get_content_events_stores_in_ctx",
+      "test_get_content_events_passes_limit",
+      "test_get_content_events_returns_json_list",
+      "test_get_context_data_max_one_call",
+      "test_get_context_data_stores_in_ctx",
+      "test_get_context_data_returns_json",
+      "test_get_recent_chat_calls_fn_with_n",
+      "test_get_recent_chat_default_n_20",
+      "test_get_recent_chat_returns_json",
+      "test_execute_increments_steps_taken",
+      "test_execute_increments_each_call",
+      "test_execute_dispatches_message_push",
+      "test_execute_dispatches_finish_turn_reply",
+      "test_execute_dispatches_finish_turn_skip",
+      "test_execute_dispatches_mark_not_interesting",
+      "test_execute_unknown_tool_raises",
+      "test_execute_web_fetch_uses_max_chars_from_deps",
+      "test_execute_web_search_uses_tool_from_deps",
+      "test_execute_recall_memory_uses_memory_from_deps"
+    ],
+    "sha256": "44543e7876ad62ad2f14d5e1a01bec23f658080a4771e3b87cac617394970f00",
+    "replacement": "tests/backend/test_session_architecture.py and test_session_desktop_services.py; bootstrap/test_proactive.py for heartbeat"
+  }
+]

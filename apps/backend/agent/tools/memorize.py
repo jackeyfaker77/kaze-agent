@@ -66,7 +66,7 @@ class MemorizeTool(Tool):
                 memory_domain=str(memory_domain or "").strip(),
                 source_ref=str(current_user_source_ref or "").strip(),
                 scope=MemoryScope(
-                    session_key=session_key or (chat_id if channel == "desktop" else f"{channel}:{chat_id}" if channel and chat_id else ""),
+                    session_key=session_key or ((chat_id or "") if channel == "desktop" else f"{channel}:{chat_id}" if channel and chat_id else ""),
                     channel=channel or "",
                     chat_id=chat_id or "",
                 ),

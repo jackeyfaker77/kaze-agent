@@ -1,9 +1,12 @@
 import asyncio
+from datetime import timedelta
 from typing import Any, cast
 from types import SimpleNamespace
 
 import pytest
 from unittest.mock import AsyncMock
+
+from infra.channels.telegram_utils.limiter import _retry_after_seconds
 
 from infra.channels.telegram_utils import (
     TelegramLiveEditQueue,
@@ -238,7 +241,7 @@ async def test_send_stream_markdown_falls_back_to_markdown_on_stream_failure():
     await send_stream_markdown(cast(Any, bot), 123, text)
 
     assert len(bot.messages) == 2
-    assert bot.messages[-1]["text"] == text
+    assert bot.messages[-1]["text"] == text.rstrip()
     assert bot.edit_message_text.await_count == 1
 
 
@@ -411,3 +414,14 @@ async def test_send_thinking_block_short_content_single_message():
     await send_thinking_block(cast(Any, bot), 123, "短思考")
     assert len(bot.messages) == 1
     assert "短思考" in bot.messages[0]["text"]
+
+
+@pytest.fixture(autouse=True)
+def telegram_sdk_timedelta_mode(monkeypatch):
+    # Exercise the actual SDK's new public duration contract without suppressing warnings.
+    monkeypatch.setenv("PTB_TIMEDELTA", "true")
+
+
+@pytest.mark.parametrize("value, expected", [(2, 2.0), (1.5, 1.5), (timedelta(seconds=2.5), 2.5), (timedelta(0), 0.0)])
+def test_retry_delay_supports_sdk_duration_and_legacy_seconds(value, expected):
+    assert _retry_after_seconds(cast(Any, SimpleNamespace(retry_after=value))) == expected

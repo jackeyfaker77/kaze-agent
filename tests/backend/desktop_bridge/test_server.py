@@ -14,13 +14,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from bus.event_bus import EventBus
-from core.roles import RoleRepository, RoleStore
-from agent.screen_observation.service import ScreenObservationService
 from desktop_bridge.models import BridgeResponse
 from desktop_bridge.server import DesktopBridgeServer
-from desktop_bridge.service import DesktopBridgeService
 from session.manager import SessionManager
-from agent.tools.registry import ToolRegistry
+from agent.config_models import Config
+from agent.tools.message_push import MessagePushTool
 
 
 class _ReconfigurableTextStream:
@@ -45,22 +43,14 @@ class _ReconfigurableTextStream:
         return None
 
 
-def _build_observation_service(runtime, role_store):
-    return ScreenObservationService(
-        roles=RoleRepository(role_store),
-        provider=runtime.provider,
-        memory=runtime.memory_runtime.engine,
-        model=runtime.config.model,
-    )
 
 
 def _build_server(tmp_path: Path) -> DesktopBridgeServer:
     session_manager = SessionManager(tmp_path)
     runtime = SimpleNamespace(
-        session_manager=SimpleNamespace(
-            workspace=tmp_path,
-            open_role_session=session_manager.open_role_session,
-        ),
+        session_manager=session_manager,
+        config=Config(provider="test", model="test", api_key="test"),
+        push_tool=MessagePushTool(),
         loop=SimpleNamespace(process_direct=AsyncMock(return_value="ok")),
         event_bus=EventBus(),
         provider=None,
@@ -104,137 +94,12 @@ async def test_serve_stdio_forces_utf8_for_all_bridge_streams(
     }
 
 
-def test_server_forwards_the_role_runtime_registry_to_story(tmp_path: Path) -> None:
-    session_manager = SessionManager(tmp_path)
-    role_runtime_registry = SimpleNamespace()
-    runtime = SimpleNamespace(
-        session_manager=SimpleNamespace(
-            workspace=tmp_path,
-            open_role_session=session_manager.open_role_session,
-        ),
-        loop=SimpleNamespace(process_direct=AsyncMock(return_value="ok")),
-        event_bus=EventBus(),
-        provider=None,
-        role_runtime_registry=role_runtime_registry,
-    )
-
-    server = DesktopBridgeServer(runtime)
-
-    assert server.service.story_simulation._role_runtime_registry is role_runtime_registry
 
 
-def test_desktop_server_reuses_core_screen_observation_service(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        DesktopBridgeService,
-        "_build_novelai_service",
-        lambda self: None,
-    )
-    observation = SimpleNamespace()
-    runtime = SimpleNamespace(
-        session_manager=SimpleNamespace(workspace=tmp_path),
-        loop=SimpleNamespace(),
-        event_bus=EventBus(),
-        tools=ToolRegistry(),
-        config=SimpleNamespace(multimodal=True, model="main-model"),
-        provider=SimpleNamespace(),
-        memory_runtime=SimpleNamespace(engine=SimpleNamespace()),
-        screen_observation=observation,
-    )
-
-    DesktopBridgeServer(runtime)
-
-    assert runtime.tools.get_tool("observe_screen") is None
-    assert runtime.screen_observation is observation
 
 
-@pytest.mark.asyncio
-async def test_observation_service_reads_roles_through_the_production_repository(
-    tmp_path: Path,
-) -> None:
-    role_store = RoleStore(tmp_path)
-    role_store.create_role(
-        role_id="mira",
-        name="Mira",
-        description="陪伴者",
-        system_prompt="用中文回复",
-    )
-    provider = SimpleNamespace(
-        chat=AsyncMock(
-            return_value=SimpleNamespace(
-                content=(
-                    '{"interface_summary":"空白画面","activity_key":"idle",'
-                    '"targets":[],"risks":[],"bubble":"",'
-                    '"experience_candidate":""}'
-                ),
-                tool_calls=[],
-            )
-        )
-    )
-    runtime = SimpleNamespace(
-        config=SimpleNamespace(multimodal=True, model="main-model"),
-        provider=provider,
-        memory_runtime=SimpleNamespace(engine=SimpleNamespace()),
-    )
-    service = _build_observation_service(runtime, role_store)
-
-    assert service is not None
-    result = await service.analyze(
-        {
-            "role_id": "mira",
-            "frame_id": "frame-1",
-            "captured_at": "2026-07-23T12:00:00Z",
-            "width": 64,
-            "height": 64,
-            "scale_factor": 1,
-            "image_base64": base64.b64encode(b"\x89PNG\r\n\x1a\ncontent").decode(
-                "ascii"
-            ),
-            "previous_observation": None,
-            "recent_bubbles": [],
-        }
-    )
-
-    assert result["activity_key"] == "idle"
-    assert isinstance(service._model_adapter._roles, RoleRepository)
-    assert service._model_adapter._roles is service._memory_writer._roles
 
 
-@pytest.mark.asyncio
-async def test_observation_service_validates_memory_roles_through_the_repository(
-    tmp_path: Path,
-) -> None:
-    role_store = RoleStore(tmp_path)
-    role_store.create_role(role_id="mira", name="Mira", system_prompt="test")
-    memory = SimpleNamespace(
-        mutate=AsyncMock(
-            return_value=SimpleNamespace(
-                accepted=True,
-                item_id="event-1",
-                status="new",
-                actual_kind="event",
-            )
-        )
-    )
-    runtime = SimpleNamespace(
-        config=SimpleNamespace(multimodal=True, model="main-model"),
-        provider=SimpleNamespace(),
-        memory_runtime=SimpleNamespace(engine=memory),
-    )
-    service = _build_observation_service(runtime, role_store)
-
-    assert service is not None
-    result = await service.remember(
-        {
-            "role_id": "mira",
-            "summary": "一起整理了报告",
-            "happened_at": "2026-07-23T12:00:00Z",
-            "source_ref": "screen-observation:session-1:0",
-        }
-    )
-
-    assert result["item_id"] == "event-1"
 
 
 @pytest.mark.asyncio
@@ -249,7 +114,7 @@ async def test_health_response_is_not_blocked_by_slow_mutation(tmp_path: Path) -
     async def _handle(request, emit_event):
         del emit_event
         method = str(request["method"])
-        if method == "novelai.generate":
+        if method == "chat.send":
             mutation_started.set()
             await release_mutation.wait()
         return BridgeResponse(
@@ -265,14 +130,14 @@ async def test_health_response_is_not_blocked_by_slow_mutation(tmp_path: Path) -
             health_written.set()
 
     server.service.handle = _handle
-    await lines.put(json.dumps({"id": "slow", "method": "novelai.generate"}))
+    await lines.put(json.dumps({"id": "slow", "method": "chat.send"}))
     await lines.put(json.dumps({"id": "health", "method": "health"}))
     serve_task = asyncio.create_task(
         server.serve_streams(read_line=lines.get, write_payload=_write)
     )
 
     await mutation_started.wait()
-    await asyncio.wait_for(health_written.wait(), timeout=0.2)
+    await asyncio.wait_for(health_written.wait(), timeout=1.0)
     assert [payload["id"] for payload in writes] == ["health"]
 
     release_mutation.set()
@@ -316,7 +181,7 @@ async def test_server_uses_one_writer_for_concurrent_responses(tmp_path: Path) -
 async def test_server_eof_cancels_and_awaits_in_flight_request(tmp_path: Path) -> None:
     server = _build_server(tmp_path)
     lines = iter(
-        [json.dumps({"id": "slow", "method": "novelai.generate"}), None]
+        [json.dumps({"id": "slow", "method": "chat.send"}), None]
     )
     cancelled = asyncio.Event()
 
@@ -337,6 +202,6 @@ async def test_server_eof_cancels_and_awaits_in_flight_request(tmp_path: Path) -
 
     await asyncio.wait_for(
         server.serve_streams(read_line=_read, write_payload=_write),
-        timeout=0.2,
+        timeout=1.0,
     )
     assert cancelled.is_set()

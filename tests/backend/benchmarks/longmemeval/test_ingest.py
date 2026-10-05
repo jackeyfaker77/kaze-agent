@@ -89,7 +89,7 @@ async def test_ingest_turns_records_timeout_and_continues_to_later_pairs(tmp_pat
         "lme:case-1#ingest:2:1",
         "lme:case-1#ingest:2:2",
     ]
-    assert engine.requests[0].scope.role_id == "benchmark"
+    assert not hasattr(engine.requests[0].scope, "role_id")
 
 
 @pytest.mark.asyncio

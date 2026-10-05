@@ -9,10 +9,12 @@ import threading
 from dataclasses import asdict
 from uuid import uuid4
 
+from agent.looping.interrupt import TurnInterruptState
 from bus.events_lifecycle import StreamDeltaReady, ToolCallStarted, ToolCallCompleted
 from desktop_bridge.models import BridgeError, BridgeResponse
 from desktop_bridge.voice.voice_handler import DesktopVoiceHandler
 from desktop_bridge.voice.voice_service import VoiceService
+from session.manager.models import INTERRUPTED_TURN_METADATA_KEY
 
 
 class DesktopBridgeService:
@@ -28,6 +30,7 @@ class DesktopBridgeService:
         self._requests = {}
         self._voice_turns = {}
         self._chat_tasks = {}
+        self._chat_interrupts: dict[str, TurnInterruptState | None] = {}
         self._tts_cancels = {}
         self.active_session_key = "desktop:default"
         self.voice = DesktopVoiceHandler(
@@ -89,6 +92,58 @@ class DesktopBridgeService:
         session = self.sessions.get_or_create(key)
         return {"session_key": key, "title": session.metadata.get("title", key),
                 "messages": session.messages, "metadata": session.metadata}
+
+    def _cancel_chat(self, key):
+        task = self._chat_tasks.get(key)
+        if task is None or task.done():
+            return False
+        # Repeated cancels must not interrupt the pending snapshot write.
+        if key in self._chat_interrupts:
+            return True
+        state = self.runtime.loop.active_turn_states.get(key)
+        snapshot = None
+        # A desktop request may still be waiting behind another turn's session lock.
+        if state is not None and state.original_metadata.get("request_id") == self._requests[key]:
+            snapshot = self.runtime.loop.request_interrupt(
+                key, sender="desktop", command="chat.cancel",
+            ).state
+        self._chat_interrupts[key] = snapshot
+        if snapshot is None:
+            task.cancel()
+        return True
+
+    async def _persist_interrupted_turn(self, key, request_id, media, previous_message_ids):
+        state = self._chat_interrupts.get(key)
+        if state is None:
+            return
+        session = self.sessions.get_or_create(key)
+        turn_messages = [
+            message for message in session.messages
+            if message.get("id") not in previous_message_ids
+            and (message.get("metadata") or {}).get("request_id") == request_id
+        ]
+        if any(message.get("role") == "assistant" for message in turn_messages):
+            # Reasoning may have finished just before cancellation, including while
+            # its append waited for the write lock. Keep that complete reply once.
+            await self.sessions.append_messages(session, turn_messages)
+        elif state.partial_reply or state.partial_thinking or state.tool_chain_partial:
+            metadata = {**state.original_metadata, "source": "desktop"}
+            if not turn_messages:
+                session.add_message("user", state.original_user_message, media=media, metadata=metadata)
+                turn_messages.append(session.messages[-1])
+            session.add_message(
+                "assistant", state.partial_reply,
+                reasoning_content=state.partial_thinking,
+                tools_used=list(state.tools_used) or None,
+                tool_chain=list(state.tool_chain_partial) or None,
+                metadata={**metadata, "interrupted_reply": True},
+            )
+            turn_messages.append(session.messages[-1])
+            session.metadata[INTERRUPTED_TURN_METADATA_KEY] = {
+                "request_id": request_id, "interrupted_by": state.interrupted_by,
+            }
+            await self.sessions.append_messages(session, turn_messages)
+        self.runtime.loop.discard_interrupt_state(key, state)
 
     def _cancel_voice_turn(self, turn_id):
         key = self._voice_turns.get(turn_id)
@@ -194,10 +249,7 @@ class DesktopBridgeService:
             return {"deleted": self.sessions._store.delete_session(key, cascade=True)}
         if method == "chat.cancel":
             key = self._key(payload)
-            task = self._chat_tasks.get(key)
-            if task:
-                task.cancel()
-            return {"cancelled": task is not None}
+            return {"cancelled": self._cancel_chat(key)}
         if method == "chat.send":
             key = self._key(payload)
             content = str(payload.get("content") or "").strip()
@@ -212,6 +264,7 @@ class DesktopBridgeService:
             if credential in {"sk-...", "YOUR_API_KEY", "your-api-key"} or credential.startswith("${"):
                 raise ValueError(f"模型 {self.runtime.config.model} 的 API Key 尚未配置，请在“模型”中填写有效密钥或选择已配置的模型。")
             session = self.sessions.get_or_create(key)
+            previous_message_ids = {message["id"] for message in session.messages if message.get("id")}
             if not session.metadata.get("title") or session.metadata["title"] == "新会话":
                 session.metadata["title"] = content.splitlines()[0][:60] if content else "附件会话"
             self._requests[key] = request_id
@@ -226,16 +279,22 @@ class DesktopBridgeService:
                     raise_on_error=True,
                     metadata={"request_id": request_id, "input_method": payload.get("input_method", "text")},
                 )
+                interrupted = self._chat_interrupts.get(key)
+                if interrupted is not None:
+                    # A provider may finish normally while handling cancellation.
+                    self.runtime.loop.discard_interrupt_state(key, interrupted)
                 result = {"session_key": key, "reply": reply, "session": self._snapshot(key)}
                 await self.publish_event({"id": request_id, "type": "event", "method": "chat.done", "payload": result})
                 if voice_turn:
                     await self._speak_reply(key, voice_turn, request_id, reply)
                 return result
             except asyncio.CancelledError:
+                await self._persist_interrupted_turn(key, request_id, media, previous_message_ids)
                 return {"session_key": key, "cancelled": True, "session": self._snapshot(key)}
             finally:
                 self._requests.pop(key, None)
                 self._chat_tasks.pop(key, None)
+                self._chat_interrupts.pop(key, None)
                 self._voice_turns.pop(voice_turn, None)
         if method == "tasks.list":
             key = payload.get("session_key")

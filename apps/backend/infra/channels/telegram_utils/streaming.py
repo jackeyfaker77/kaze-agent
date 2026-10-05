@@ -9,6 +9,7 @@ from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 
 from .limiter import (
     TelegramOutboundLimiter,
+    _retry_after_seconds,
     _run_outbound,
 )
 from .rendering import (
@@ -200,7 +201,7 @@ class TelegramStreamMessage:
                 )
             return True
         except RetryAfter as e:
-            delay = max(float(getattr(e, "retry_after", 1.0) or 1.0), 1.0)
+            delay = max(_retry_after_seconds(e), 1.0)
             now = asyncio.get_running_loop().time()
             self._edit_cooldown_until = now + delay
             logger.warning(

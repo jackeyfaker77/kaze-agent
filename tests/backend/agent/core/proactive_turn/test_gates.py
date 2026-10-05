@@ -45,7 +45,7 @@ def test_gate_chain_orders_by_priority_and_stops_after_activation():
                 "high",
                 100,
                 ProactiveGateDecision.activate(
-                    ProactiveMode.SCENE_FOLLOWUP,
+                    ProactiveMode.HEARTBEAT,
                     reason="due",
                 ),
                 calls,
@@ -58,7 +58,7 @@ def test_gate_chain_orders_by_priority_and_stops_after_activation():
     assert calls == ["high"]
     assert result.blocked is False
     assert result.activation is not None
-    assert result.activation.mode == ProactiveMode.SCENE_FOLLOWUP
+    assert result.activation.mode == ProactiveMode.HEARTBEAT
 
 
 def test_gate_chain_rejects_duplicate_names():
@@ -101,7 +101,7 @@ def test_gate_chain_preserves_block_metadata():
 def test_resolve_gate_attempt_index_accepts_non_negative_integer_strings():
     gate = ProactiveGateActivation(
         gate_name="scene",
-        mode=ProactiveMode.SCENE_FOLLOWUP,
+        mode=ProactiveMode.HEARTBEAT,
         reason="due",
         metadata={"attempt_index": "2"},
     )
@@ -113,7 +113,7 @@ def test_resolve_gate_attempt_index_accepts_non_negative_integer_strings():
 def test_resolve_gate_attempt_index_rejects_invalid_metadata(value):
     gate = ProactiveGateActivation(
         gate_name="scene",
-        mode=ProactiveMode.SCENE_FOLLOWUP,
+        mode=ProactiveMode.HEARTBEAT,
         reason="due",
         metadata={"attempt_index": value},
     )

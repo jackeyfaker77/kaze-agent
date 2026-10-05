@@ -99,23 +99,27 @@ async def test_load_hello_plugin():
 
 
 @pytest.mark.asyncio
-async def test_collects_and_clears_official_proactive_gates(tmp_path: Path):
-    source = BACKEND_ROOT / "plugins" / "relationship_proactive"
+async def test_collects_and_clears_plugin_proactive_gates(tmp_path: Path):
     plugin_root = tmp_path / "plugins"
-    shutil.copytree(source, plugin_root / "relationship_proactive")
+    plugin_dir = plugin_root / "heartbeat"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.py").write_text("""
+from agent.plugins import Plugin
+from agent.core.proactive_turn.gates import ProactiveGateAdapter, ProactiveGateDecision
+class Gate(ProactiveGateAdapter):
+    name = "test.heartbeat"
+    priority = 10
+    def evaluate(self, context):
+        return ProactiveGateDecision.continue_()
+class Heartbeat(Plugin):
+    name = "heartbeat"
+    def proactive_gates(self):
+        return [Gate()]
+""", encoding="utf-8")
     bus = EventBus()
-    mgr = PluginManager(
-        plugin_dirs=[plugin_root],
-        event_bus=bus,
-        relationship_runtime=object(),
-    )
-
+    mgr = PluginManager(plugin_dirs=[plugin_root], event_bus=bus)
     await mgr.load_all()
-
-    assert [gate.name for gate in mgr.proactive_gates] == [
-        "relationship.scene_followup",
-        "relationship.loneliness",
-    ]
+    assert [gate.name for gate in mgr.proactive_gates] == ["test.heartbeat"]
     await mgr.terminate_all()
     assert mgr.proactive_gates == []
     await bus.aclose()
@@ -1137,8 +1141,6 @@ async def test_core_runtime_start_wires_plugin_tool_hooks_to_loop_and_spawn():
         mcp_registry=FakeMcpRegistry(),  # type: ignore[arg-type]
         memory_runtime=SimpleNamespace(),  # type: ignore[arg-type]
         presence=SimpleNamespace(),  # type: ignore[arg-type]
-        relationship_runtime=SimpleNamespace(),  # type: ignore[arg-type]
-        role_runtime_registry=SimpleNamespace(),  # type: ignore[arg-type]
         plugin_manager=plugin_manager,  # type: ignore[arg-type]
     )
 

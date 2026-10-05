@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { newDraftKey, rpc, type Entry, type Session } from "./api";
 import { recoverAttachments, recoverDraft } from "./recoverDraft";
 
@@ -19,7 +19,8 @@ export function useConversation() {
   const locked = useRef(false);
   const navigating = useRef(false);
   const alive = useRef(true);
-  const fail = (value: unknown) => setError(value instanceof Error ? value.message : String(value));
+  const textSending = useRef(false);
+  const fail = useCallback((value: unknown) => setError(value instanceof Error ? value.message : String(value)), []);
   async function refresh() {
     const result = await rpc<{ sessions: Entry[] }>("sessions.list");
     if (alive.current) setEntries(result.sessions);
@@ -48,8 +49,7 @@ export function useConversation() {
       if (!textSending.current) { locked.current = running; setBusy(running); }
     });
     return () => { alive.current = false; off(); offVoice(); };
-  }, []);
-  const textSending = useRef(false);
+  }, [fail]);
   async function open(nextKey: string) {
     if (locked.current || navigating.current || (saved.current && key.current === nextKey)) return;
     navigating.current = true; setLoading(true);

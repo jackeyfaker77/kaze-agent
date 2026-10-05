@@ -9,7 +9,7 @@ from typing import TypeVar
 from telegram import Bot
 from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 
-from .limiter import TelegramOutboundLimiter
+from .limiter import TelegramOutboundLimiter, _retry_after_seconds
 from .rendering import (
     _is_telegram_html_parse_error,
     _is_telegram_message_not_modified_error,
@@ -106,7 +106,7 @@ class TelegramLiveEditQueue:
                     return result
                 except RetryAfter as e:
                     strikes = self._record_flood(chat_id)
-                    delay = max(float(getattr(e, "retry_after", 1.0) or 1.0), self._interval(chat_id))
+                    delay = max(_retry_after_seconds(e), self._interval(chat_id))
                     self._next_allowed_at[chat_id] = asyncio.get_running_loop().time() + delay
                     logger.warning(
                         "[telegram] %s 命中限流，延后 live 更新 attempt=%d/3 delay=%.1fs strikes=%d",
@@ -116,7 +116,7 @@ class TelegramLiveEditQueue:
                         strikes,
                     )
                     if (
-                        float(getattr(e, "retry_after", 1.0) or 1.0) > _LIVE_MAX_INLINE_RETRY_S
+                        _retry_after_seconds(e) > _LIVE_MAX_INLINE_RETRY_S
                         or strikes >= _LIVE_MAX_FLOOD_STRIKES
                     ):
                         return None

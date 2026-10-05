@@ -21,7 +21,7 @@ async def test_read_only_request_runs_while_mutation_lane_is_busy() -> None:
     async def _health() -> None:
         health_completed.set()
 
-    dispatcher.submit({"method": "novelai.generate"}, _mutation)
+    dispatcher.submit({"method": "chat.send"}, _mutation)
     await mutation_started.wait()
     dispatcher.submit({"method": "health"}, _health)
 
@@ -31,7 +31,7 @@ async def test_read_only_request_runs_while_mutation_lane_is_busy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_control_mutation_runs_while_novelai_lane_is_busy() -> None:
+async def test_control_mutation_runs_while_chat_lane_is_busy() -> None:
     dispatcher = BridgeRequestDispatcher(max_concurrency=2)
     generation_started = asyncio.Event()
     release_generation = asyncio.Event()
@@ -44,7 +44,7 @@ async def test_control_mutation_runs_while_novelai_lane_is_busy() -> None:
     async def _cancel() -> None:
         cancel_completed.set()
 
-    dispatcher.submit({"method": "novelai.generate"}, _generate)
+    dispatcher.submit({"method": "chat.send"}, _generate)
     await generation_started.wait()
     dispatcher.submit({"method": "chat.cancel"}, _cancel)
 
@@ -54,7 +54,7 @@ async def test_control_mutation_runs_while_novelai_lane_is_busy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_regeneration_uses_the_bounded_integration_lane() -> None:
+async def test_voice_synthesis_uses_the_bounded_integration_lane() -> None:
     dispatcher = BridgeRequestDispatcher(
         max_concurrency=2,
         integration_concurrency=2,
@@ -71,8 +71,8 @@ async def test_regeneration_uses_the_bounded_integration_lane() -> None:
         await release.wait()
         active -= 1
 
-    dispatcher.submit({"method": "novelai.regenerateMessageMedia"}, _regenerate)
-    dispatcher.submit({"method": "novelai.regenerateMessageMedia"}, _regenerate)
+    dispatcher.submit({"method": "voice.synthesize"}, _regenerate)
+    dispatcher.submit({"method": "voice.synthesize"}, _regenerate)
 
     await asyncio.wait_for(both_started.wait(), timeout=0.2)
     release.set()
@@ -80,7 +80,7 @@ async def test_regeneration_uses_the_bounded_integration_lane() -> None:
 
 
 @pytest.mark.asyncio
-async def test_story_submission_uses_the_bounded_integration_lane() -> None:
+async def test_chat_submission_uses_the_bounded_integration_lane() -> None:
     dispatcher = BridgeRequestDispatcher(max_concurrency=2)
     run_started = asyncio.Event()
     release_run = asyncio.Event()
@@ -93,9 +93,9 @@ async def test_story_submission_uses_the_bounded_integration_lane() -> None:
     async def _update_role() -> None:
         role_update_completed.set()
 
-    dispatcher.submit({"method": "stories.continue"}, _generate_story)
+    dispatcher.submit({"method": "chat.send"}, _generate_story)
     await run_started.wait()
-    dispatcher.submit({"method": "roles.update"}, _update_role)
+    dispatcher.submit({"method": "session.rename"}, _update_role)
 
     await asyncio.wait_for(role_update_completed.wait(), timeout=0.2)
     release_run.set()
@@ -115,7 +115,7 @@ async def test_mutation_requests_run_one_at_a_time() -> None:
         await asyncio.sleep(0)
         active -= 1
 
-    for method in ("roles.create", "roles.update", "chat.send"):
+    for method in ("session.create", "session.rename", "session.delete"):
         dispatcher.submit({"method": method}, _mutation)
 
     await dispatcher.aclose()
@@ -138,7 +138,7 @@ async def test_read_only_requests_respect_concurrency_bound() -> None:
         active -= 1
 
     for _ in range(4):
-        dispatcher.submit({"method": "roles.list"}, _read)
+        dispatcher.submit({"method": "sessions.list"}, _read)
     await asyncio.sleep(0)
 
     assert peak == 2

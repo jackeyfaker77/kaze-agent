@@ -92,7 +92,7 @@ def test_consolidation_service_archive_all_and_profile_extract():
 
     assert draft is not None
     assert draft.history_entry_payloads == [
-        ("[2026-03-15 10:00] 用户聊了 Zigbee 方案", 6)
+        ("[2026-03-15 10:00] 用户聊了 Zigbee 方案", 0)
     ]
     assert draft.conversation
     assert provider.chat.await_count == 1
@@ -108,7 +108,7 @@ def test_consolidation_service_archive_all_and_profile_extract():
     assert "## 最近三次 consolidation event" in event_prompt
     assert "用户准备下单 Zigbee 网关" in event_prompt
     assert "不能作为人物身份、说话人归属、关系判断或具体事实归属的直接证据" in event_prompt
-    assert "emotional_weight" in event_prompt
+    assert "emotional_weight" not in event_prompt
     assert session.last_consolidated == 0
 
 

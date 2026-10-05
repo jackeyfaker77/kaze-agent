@@ -94,7 +94,7 @@ async def test_forget_memory_passes_runtime_scope_to_engine(tmp_path: Path):
         )
 
         assert writer.last_request is not None
-        assert writer.last_request.scope.role_id == "mira"
+        assert not hasattr(writer.last_request.scope, "role_id")
         assert writer.last_request.scope.channel == "telegram"
         assert writer.last_request.scope.chat_id == "100"
         assert writer.last_request.scope.session_key == "telegram:100"

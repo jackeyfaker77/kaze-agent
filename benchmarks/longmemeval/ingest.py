@@ -112,7 +112,6 @@ async def _ingest_turns(
     """
     engine = rt.core.memory_runtime.engine
     scope = MemoryScope(
-        role_id="benchmark",
         session_key=session_key,
         channel="benchmark",
     )

@@ -368,11 +368,11 @@ def test_post_worker_keeps_run_context_isolated_across_concurrent_runs():
 
     assert memorizer.supersede_batch.call_count == 2
     assert [
-        (event.session_key, event.chat_id, event.role_id, event.source_ref)
+        (event.session_key, event.chat_id, event.source_ref)
         for event in publisher.events
     ] == [
-        ("telegram:2", "2", "atlas", "src-2"),
-        ("telegram:1", "1", "mira", "src-1"),
+        ("telegram:2", "2", "src-2"),
+        ("telegram:1", "1", "src-1"),
     ]
 
 

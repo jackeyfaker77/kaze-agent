@@ -610,7 +610,6 @@ def test_build_loop_deps_uses_context_factory(monkeypatch, tmp_path: Path):
                 ),
             ),
         ),
-        relationship_runtime=cast(Any, SimpleNamespace()),
     )
 
     assert observed["name"] == "default"

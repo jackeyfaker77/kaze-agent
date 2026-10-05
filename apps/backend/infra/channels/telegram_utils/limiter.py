@@ -3,12 +3,21 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import TypeVar
 
 from telegram.error import NetworkError, RetryAfter, TimedOut
 
 logger = logging.getLogger("infra.channels.telegram_utils")
 _T = TypeVar("_T")
+
+
+def _retry_after_seconds(error: RetryAfter) -> float:
+    """Normalize both legacy numeric and current SDK timedelta retry hints."""
+    value = getattr(error, "retry_after", 1.0)
+    seconds = value.total_seconds() if isinstance(value, timedelta) else float(value or 1.0)
+    return max(seconds, 0.0)
+
 
 class TelegramOutboundLimiter:
     def __init__(
@@ -59,7 +68,7 @@ class TelegramOutboundLimiter:
                 except RetryAfter as e:
                     last_err = e
                     delay = max(
-                        float(getattr(e, "retry_after", 1.0) or 1.0) + self._retry_padding_s,
+                        _retry_after_seconds(e) + self._retry_padding_s,
                         self._interval(kind),
                     )
                     self._cooldown(cid, delay)
@@ -112,7 +121,7 @@ class TelegramOutboundLimiter:
                 return result
             except RetryAfter as e:
                 delay = (
-                    float(getattr(e, "retry_after", 1.0) or 1.0)
+                    _retry_after_seconds(e)
                     + self._retry_padding_s
                 )
                 self._next_typing_at[chat_id] = asyncio.get_running_loop().time() + delay
@@ -195,7 +204,7 @@ async def _send_with_retry(
             last_err = e
             if attempt >= max_attempts:
                 break
-            delay = max(float(getattr(e, "retry_after", 1.0) or 1.0), base_delay)
+            delay = max(_retry_after_seconds(e), base_delay)
             logger.warning(
                 "[telegram] %s 命中限流，准备重试 attempt=%d/%d delay=%.1fs err=%s",
                 label,
@@ -237,7 +246,7 @@ async def _send_with_retry_result(
             last_err = e
             if attempt >= max_attempts:
                 break
-            delay = max(float(getattr(e, "retry_after", 1.0) or 1.0), base_delay)
+            delay = max(_retry_after_seconds(e), base_delay)
             logger.warning(
                 "[telegram] %s 命中限流，准备重试 attempt=%d/%d delay=%.1fs err=%s",
                 label,

@@ -22,7 +22,7 @@ from session.manager import Session
 
 
 @pytest.mark.asyncio
-async def test_before_reasoning_syncs_session_key_and_role_id_into_tool_context() -> None:
+async def test_before_reasoning_syncs_session_key_into_tool_context() -> None:
     bus = EventBus()
     tools = Mock(spec=ToolRegistry)
     session_manager = SimpleNamespace(
@@ -68,6 +68,6 @@ async def test_before_reasoning_syncs_session_key_and_role_id_into_tool_context(
     tools.set_context.assert_called_once()
     kwargs = tools.set_context.call_args.kwargs
     assert kwargs["session_key"] == "role:mira"
-    assert kwargs["role_id"] == "mira"
+    assert "role_id" not in kwargs
     assert kwargs["channel"] == "desktop"
     assert kwargs["chat_id"] == "desktop"

@@ -5,7 +5,6 @@ import json
 import uuid
 from typing import Any, cast
 
-import httpx
 import openai
 from openai import AsyncOpenAI
 
@@ -55,7 +54,7 @@ class CodexResponsesTransport:
         self.session_id = str(uuid.uuid4())
         self.thread_id = str(uuid.uuid4())
         self.window_id = str(uuid.uuid4())
-        self.network_timeout = httpx.Timeout(
+        self.network_timeout = openai.Timeout(
             connect=30,
             read=read_timeout_s,
             write=30,

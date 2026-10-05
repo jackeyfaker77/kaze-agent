@@ -22,7 +22,6 @@ from agent.tools.registry import ToolRegistry
 from bus.event_bus import EventBus
 from bus.events import InboundMessage, OutboundMessage
 from bus.events_lifecycle import TurnCommitted
-from core.roles import RoleStore
 from agent.lifecycle.types import (
     AfterReasoningCtx,
     AfterReasoningInput,
@@ -241,61 +240,6 @@ def _inbound() -> InboundMessage:
     )
 
 
-@pytest.mark.asyncio
-async def test_after_reasoning_resolves_mood_when_reply_lacks_structured_mood(monkeypatch: pytest.MonkeyPatch):
-    async def _fake_resolve_role_mood(*args, **kwargs):  # type: ignore[no-untyped-def]
-        return "鄙视"
-
-    monkeypatch.setattr(
-        "agent.lifecycle.phases.after_reasoning.resolve_role_mood",
-        _fake_resolve_role_mood,
-    )
-
-    services = SimpleNamespace(
-        session_manager=AsyncMock(),
-        presence=None,
-    )
-    llm_services = SimpleNamespace(provider=object(), light_provider=object())
-    llm_config = SimpleNamespace(model="test-model", max_tokens=256)
-    session = _DummySession("role:role-0ae7dd84853e")
-    session.metadata = {
-        "role_id": "role-0ae7dd84853e",
-        "role_runtime_config": {
-            "default_mood": "平静",
-            "mood_illustration_bindings": {
-                "平静": "assets/role-0ae7dd84853e/illustration-37bc9697.png",
-                "鄙视": "assets/role-0ae7dd84853e/illustration-eefa9553.png",
-            },
-        },
-    }
-    state = TurnState(
-        msg=_inbound(),
-        session_key="role:role-0ae7dd84853e",
-        dispatch_outbound=True,
-        session=session,
-    )
-    turn_result = TurnRunResult(
-        reply="（她轻轻抬了抬眼，语气很淡。）……你想得倒挺美。",
-        tools_used=[],
-        tool_chain=[],
-    )
-
-    phase = Phase(
-        default_after_reasoning_modules(
-            EventBus(),
-            cast(Any, services),
-            cast(Any, llm_services),
-            cast(Any, llm_config),
-        ),
-        frame_factory=AfterReasoningFrame,
-    )
-
-    result = await phase.run(AfterReasoningInput(state=state, turn_result=turn_result))
-
-    assert result.ctx.response_metadata.mood == "鄙视"
-    message_metadata = cast(dict[str, object], session.messages[-1]["metadata"])
-    assert message_metadata["mood"] == "鄙视"
-    assert session.metadata["current_mood"] == "鄙视"
 
 
 class _DummySession:
@@ -361,38 +305,6 @@ async def test_before_turn_setup_fills_turn_state():
     assert ctx.abort is False
 
 
-@pytest.mark.asyncio
-async def test_before_turn_binds_message_role_id_to_session_before_context_prepare():
-    bus = EventBus()
-    session = _DummySession("lme:e47becba:qa")
-    saved: list[_DummySession] = []
-    session_mgr = SimpleNamespace(
-        get_or_create=lambda key: session,
-        save=lambda value: saved.append(value),
-    )
-    ctx_store = SimpleNamespace(prepare=AsyncMock(return_value=ContextBundle()))
-    phase = Phase(
-        default_before_turn_modules(
-            bus,
-            cast(SessionManager, session_mgr),
-            cast(ContextStore, ctx_store),
-        ),
-        frame_factory=BeforeTurnFrame,
-    )
-    msg = InboundMessage(
-        channel="benchmark",
-        sender="user",
-        chat_id="e47becba",
-        content="What degree did I graduate with?",
-        metadata={"role_id": "benchmark"},
-    )
-
-    await phase.run(
-        TurnState(msg=msg, session_key="lme:e47becba:qa", dispatch_outbound=False)
-    )
-
-    assert session.metadata["role_id"] == "benchmark"
-    assert saved == [session]
 
 
 @pytest.mark.asyncio
@@ -640,44 +552,6 @@ async def test_before_turn_memory_context_guard_blocks_after_consolidation_failu
     ctx_store.prepare.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_before_turn_memory_context_guard_reports_failure_for_nsfw_role():
-    bus = EventBus()
-    session = _DummySession("telegram:123")
-    session.messages = [
-        {"role": "user", "content": f"u{i}"}
-        for i in range(30)
-    ]
-    session.last_consolidated = 0
-    session.metadata["role_runtime_config"] = {"nsfw_memory_enabled": True}
-    session_mgr = SimpleNamespace(get_or_create=lambda key: session)
-    ctx_store = SimpleNamespace(
-        prepare=AsyncMock(return_value=ContextBundle(history_messages=[]))
-    )
-
-    class _Consolidator:
-        def request_memory_consolidation(self, session_key: str) -> None:
-            raise AssertionError("failed consolidation must not be rescheduled")
-
-        def get_memory_consolidation_failure(self, session_key: str) -> str | None:
-            return "invalid response"
-
-    phase = Phase(
-        default_before_turn_modules(
-            bus,
-            cast(SessionManager, session_mgr),
-            cast(ContextStore, ctx_store),
-            keep_count=20,
-            consolidator=_Consolidator(),
-        ),
-        frame_factory=BeforeTurnFrame,
-    )
-    msg = _inbound()
-    state = TurnState(msg=msg, session_key="telegram:123", dispatch_outbound=True)
-
-    with pytest.raises(MemoryConsolidationFailedError, match="invalid response"):
-        await phase.run(state)
-    ctx_store.prepare.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1190,7 +1064,6 @@ async def test_before_step_setup_records_token_estimate():
 
 @pytest.mark.asyncio
 async def test_prompt_render_chain_appends_bottom_section(tmp_path):
-    RoleStore(tmp_path).create_role(role_id="mira", name="Mira", system_prompt="test")
     bus = EventBus()
 
     async def append_section(ctx: PromptRenderCtx) -> PromptRenderCtx:
@@ -1238,7 +1111,6 @@ async def test_prompt_render_chain_appends_bottom_section(tmp_path):
 
 @pytest.mark.asyncio
 async def test_prompt_render_chain_respects_disabled_sections(tmp_path):
-    RoleStore(tmp_path).create_role(role_id="mira", name="Mira", system_prompt="test")
     class BottomModule:
         slot = "test.prompt.bottom"
         requires = ("prompt_render.emit", "prompt:ctx")
@@ -1293,7 +1165,6 @@ async def test_prompt_render_chain_respects_disabled_sections(tmp_path):
 
 @pytest.mark.asyncio
 async def test_prompt_render_collects_export_slots(tmp_path):
-    RoleStore(tmp_path).create_role(role_id="mira", name="Mira", system_prompt="test")
     class SlotModule:
         slot = "test.prompt.slot"
         requires = ("prompt_render.emit", "prompt:ctx")
@@ -1686,48 +1557,6 @@ async def test_after_reasoning_copies_thread_id_into_persisted_messages():
     assert session.messages[1]["thread_id"] == "thread:mira:telegram:123"
 
 
-@pytest.mark.asyncio
-async def test_after_reasoning_enriches_session_metadata_with_relationship_runtime():
-    session = _DummySession("desktop:role:mira")
-    msg = InboundMessage(
-        channel="desktop",
-        sender="user",
-        chat_id="desktop:role:mira",
-        content="hi",
-        timestamp=_now,
-    )
-    state = TurnState(msg=msg, session_key=session.key, dispatch_outbound=True)
-    state.session = session
-    relationship_runtime = Mock()
-    relationship_runtime.enrich_session_metadata = Mock(
-        return_value={"role_id": "mira", "relationship_snapshot": {"role_self_view": "我在想你。"}},
-    )
-    services = SimpleNamespace(
-        presence=Mock(),
-        session_manager=SimpleNamespace(append_messages=AsyncMock()),
-        relationship_runtime=relationship_runtime,
-    )
-    turn_result = TurnRunResult(
-        reply="reply",
-        tool_chain=[],
-        tools_used=[],
-        thinking=None,
-        streamed=False,
-        context_retry={},
-    )
-    phase = Phase(
-        default_after_reasoning_modules(EventBus(), cast(Any, services)),
-        frame_factory=AfterReasoningFrame,
-    )
-
-    await phase.run(AfterReasoningInput(state=state, turn_result=turn_result))
-
-    relationship_runtime.enrich_session_metadata.assert_called_once()
-    relationship_snapshot = cast(
-        dict[str, object],
-        session.metadata["relationship_snapshot"],
-    )
-    assert relationship_snapshot["role_self_view"] == "我在想你。"
 
 
 @pytest.mark.asyncio

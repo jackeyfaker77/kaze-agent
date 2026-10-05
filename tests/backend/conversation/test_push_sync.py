@@ -16,7 +16,7 @@ async def test_turn_image_is_reserved_for_persistence_without_immediate_append(
     tmp_path: Path,
 ) -> None:
     session_manager = SessionManager(tmp_path)
-    session_manager.open_role_session("mira", role_name="Mira")
+    session_manager.get_or_create("desktop:default")
     event_bus = EventBus()
     _ = ExternalImageSyncService(
         session_manager=session_manager,
@@ -35,15 +35,15 @@ async def test_turn_image_is_reserved_for_persistence_without_immediate_append(
         chat_id="123",
         image=image,
         role_id="mira",
-        session_key="role:mira",
+        session_key="desktop:default",
         defer_push_session_sync="true",
     )
 
     assert result == "图片已发送"
-    assert session_manager.get_or_create("role:mira").messages == []
+    assert session_manager.get_or_create("desktop:default").messages == []
 
     ctx = AfterReasoningCtx(
-        session_key="role:mira",
+        session_key="desktop:default",
         channel="telegram",
         chat_id="123",
         tools_used=("message_push",),
@@ -63,7 +63,7 @@ async def test_turn_image_is_reserved_for_persistence_without_immediate_append(
 @pytest.mark.asyncio
 async def test_pre_persisted_proactive_image_is_not_duplicated(tmp_path: Path) -> None:
     session_manager = SessionManager(tmp_path)
-    session = session_manager.open_role_session("mira", role_name="Mira")
+    session = session_manager.get_or_create("desktop:default")
     image = str(tmp_path / "scene.png")
     session.add_message(
         "assistant",
@@ -93,12 +93,12 @@ async def test_pre_persisted_proactive_image_is_not_duplicated(tmp_path: Path) -
         chat_id="123",
         image=image,
         role_id="mira",
-        session_key="role:mira",
+        session_key="desktop:default",
         push_message_already_persisted="true",
     )
 
     assert result == "图片已发送"
-    assert len(session_manager.get_or_create("role:mira").messages) == 1
+    assert len(session_manager.get_or_create("desktop:default").messages) == 1
 
 
 @pytest.mark.asyncio
@@ -106,7 +106,7 @@ async def test_pre_persisted_proactive_image_allows_retry_transport(
     tmp_path: Path,
 ) -> None:
     session_manager = SessionManager(tmp_path)
-    session = session_manager.open_role_session("mira", role_name="Mira")
+    session = session_manager.get_or_create("desktop:default")
     image = str(tmp_path / "scene.png")
     session.add_message(
         "assistant",
@@ -137,9 +137,9 @@ async def test_pre_persisted_proactive_image_allows_retry_transport(
         chat_id="retry-target",
         image=image,
         role_id="mira",
-        session_key="role:mira",
+        session_key="desktop:default",
         push_message_already_persisted="true",
     )
 
     assert result == "图片已发送"
-    assert len(session_manager.get_or_create("role:mira").messages) == 1
+    assert len(session_manager.get_or_create("desktop:default").messages) == 1

@@ -9,7 +9,7 @@ from core.memory.markdown_schema import (
 )
 
 
-def test_new_role_documents_use_canonical_schema(tmp_path: Path) -> None:
+def test_new_memory_documents_use_canonical_schema(tmp_path: Path) -> None:
     ensure_memory_documents(tmp_path)
 
     for filename, default in DOCUMENT_DEFAULTS.items():
@@ -44,9 +44,9 @@ def test_replace_memory_section_appends_missing_section_without_rewriting_custom
     original = "# 自定义标题\n\n保留用户编辑。\n"
     path.write_text(original, encoding="utf-8")
 
-    replace_memory_section(path, "## 我的性格与形象", "- 新增内容")
+    replace_memory_section(path, "## 工作方式", "- 新增内容")
 
     assert path.read_text(encoding="utf-8") == (
         "# 自定义标题\n\n保留用户编辑。\n\n"
-        "## 我的性格与形象\n\n- 新增内容\n"
+        "## 工作方式\n\n- 新增内容\n"
     )

@@ -6,6 +6,7 @@ import pytest
 
 from agent.tools.web_fetch import WebFetchTool
 from infra.channels.qq_channel.compat import download_to_temp
+from infra.channels.base import AttachmentStore
 from core.net.http import (
     HttpRequester,
     RequestBudget,
@@ -79,7 +80,7 @@ async def test_download_to_temp_uses_injected_requester(tmp_path: Path):
 
     requester = _build_requester(_handler)
     try:
-        paths = await download_to_temp(["https://example.com/image.png"], requester)
+        paths = await download_to_temp(["https://example.com/image.png"], requester, AttachmentStore(tmp_path))
         assert len(paths) == 1
         path = Path(paths[0])
         assert path.suffix == ".png"

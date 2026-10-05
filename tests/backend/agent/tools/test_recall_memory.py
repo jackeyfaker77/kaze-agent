@@ -10,7 +10,7 @@ from core.memory.engine import MemoryQueryResult, MemoryToolSpec
 
 
 @pytest.mark.asyncio
-async def test_registry_context_owns_recall_role_and_session_scope() -> None:
+async def test_registry_context_owns_recall_session_scope() -> None:
     memory = AsyncMock()
     memory.query.return_value = MemoryQueryResult()
     tool = RecallMemoryTool(
@@ -45,7 +45,7 @@ async def test_registry_context_owns_recall_role_and_session_scope() -> None:
     )
 
     request = memory.query.await_args.args[0]
-    assert request.scope.role_id == "mira"
+    assert not hasattr(request.scope, "role_id")
     assert request.scope.session_key == "role:mira"
     assert request.scope.channel == "desktop"
     assert request.scope.chat_id == "role:mira"

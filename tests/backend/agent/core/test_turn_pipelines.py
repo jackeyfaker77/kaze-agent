@@ -23,7 +23,6 @@ from bus.event_bus import EventBus
 from bus.events import InboundMessage, OutboundMessage
 from bus.events_lifecycle import TurnCommitted
 from core.memory.engine import MemoryQueryResult
-from core.roles import RoleRepository, RoleStore, RoleRuntimeRegistry
 from bootstrap.wiring import wire_turn_lifecycle
 
 
@@ -98,7 +97,7 @@ def test_stream_events_support_desktop_and_telegram_private_chat():
     assert _supports_stream_events("telegram", "123")
     assert not _supports_stream_events("telegram", "-1001")
     assert not _supports_stream_events("telegram", "@alice")
-    assert not _supports_stream_events("desktop", "desktop:direct")
+    assert _supports_stream_events("desktop", "desktop:direct")
     assert not _supports_stream_events("feishu", "oc_123")
     assert not _supports_stream_events("qq", "123")
     assert not _supports_stream_events("cli", "direct")
@@ -121,6 +120,7 @@ def test_stream_event_sink_respects_suppression_flag():
 @pytest.mark.asyncio
 async def test_process_direct_suppresses_stream_and_memory_when_requested():
     loop = object.__new__(AgentLoop)
+    loop._session_turn_locks = {}
     loop._active_tasks = {}
     loop._active_turn_states = {}
     loop._process = AsyncMock(
@@ -146,6 +146,7 @@ async def test_process_direct_suppresses_stream_and_memory_when_requested():
     msg = loop._process.await_args.args[0]
     assert result == "ok"
     assert msg.metadata == {
+        "session_key_override": "scheduler:job",
         "omit_user_turn": True,
         "skip_post_memory": True,
         "skip_memory_retrieval": True,
@@ -158,14 +159,18 @@ async def test_process_direct_suppresses_stream_and_memory_when_requested():
 @pytest.mark.asyncio
 async def test_process_direct_registers_interruptible_active_task():
     loop = object.__new__(AgentLoop)
+    loop._session_turn_locks = {}
     loop._active_tasks = {}
     loop._active_turn_states = {}
     loop._interrupt_states = {}
     loop._processing_state = None
     loop._event_bus = EventBus()
 
+    started = asyncio.Event()
+
     async def _slow_process(*args, **kwargs):
-        await asyncio.sleep(1)
+        started.set()
+        await asyncio.Event().wait()
         return OutboundMessage(channel="desktop", chat_id="role:mira", content="ok")
 
     loop._process = _slow_process
@@ -179,7 +184,7 @@ async def test_process_direct_registers_interruptible_active_task():
             chat_id="role:mira",
         )
     )
-    await asyncio.sleep(0)
+    await asyncio.wait_for(started.wait(), timeout=1)
 
     result = AgentLoop.request_interrupt(
         loop,
@@ -195,73 +200,8 @@ async def test_process_direct_registers_interruptible_active_task():
     assert "role:mira" not in loop._active_turn_states
 
 
-@pytest.mark.asyncio
-async def test_run_role_operation_repairs_legacy_scheduled_context(tmp_path: Path):
-    repository = RoleRepository(RoleStore(tmp_path))
-    repository.create_role(role_id="mira", name="Mira", system_prompt="test")
-    loop = object.__new__(AgentLoop)
-    loop._role_runtime_registry = RoleRuntimeRegistry(repository)
-    operation = AsyncMock(return_value="done")
-
-    result = await loop.run_role_operation(
-        {
-            "role_id": "mira",
-            "role_config_version": "",
-            "thread_id": "thread:mira:scheduler:legacy-job",
-            "delivery_key": "legacy-job",
-            "transport_channel": "desktop",
-            "transport_chat_id": "role:mira",
-            "role_source": "scheduler",
-            "role_work_kind": "scheduled_job",
-            "request_id": "legacy-job",
-        },
-        operation,
-    )
-
-    assert result == "done"
-    operation.assert_awaited_once_with()
 
 
-@pytest.mark.asyncio
-async def test_role_scoped_scheduled_turn_uses_background_capability(tmp_path: Path):
-    repository = RoleRepository(RoleStore(tmp_path))
-    repository.create_role(role_id="mira", name="Mira", system_prompt="test")
-    registry = RoleRuntimeRegistry(repository)
-    context = registry.create_context(
-        role_id="mira",
-        thread_id="thread:mira:scheduler:job-1",
-        transport_channel="desktop",
-        transport_chat_id="role:mira",
-        source="scheduler",
-        work_kind="scheduled_job",
-        request_id="job-1",
-        delivery_key="job-1",
-    )
-    loop = object.__new__(AgentLoop)
-    loop._role_runtime_registry = registry
-    loop._process = AsyncMock(
-        return_value=OutboundMessage(
-            channel="desktop",
-            chat_id="role:mira",
-            content="done",
-        )
-    )
-    item = InboundMessage(
-        channel="desktop",
-        sender="user",
-        chat_id="role:mira",
-        content="run",
-        metadata=context.to_metadata(),
-    )
-
-    result = await loop._process_role_scoped(
-        item,
-        "scheduler:job-1",
-        dispatch_outbound=False,
-    )
-
-    assert result.content == "done"
-    loop._process.assert_awaited_once()
 
 
 def _make_loop(
@@ -287,7 +227,6 @@ def _make_loop(
 
 
 def test_agent_loop_uses_custom_retrieval_pipeline(tmp_path: Path):
-    RoleStore(tmp_path).create_role(role_id="mira", name="Mira", system_prompt="test")
     custom_retrieval = _CustomRetrieval(block="MEM_BLOCK")
     loop = _make_loop(
         tmp_path,
@@ -316,7 +255,6 @@ def test_agent_loop_uses_custom_retrieval_pipeline(tmp_path: Path):
 
 
 def test_agent_loop_fanouts_turn_committed_from_passive_turn(tmp_path: Path):
-    RoleStore(tmp_path).create_role(role_id="mira", name="Mira", system_prompt="test")
     loop = _make_loop(
         tmp_path,
         retrieval_pipeline=_CustomRetrieval(block="MEM_BLOCK"),
@@ -456,7 +394,6 @@ async def test_desktop_interrupt_state_is_not_spliced_into_follow_up_message(tmp
 
 @pytest.mark.asyncio
 async def test_agent_loop_afterstep_fires_with_turn_lifecycle_wiring(tmp_path: Path):
-    RoleStore(tmp_path).create_role(role_id="mira", name="Mira", system_prompt="test")
     loop = _make_loop(tmp_path)
     session_key = "cli:123"
     loop._active_turn_states[session_key] = TurnInterruptState(

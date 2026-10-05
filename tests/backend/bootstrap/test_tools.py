@@ -1,64 +1,25 @@
-from __future__ import annotations
-
-from pathlib import Path
-
-from bootstrap.tools import _role_owns_channel_target, _validate_role_target
-from core.roles import RoleRepository, RoleStore
-
-
-def test_role_target_validation_uses_canonical_chat_id_comparison(
-    tmp_path: Path,
-) -> None:
-    store = RoleStore(tmp_path)
-    role = store.create_role(
-        role_id="mira",
-        name="Mira",
-        description="",
-        system_prompt="You are Mira.",
-    )
-    store.update_role(
-        role.id,
-        channel_bindings=[
-            {"channel": "qq", "chat_id": "gqq:42", "allow_from": ["user-1"]}
-        ],
-    )
-
-    assert _role_owns_channel_target(
-        RoleRepository(store),
-        role_id=role.id,
-        channel="qq",
-        chat_id="42",
-    )
+import json
+import pytest
+from agent.config_models import Config
+from bootstrap.tools import build_core_runtime
+from core.net.http import SharedHttpResources
 
 
-def test_role_target_validation_explains_wrong_channel_for_bound_chat(
-    tmp_path: Path,
-) -> None:
-    store = RoleStore(tmp_path)
-    role = store.create_role(
-        role_id="mira",
-        name="Mira",
-        description="",
-        system_prompt="You are Mira.",
-    )
-    store.update_role(
-        role.id,
-        channel_bindings=[
-            {
-                "channel": "qqbot",
-                "chat_id": "c2c:user-1",
-                "allow_from": ["user-1"],
-            }
-        ],
-    )
-
-    result = _validate_role_target(
-        RoleRepository(store),
-        role_id=role.id,
-        channel="qq",
-        chat_id="c2c:user-1",
-    )
-
-    assert isinstance(result, str)
-    assert "已绑定渠道 qqbot" in result
-    assert "请使用 channel=qqbot" in result
+@pytest.mark.asyncio
+async def test_core_runtime_wires_plain_sessions_and_global_services(tmp_path):
+    http = SharedHttpResources()
+    runtime = build_core_runtime(Config(provider="openai", model="test", api_key="fake"), tmp_path, http)
+    try:
+        assert runtime.loop.session_manager is runtime.session_manager
+        assert runtime.tools.get_tool("message_push") is runtime.push_tool
+        assert runtime.screen_observation is not None
+        session = runtime.session_manager.get_or_create("desktop:test")
+        session.add_message("user", "hello")
+        await runtime.session_manager.save_async(session)
+        runtime.session_manager.invalidate("desktop:test")
+        assert runtime.session_manager.get_or_create("desktop:test").messages[0]["content"] == "hello"
+    finally:
+        await runtime.stop()
+        await runtime.memory_runtime.aclose()
+        runtime.session_manager._store.close()
+        await http.aclose()

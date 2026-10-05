@@ -131,9 +131,9 @@ async def test_agent_core_process_runs_prepare_prompt_run_commit_in_order():
         channel="telegram",
         chat_id="123",
         session_key="telegram:123",
-        role_id="",
+
         current_user_message="你好",
-        role_config_version="",
+
         thread_id="",
             delivery_key="",
             current_user_source_ref="telegram:123:0",

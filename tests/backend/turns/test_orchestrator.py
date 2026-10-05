@@ -168,7 +168,7 @@ async def test_orchestrator_proactive_reply_dispatches_media():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_proactive_reply_records_presence_by_role_when_available():
+async def test_orchestrator_proactive_reply_records_presence_by_session():
     session = _DummySession("role:mira")
     session.metadata["role_id"] = "mira"
     calls: list[tuple[str, str]] = []
@@ -203,4 +203,4 @@ async def test_orchestrator_proactive_reply_records_presence_by_role_when_availa
     )
 
     assert sent is True
-    assert calls == [("role", "mira")]
+    assert calls == [("session", "role:mira")]

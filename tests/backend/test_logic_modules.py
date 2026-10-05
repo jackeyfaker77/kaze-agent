@@ -10,13 +10,6 @@ import pytest
 
 from agent.prompting import is_context_frame
 from agent.provider import LLMResponse
-from core.roles import RoleAggregateService, RoleStore
-from proactive_v2.loop import ProactiveLoop
-from proactive_v2.sensor import Sensor
-from proactive_v2.memory_optimizer import (
-    MemoryOptimizer,
-    MemoryOptimizerLoop,
-)
 from session.manager import (
     Session,
     SessionManager,
@@ -25,46 +18,10 @@ from session.manager import (
 )
 
 
-@pytest.mark.asyncio
-async def test_memory_optimizer_loop_and_memory_port_cover_paths(tmp_path: Path):
-    memory = MagicMock()
-    memory.snapshot_pending.return_value = "- [identity] x"
-    memory.read_long_term.return_value = "MEM"
-    memory.read_self.return_value = "# 角色底座自我认知\n## 人格与形象\n- x"
-    memory.read_history.return_value = "history"
-    memory.get_memory_context.return_value = "ctx"
-    memory.write_long_term = MagicMock()
-    memory.append_history = MagicMock()
-    memory.commit_pending_snapshot = MagicMock()
-    memory.rollback_pending_snapshot = MagicMock()
-    memory.write_self = MagicMock()
-    provider = MagicMock()
-    provider.chat = AsyncMock(
-        side_effect=[
-            LLMResponse(content="merged"),
-            LLMResponse(content="updated self"),
-        ]
-    )
-    opt = MemoryOptimizer(memory, provider, "m", tmp_path, max_tokens=100)
-    opt._STEP_DELAY_SECONDS = 0
-    from unittest.mock import patch
-
-    with patch(
-        "proactive_v2.memory_optimizer.resolve_markdown_store", return_value=memory
-    ):
-        await opt.optimize(role_id="mira")
-    memory.write_long_term.assert_called_once_with("merged")
-    memory.write_self.assert_called_once()
-
-    loop = MemoryOptimizerLoop(
-        opt, interval_seconds=10, _now_fn=lambda: datetime(2025, 1, 1, 0, 0, 1)
-    )
-    assert loop._seconds_until_next_tick() >= 1.0
-    loop.stop()
 
 
 @pytest.mark.asyncio
-async def test_session_manager_and_proactive_loop_cover_paths(tmp_path: Path):
+async def test_session_manager_persists_plain_session(tmp_path: Path):
     session = Session("telegram:1")
     session.add_message("user", "hi", media=["/tmp/a.png"])
     session.add_message(
@@ -92,50 +49,7 @@ async def test_session_manager_and_proactive_loop_cover_paths(tmp_path: Path):
     await manager.append_messages(session, [{"role": "user", "content": "next"}])
     assert manager.list_sessions()
     assert manager.get_channel_metadata("telegram")[0]["chat_id"] == "1"
-    role_session = manager.open_role_session("mira", role_name="Mira")
-    assert role_session.key == "role:mira"
-    assert role_session.metadata["role_id"] == "mira"
-    assert role_session.metadata["role_name"] == "Mira"
     manager.invalidate("telegram:1")
-
-    loop = ProactiveLoop.__new__(ProactiveLoop)
-    loop._cfg = SimpleNamespace(
-        interval_seconds=10,
-        score_weight_energy=0.5,
-        tick_interval_s1=3,
-        tick_interval_s0=4,
-        tick_jitter=0.0,
-    )
-    loop._presence = None
-    loop._trace_proactive_rate_decision = MagicMock()
-    assert loop._next_interval() == 10
-    loop._presence = SimpleNamespace(
-        get_last_user_at=lambda session_key: datetime.now(timezone.utc)
-    )
-    loop._sense = SimpleNamespace(
-        target_session_key=lambda: "telegram:1",
-        target_transport=lambda: ("telegram", "1"),
-        has_role_memory=lambda: True,
-        read_memory_text=lambda: "mem",
-        compute_energy=lambda: 0.5,
-        compute_interruptibility=lambda **kwargs: (0.5, {"x": 1}),
-    )
-    loop._rng = None
-    loop._memory = SimpleNamespace(
-        read_long_term=lambda: "remember",
-        get_memory_context=lambda: "ctx",
-    )
-    loop._sessions = SimpleNamespace(workspace=tmp_path)
-    (tmp_path / "AGENTS.md").write_text("guide", encoding="utf-8")
-    loop._sender = SimpleNamespace(send=AsyncMock(return_value=True))
-    loop._engine = SimpleNamespace(tick=AsyncMock(return_value=0.2))
-    loop._feed_poll_lock = asyncio.Lock()
-    loop._mcp_pool = SimpleNamespace(
-        connect_all=AsyncMock(return_value=None),
-        disconnect_all=AsyncMock(return_value=None),
-    )
-    loop._poll_feeds_once = AsyncMock(return_value=None)
-    assert loop._sample_random_memory(1)
 
 
 def test_session_get_history_returns_empty_when_window_is_zero():
@@ -146,217 +60,16 @@ def test_session_get_history_returns_empty_when_window_is_zero():
     assert session.get_history(max_messages=0) == []
 
 
-def test_sensor_prefers_role_target_and_binding_transport(tmp_path: Path):
-    session_manager = SessionManager(tmp_path)
-    role_service = RoleAggregateService.from_runtime(
-        workspace=tmp_path,
-        role_store=RoleStore(tmp_path),
-        session_manager=session_manager,
-    )
-    _ = role_service.create_role(
-        role_id="mira",
-        name="Mira",
-        description="desktop role",
-        system_prompt="you are mira",
-    )
-    _ = role_service.bindings.bind("telegram", "42", "mira", contact_id="owner")
-
-    sensor = Sensor(
-        cfg=SimpleNamespace(
-            default_role_id="mira",
-            default_channel="telegram",
-            default_chat_id="42",
-            recent_chat_messages=5,
-        ),
-        sessions=session_manager,
-        state=SimpleNamespace(),
-        memory=None,
-        presence=None,
-        rng=None,
-        role_bindings=role_service.bindings,
-    )
-
-    assert sensor.target_session_key() == "role:mira"
-    assert sensor.target_transport() == ("telegram", "42")
 
 
-def test_sensor_role_target_prefers_configured_transport_when_multiple_bindings(
-    tmp_path: Path,
-):
-    session_manager = SessionManager(tmp_path)
-    role_service = RoleAggregateService.from_runtime(
-        workspace=tmp_path,
-        role_store=RoleStore(tmp_path),
-        session_manager=session_manager,
-    )
-    _ = role_service.create_role(
-        role_id="mira",
-        name="Mira",
-        description="desktop role",
-        system_prompt="you are mira",
-    )
-    _ = role_service.bindings.bind("telegram", "42", "mira", contact_id="owner")
-    _ = role_service.bindings.bind("qq", "group-7", "mira", contact_id="owner")
-
-    sensor = Sensor(
-        cfg=SimpleNamespace(
-            default_role_id="mira",
-            default_channel="qq",
-            default_chat_id="group-7",
-            recent_chat_messages=5,
-        ),
-        sessions=session_manager,
-        state=SimpleNamespace(),
-        memory=None,
-        presence=None,
-        rng=None,
-        role_bindings=role_service.bindings,
-    )
-
-    assert sensor.target_transport() == ("qq", "group-7")
-    assert sensor.target_transports() == [("qq", "group-7"), ("telegram", "42")]
 
 
-def test_sensor_role_target_requires_bound_transport(tmp_path: Path):
-    session_manager = SessionManager(tmp_path)
-    role_service = RoleAggregateService.from_runtime(
-        workspace=tmp_path,
-        role_store=RoleStore(tmp_path),
-        session_manager=session_manager,
-    )
-    _ = role_service.create_role(
-        role_id="mira",
-        name="Mira",
-        description="desktop role",
-        system_prompt="you are mira",
-    )
-
-    sensor = Sensor(
-        cfg=SimpleNamespace(
-            default_role_id="mira",
-            default_channel="telegram",
-            default_chat_id="42",
-            recent_chat_messages=5,
-        ),
-        sessions=session_manager,
-        state=SimpleNamespace(),
-        memory=None,
-        presence=None,
-        rng=None,
-        role_bindings=role_service.bindings,
-    )
-
-    with pytest.raises(KeyError, match="default_role_id 未绑定 transport: mira"):
-        _ = sensor.target_transport()
 
 
-def test_sensor_role_target_rejects_unmatched_configured_transport(tmp_path: Path):
-    session_manager = SessionManager(tmp_path)
-    role_service = RoleAggregateService.from_runtime(
-        workspace=tmp_path,
-        role_store=RoleStore(tmp_path),
-        session_manager=session_manager,
-    )
-    _ = role_service.create_role(
-        role_id="mira",
-        name="Mira",
-        description="desktop role",
-        system_prompt="you are mira",
-    )
-    _ = role_service.bindings.bind("telegram", "42", "mira", contact_id="owner")
-
-    sensor = Sensor(
-        cfg=SimpleNamespace(
-            default_role_id="mira",
-            default_channel="qq",
-            default_chat_id="group-7",
-            recent_chat_messages=5,
-        ),
-        sessions=session_manager,
-        state=SimpleNamespace(),
-        memory=None,
-        presence=None,
-        rng=None,
-        role_bindings=role_service.bindings,
-    )
-
-    with pytest.raises(
-        KeyError,
-        match="default_role_id 配置的 target 未绑定到该角色: mira -> qq:group-7",
-    ):
-        _ = sensor.target_transport()
 
 
-def test_sensor_role_target_requires_explicit_transport_when_multiple_bindings_and_no_target(
-    tmp_path: Path,
-):
-    session_manager = SessionManager(tmp_path)
-    role_service = RoleAggregateService.from_runtime(
-        workspace=tmp_path,
-        role_store=RoleStore(tmp_path),
-        session_manager=session_manager,
-    )
-    _ = role_service.create_role(
-        role_id="mira",
-        name="Mira",
-        description="desktop role",
-        system_prompt="you are mira",
-    )
-    _ = role_service.bindings.bind("telegram", "42", "mira", contact_id="owner")
-    _ = role_service.bindings.bind("qq", "group-7", "mira", contact_id="owner")
-
-    sensor = Sensor(
-        cfg=SimpleNamespace(
-            default_role_id="mira",
-            default_channel="",
-            default_chat_id="",
-            recent_chat_messages=5,
-        ),
-        sessions=session_manager,
-        state=SimpleNamespace(),
-        memory=None,
-        presence=None,
-        rng=None,
-        role_bindings=role_service.bindings,
-    )
-
-    with pytest.raises(
-        RuntimeError,
-        match="default_role_id 存在多个 transport 绑定，必须显式配置 target.channel/chat_id: mira",
-    ):
-        _ = sensor.target_transport()
 
 
-def test_sensor_role_target_supports_desktop_without_binding(tmp_path: Path):
-    session_manager = SessionManager(tmp_path)
-    role_service = RoleAggregateService.from_runtime(
-        workspace=tmp_path,
-        role_store=RoleStore(tmp_path),
-        session_manager=session_manager,
-    )
-    _ = role_service.create_role(
-        role_id="mira",
-        name="Mira",
-        description="desktop role",
-        system_prompt="you are mira",
-    )
-
-    sensor = Sensor(
-        cfg=SimpleNamespace(
-            default_role_id="mira",
-            default_channel="desktop",
-            default_chat_id="",
-            recent_chat_messages=5,
-        ),
-        sessions=session_manager,
-        state=SimpleNamespace(),
-        memory=None,
-        presence=None,
-        rng=None,
-        role_bindings=role_service.bindings,
-    )
-
-    assert sensor.target_transport() == ("desktop", "role:mira")
 
 
 def test_session_get_history_skips_cached_llm_frame_by_default():
@@ -567,63 +280,3 @@ def test_session_get_history_truncates_long_tool_results_in_middle():
     assert "chars truncated" in tool_content
     assert tool_content.endswith("-tail")
     assert len(tool_content) < len(long_result)
-
-
-@pytest.mark.asyncio
-async def test_proactive_loop_wrapper_methods_cover_paths(tmp_path: Path):
-    loop = ProactiveLoop.__new__(ProactiveLoop)
-    loop._cfg = SimpleNamespace(
-        interval_seconds=10,
-        score_weight_energy=0.5,
-        tick_interval_s1=3,
-        tick_interval_s0=4,
-        tick_jitter=0.0,
-        default_channel="telegram",
-        default_chat_id="42",
-    )
-    loop._running = False
-    loop._trace_proactive_rate_decision = MagicMock()
-    loop._presence = SimpleNamespace(
-        get_last_user_at=lambda session_key: datetime.now(timezone.utc)
-    )
-    loop._sense = SimpleNamespace(
-        target_session_key=lambda: "telegram:1",
-        target_transport=lambda: ("telegram", "1"),
-        has_role_memory=lambda: True,
-        read_memory_text=lambda: "mem",
-        compute_energy=lambda: 0.5,
-        compute_interruptibility=lambda **kwargs: (0.5, {"x": 1}),
-    )
-    loop._rng = None
-    loop._memory = SimpleNamespace(
-        read_long_term=lambda: "remember", get_memory_context=lambda: "ctx"
-    )
-    loop._sessions = SimpleNamespace(workspace=tmp_path)
-    (tmp_path / "AGENTS.md").write_text("guide", encoding="utf-8")
-    loop._sender = SimpleNamespace(send=AsyncMock(return_value=True))
-    loop._proactive_pipeline = SimpleNamespace(run=AsyncMock(return_value=0.2))
-    loop._feed_poll_lock = asyncio.Lock()
-    loop._mcp_pool = SimpleNamespace(
-        connect_all=AsyncMock(return_value=None),
-        disconnect_all=AsyncMock(return_value=None),
-    )
-    loop._run_loop = AsyncMock(return_value=None)
-
-    assert loop._has_role_memory() is True
-    assert loop._read_memory_text() == "mem"
-    assert loop._compute_energy() == 0.5
-    assert loop._compute_interruptibility(
-        now_hour=10,
-        now_utc=datetime.now(timezone.utc),
-        recent_msg_count=0,
-    ) == (0.5, {"x": 1})
-    assert await loop._tick() == 0.2
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("proactive_v2.loop.compute_energy", lambda last_user_at: 0.8)
-        mp.setattr("proactive_v2.loop.d_energy", lambda energy: 0.5)
-        mp.setattr("proactive_v2.loop.next_tick_from_score", lambda *args, **kwargs: 7)
-        assert loop._next_interval() == 7
-    await loop.run()
-    loop._mcp_pool.connect_all.assert_awaited_once()
-    loop._run_loop.assert_awaited_once()
-    loop._mcp_pool.disconnect_all.assert_awaited_once()

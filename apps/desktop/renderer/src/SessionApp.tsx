@@ -34,7 +34,7 @@ export function SessionApp() {
   const input = useRef<HTMLTextAreaElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
   useEffect(() => { localStorage.setItem("hasaki-theme", theme); }, [theme]);
-  useEffect(() => { void window.miraDesktop.readSettings().then(s => setSettings(s.formData)).catch(chat.fail); }, [view]);
+  useEffect(() => { void window.miraDesktop.readSettings().then(s => setSettings(s.formData)).catch(chat.fail); }, [view, chat.fail]);
   useEffect(() => { bottom.current?.scrollIntoView({ block: "end" }); }, [chat.session, chat.delta, view]);
   useEffect(() => { if (input.current) { input.current.style.height = "auto"; input.current.style.height = `${Math.min(input.current.scrollHeight, 140)}px`; } }, [chat.draft, view]);
   async function saveSettings(next: SettingsFormData) {

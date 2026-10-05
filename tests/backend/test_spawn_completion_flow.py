@@ -9,7 +9,6 @@ from agent.provider import LLMResponse
 from agent.tools.registry import ToolRegistry
 from bus.events import SpawnCompletionItem
 from bus.internal_events import SpawnCompletionEvent
-from core.roles import RoleStore
 from tests.backend.memory_fakes import FakeMemoryEngine
 from session.manager import SessionManager
 
@@ -25,7 +24,6 @@ class _Provider:
 
 @pytest.mark.asyncio
 async def test_spawn_completion_updates_original_session_without_raw_result(tmp_path):
-    RoleStore(tmp_path).create_role(role_id="mira", name="Mira", system_prompt="test")
     provider = _Provider()
     session_manager = SessionManager(tmp_path)
     tools = ToolRegistry()
@@ -78,7 +76,6 @@ async def test_spawn_completion_updates_original_session_without_raw_result(tmp_
 
 @pytest.mark.asyncio
 async def test_spawn_completion_retry_count_one_disables_retry_guidance(tmp_path):
-    RoleStore(tmp_path).create_role(role_id="mira", name="Mira", system_prompt="test")
     provider = _Provider()
     session_manager = SessionManager(tmp_path)
     tools = ToolRegistry()
