@@ -153,7 +153,12 @@ class AppRuntime:
             ]
             if self.features.enable_proactive and self.config.proactive.enabled:
                 from bootstrap.proactive import prepare_proactive_loop, run_proactive
-                if await prepare_proactive_loop(self.core) is not None:
+                try:
+                    proactive_loop = await prepare_proactive_loop(self.core)
+                except Exception:
+                    logger.exception("[proactive] 初始化失败，本次运行关闭主动推送")
+                    proactive_loop = None
+                if proactive_loop is not None:
                     self._background_tasks.append(asyncio.create_task(run_proactive(self.core), name="proactive"))
             self._started = True
         except Exception:

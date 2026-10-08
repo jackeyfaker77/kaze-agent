@@ -66,7 +66,9 @@ Default 运行 admission → source → route → prepare → judge → resolve 
 
 ## 源声明与共享 MCP
 
-插件可通过 `agent.plugins.ProactiveSourceSpec` 声明 id、channels、server、fetch_tool、ack_tool 与 fetch_page_size，并通过 `McpServerSpec` 声明服务；`PluginManager` 收集到当前主动能力快照。每轮和长期 Kernel 的 lease 固定所使用的能力版本，结束后释放。主动与普通 Agent 使用同一个 MCP 连接，同一 stdio RPC 串行执行，不再创建第二套主动连接池。
+插件可通过 `agent.plugins.ProactiveSourceSpec` 声明 id、channels、server、fetch_tool、ack_tool 与 fetch_page_size，并通过 `McpServerSpec` 声明服务；`PluginManager` 收集到当前主动能力快照。每轮和长期 Kernel 的 lease 固定插件执行图和源声明，结束后释放。MCP 工具从宿主当前共享目录解析，新增、删除或重连服务后，主动 fetch、ACK、刷新和 Drift 无需重启即可使用更新后的连接。主动与普通 Agent 使用同一个 MCP 连接，同一 stdio RPC 串行执行，不再创建第二套主动连接池。
+
+主动源配置或生命周期初始化失败时，应用记录异常并关闭本次运行的主动推送，普通聊天和调度服务继续运行。失败初始化取得的主动状态资源会被关闭。
 
 Kaze 兼容工作区 `proactive_sources.json`，示例见 `config/examples/proactive_sources.example.json`：
 
@@ -94,7 +96,7 @@ Drift 使用完整的活动选择、执行、探索状态、记录和结束协�
 
 ## 投递与诊断
 
-用户在生成期间回复或目标处于普通回合忙碌状态时，宿主停止推送。渠道真实回执确认成功后才提交带 proactive、delivery_id、证据 ID 和来源引用的助手消息。桌面通知在历史提交之后发布，界面得到完整快照。
+用户在生成期间回复或目标处于普通回合忙碌状态时，宿主停止推送。正文和所有图片的渠道回执确认成功后，宿主一次性提交带 proactive、delivery_id、证据 ID 和来源引用的助手消息；图片同步服务将历史提交交给该宿主。失败的图片不会写入成功历史，普通推送工具也会返回真实的失败原因。桌面通知在历史提交之后发布，界面得到完整快照。
 
 `proactive.db` 记录 Default 的 tick、步骤、去重键与投递状态；`wake_proactive.db` 记录候选池、ACK 队列、唤醒 / Context / Drift 状态及模型输入观察；`drift/drift.db` 保存完整探索状态。`sessions.db` 的主动助手消息是成功投递历史。决策表里 reply 表示模型作了发送提案，不能据此认定渠道已送达。
 

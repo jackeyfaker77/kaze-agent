@@ -55,8 +55,6 @@ class _PushPort:
                 message=sanitize_user_visible_content(outbound.content),
                 image=outbound.media[0] if outbound.media else None,
                 session_key=self.loop._target_session_key(),
-                already_persisted=True,
-                push_message_already_persisted=True,
                 commit_after_delivery=True,
                 _outbound_metadata=dict(outbound.metadata),
             )
@@ -70,8 +68,7 @@ class _PushPort:
                     chat_id=outbound.chat_id,
                     image=image,
                     session_key=self.loop._target_session_key(),
-                    already_persisted=True,
-                    push_message_already_persisted=True,
+                    commit_after_delivery=True,
                 )
                 if not receipt.ok:
                     return False
@@ -284,7 +281,8 @@ def build_proactive_loop(runtime) -> KazeProactiveLoop | None:
     )
     roots = tuple(manager.drift_skill_roots) if manager else ()
     snapshot = RuntimeSnapshot(
-        tool_registry=runtime.tools.snapshot(),
+        # MCP 的新增、删除和重连会更新宿主目录；主动 fetch、ACK 和 Drift 共用它。
+        tool_registry=runtime.tools,
         proactive_sources={proactive_source_key(source): source for source in sources},
         proactive_modules=tuple(contributions["proactive_modules"]),
         proactive_lifecycles=tuple(contributions["proactive_lifecycles"]),
@@ -318,7 +316,7 @@ def build_proactive_loop(runtime) -> KazeProactiveLoop | None:
 
 
 async def prepare_proactive_loop(runtime) -> KazeProactiveLoop | None:
-    """启动时核对主动能力并固定已连接的共享工具目录。"""
+    """启动时核对主动模块，并接通与普通 Agent 共用的动态 MCP 工具目录。"""
     cfg = runtime.config.proactive
     if not cfg.enabled or not (cfg.default_chat_id or cfg.session_key):
         return None
@@ -333,9 +331,11 @@ async def prepare_proactive_loop(runtime) -> KazeProactiveLoop | None:
     try:
         await loop._start_current_snapshot()
     except BaseException:
-        await loop._stop_active_kernel()
-        loop.close()
-        runtime.proactive_loop = None
+        try:
+            await loop._stop_active_kernel()
+        finally:
+            runtime.proactive_loop = None
+            loop.close()
         raise
     return loop
 

@@ -309,7 +309,7 @@ async def test_disabled_runner_does_not_create_proactive_databases(proactive_set
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_runner_uses_frozen_tools_and_closes_kernel_and_refresh_task(
+async def test_runner_uses_shared_tools_and_closes_kernel_and_refresh_task(
     proactive_setup, monkeypatch, cancel
 ):
     from proactive_v2.source_refresh import SourceRefresher
@@ -334,7 +334,7 @@ async def test_runner_uses_frozen_tools_and_closes_kernel_and_refresh_task(
             refreshers[0]._gateway._tools
             is loop._runtime_snapshot_store.current.tool_registry
         )
-        assert refreshers[0]._gateway._tools is not setup.runtime.tools
+        assert refreshers[0]._gateway._tools is setup.runtime.tools
         if cancel:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):

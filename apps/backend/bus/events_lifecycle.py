@@ -177,6 +177,7 @@ class ExternalImagePushed:
     image: str
     attach_to_turn: bool = False
     already_persisted: bool = False
+    commit_after_delivery: bool = False
 
 
 @dataclass(frozen=True)

@@ -29,6 +29,9 @@ class ExternalImageSyncService:
     ) -> ExternalImagePushed:
         """Queues turn-owned images or persists background deliveries immediately."""
 
+        if event.commit_after_delivery:
+            # 主动宿主会在全部投递完成后，将正文和图片一起提交到共享会话。
+            return event
         if event.already_persisted:
             self._validate_existing_message(event)
             return event

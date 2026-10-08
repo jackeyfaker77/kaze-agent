@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from agent.scheduler import JobStore, LatencyTracker, SchedulerService
+from agent.tools.message_push import DeliveryReceipt
 from tests.backend.conftest import drain_tasks, make_job
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -99,6 +100,7 @@ async def test_soft_sends_ai_response_via_push(
     tmp_path, mock_push, mock_loop, fixed_now
 ):
     mock_loop.process_direct = AsyncMock(return_value="北京今天晴，15°C")
+    mock_push.send = AsyncMock(return_value=DeliveryReceipt(True, "telegram", "123", "文本已发送"))
     svc = make_service(tmp_path, mock_push, mock_loop, fixed_now)
     job = make_job(
         tier="soft",
@@ -110,13 +112,27 @@ async def test_soft_sends_ai_response_via_push(
     await svc._tick()
     await drain_tasks()
 
-    mock_push.execute.assert_called_once_with(
+    mock_push.send.assert_called_once_with(
         channel=job.channel,
         chat_id=job.chat_id,
         message="北京今天晴，15°C",
         already_persisted=True,
         session_key="mira",
     )
+    mock_push.execute.assert_not_called()
+
+
+async def test_soft_logs_failed_delivery_receipt(tmp_path, mock_push, mock_loop, fixed_now, caplog):
+    mock_loop.process_direct = AsyncMock(return_value="天气提醒")
+    mock_push.send = AsyncMock(return_value=DeliveryReceipt(False, "telegram", "123", "发送失败：offline", error="offline"))
+    svc = make_service(tmp_path, mock_push, mock_loop, fixed_now)
+    job = make_job(tier="soft", fire_at=fixed_now - timedelta(seconds=30), prompt="查询天气")
+    svc._jobs[job.id] = job
+    await svc._tick()
+    await drain_tasks()
+    mock_push.send.assert_awaited_once()
+    mock_push.execute.assert_not_called()
+    assert "soft 推送失败" in caplog.text and "offline" in caplog.text
 
 
 async def test_soft_records_latency(tmp_path, mock_push, mock_loop, fixed_now):

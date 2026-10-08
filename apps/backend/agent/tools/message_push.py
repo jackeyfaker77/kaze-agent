@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class DeliveryReceipt:
     """一次推送的结构化回执。
 
-    - `text`：与改造前完全一致的人类可读文本，`execute()` 原样返回（模型侧不变）
+    - `text`：各项操作的真实成功或失败结果，`execute()` 原样返回
     - `message_id`：平台消息号；渠道拿不到时为 None（即"没有平台级回执"）
     - `ok`：本次请求涉及的所有操作是否都成功
     """
@@ -44,7 +44,7 @@ def _extract_receipt(raw: object) -> tuple[str | None, str | None]:
     """从渠道 sender 的返回值里提取 (message_id, error)。
 
     兼容三种返回：
-    - None：已发送，但渠道不提供回执（当前 all channels 都是这种）
+    - None：已发送，但渠道不提供回执
     - DeliveryReceipt：渠道自己给出结构
     - 任何带 `message_id` 属性的对象（例如 Telegram 的 Message）
     """
@@ -195,65 +195,51 @@ class MessagePushTool(Tool):
         errors: list[str] = []
         message_id: str | None = None
         image_sent = False
-        try:
-            if message and ("text" in senders or "stream_text" in senders):
-                sender_name = "stream_text" if "stream_text" in senders else "text"
-                if kwargs.get("already_persisted") and "committed_text" in senders:
-                    sender_name = "committed_text"
-                if kwargs.get("commit_after_delivery") and "pending_text" in senders:
-                    sender_name = "pending_text"
-                raw = await senders[sender_name](chat_id, message)
+
+        async def send_part(sender_name: str, args: tuple[Any, ...], kind: str, success_text: str) -> bool:
+            nonlocal message_id
+            try:
+                raw = await senders[sender_name](*args)
                 mid, err = _extract_receipt(raw)
-                message_id = message_id or mid
-                if err:
-                    errors.append(str(err))
-                preview = message[:60] + "..." if len(message) > 60 else message
-                logger.info(f"[message_push] {channel}:{chat_id} ← text: {preview!r}")
-                results.append("文本已发送")
-            elif message:
-                errors.append("渠道没有文本 sender")
+            except Exception as exc:
+                mid, err = None, str(exc) or type(exc).__name__
+            if err:
+                errors.append(err)
+                results.append(f"{kind}发送失败：{err}")
+                logger.error("[message_push] %s:%s %s发送失败: %s", channel, chat_id, kind, err)
+                return False
+            message_id = message_id or mid
+            results.append(success_text)
+            logger.info("[message_push] %s:%s ← %s", channel, chat_id, kind)
+            return True
 
-            if file:
-                if "file" not in senders:
-                    results.append(f"渠道 {channel!r} 不支持发送文件")
-                    errors.append("渠道不支持发送文件")
-                else:
-                    import os
+        if message and ("text" in senders or "stream_text" in senders):
+            sender_name = "stream_text" if "stream_text" in senders else "text"
+            if _is_truthy(kwargs.get("already_persisted")) and "committed_text" in senders:
+                sender_name = "committed_text"
+            if _is_truthy(kwargs.get("commit_after_delivery")) and "pending_text" in senders:
+                sender_name = "pending_text"
+            await send_part(sender_name, (chat_id, message), "文本", "文本已发送")
+        elif message:
+            results.append(f"渠道 {channel!r} 不支持发送文本")
+            errors.append("渠道没有文本 sender")
 
-                    name = os.path.basename(file)
-                    raw = await senders["file"](chat_id, file, name)
-                    mid, err = _extract_receipt(raw)
-                    message_id = message_id or mid
-                    if err:
-                        errors.append(str(err))
-                    logger.info(f"[message_push] {channel}:{chat_id} ← file: {file!r}")
-                    results.append(f"文件 {name!r} 已发送")
+        if file:
+            if "file" not in senders:
+                results.append(f"渠道 {channel!r} 不支持发送文件")
+                errors.append("渠道不支持发送文件")
+            else:
+                import os
 
-            if image:
-                if "image" not in senders:
-                    results.append(f"渠道 {channel!r} 不支持发送图片")
-                    errors.append("渠道不支持发送图片")
-                else:
-                    raw = await senders["image"](chat_id, image)
-                    mid, err = _extract_receipt(raw)
-                    message_id = message_id or mid
-                    if err:
-                        errors.append(str(err))
-                    logger.info(
-                        f"[message_push] {channel}:{chat_id} ← image: {image!r}"
-                    )
-                    results.append("图片已发送")
-                    image_sent = True
+                name = os.path.basename(file)
+                await send_part("file", (chat_id, file, name), "文件", f"文件 {name!r} 已发送")
 
-        except Exception as e:
-            logger.error(f"[message_push] 发送失败 {channel}:{chat_id}: {e}")
-            return DeliveryReceipt(
-                ok=False,
-                channel=channel,
-                chat_id=chat_id,
-                text=f"发送失败：{e}",
-                error=str(e),
-            )
+        if image:
+            if "image" not in senders:
+                results.append(f"渠道 {channel!r} 不支持发送图片")
+                errors.append("渠道不支持发送图片")
+            else:
+                image_sent = await send_part("image", (chat_id, image), "图片", "图片已发送")
 
         if (
             image_sent
@@ -272,6 +258,7 @@ class MessagePushTool(Tool):
                     already_persisted=_is_truthy(
                         kwargs.get("push_message_already_persisted")
                     ),
+                    commit_after_delivery=_is_truthy(kwargs.get("commit_after_delivery")),
                 )
             )
 
@@ -294,7 +281,7 @@ class MessagePushTool(Tool):
         )
 
     async def execute(self, **kwargs: Any) -> str:
-        """兼容旧调用方：返回与改造前完全一致的文本（模型侧输出不变）。"""
+        """为普通 Agent 返回各项投递的实际结果。"""
         return (await self.send(**kwargs)).text
 
 
