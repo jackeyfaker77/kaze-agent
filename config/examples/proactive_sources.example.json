@@ -1,0 +1,24 @@
+{
+  "sources": [
+    {
+      "server": "feed",
+      "channel": "content",
+      "get_tool": "get_proactive_events",
+      "ack_tool": "acknowledge_events",
+      "enabled": true
+    },
+    {
+      "server": "sensor",
+      "channel": "alert",
+      "get_tool": "get_proactive_events",
+      "ack_tool": "acknowledge_events",
+      "enabled": false
+    },
+    {
+      "server": "device",
+      "channel": "context",
+      "get_tool": "get_context",
+      "enabled": false
+    }
+  ]
+}

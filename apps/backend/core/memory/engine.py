@@ -93,9 +93,12 @@ class MemoryQueryFilters:
     domains: tuple[str, ...] = ()
     time_start: datetime | None = None
     time_end: datetime | None = None
+    relevance_floor: Literal["engine_default", "strong"] = "engine_default"
     hints: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
+        if self.relevance_floor not in {"engine_default", "strong"}:
+            raise ValueError(f"unsupported memory relevance floor: {self.relevance_floor}")
         object.__setattr__(
             self,
             "kinds",

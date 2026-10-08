@@ -8,6 +8,7 @@ import type {
 } from "./bridge/shared.js";
 import { parseHotkey } from "./voice/hotkey.js";
 import { desktopSettingsDefaults } from "./settingsContract.js";
+import { extractProactivePolicyToml, proactivePresetDefaults, proactivePolicyValues, renderProactiveSettings, validateProactiveSettings } from "./proactiveSettings.js";
 
 type BridgeHealthChecker = () => Promise<{
   ok: boolean;
@@ -182,8 +183,13 @@ export function loadSettingsData(): SettingsSnapshot {
   const memory = asRecord(parsed.memory);
   const embedding = asRecord(memory.embedding);
   const agent = asRecord(parsed.agent);
-  const proactive = asRecord(parsed.proactive);
+  const proactive = proactivePolicyValues(asRecord(parsed.proactive));
+  const proactiveAgent = asRecord(proactive.agent);
+  const proactiveDrift = asRecord(proactive.drift);
+  const proactiveFeed = asRecord(proactive.feed);
   const proactiveTarget = asRecord(proactive.target);
+  const proactiveProfile = String(proactive.profile ?? proactive.preset ?? "daily");
+  const proactiveDefaults = proactivePresetDefaults(proactiveProfile);
   const agentContext = asRecord(agent.context);
   const agentTools = asRecord(agent.tools);
   const agentMaintenance = asRecord(agent.maintenance);
@@ -216,11 +222,48 @@ export function loadSettingsData(): SettingsSnapshot {
             : String(embedding.output_dimensionality),
       },
       proactive: {
+        ...proactiveDefaults,
         enabled: Boolean(proactive.enabled),
+        lifecycle: proactive.lifecycle === "default" ? "default" : "wake",
+        proactiveModel: String(proactive.model ?? ""),
+        agentModel: String(proactiveAgent.model ?? proactive.agent_tick_model ?? ""),
+        agentMaxSteps: Number(proactiveAgent.max_steps ?? proactive.agent_tick_max_steps ?? 35),
+        contentLimit: Number(proactiveAgent.content_limit ?? proactive.agent_tick_content_limit ?? 5),
+        webFetchMaxChars: Number(proactiveAgent.web_fetch_max_chars ?? proactive.agent_tick_web_fetch_max_chars ?? 8000),
+        contextProbability: Number(proactiveAgent.context_prob ?? proactive.agent_tick_context_prob ?? 0.03),
+        deliveryCooldownHours: Number(proactiveAgent.delivery_cooldown_hours ?? proactive.agent_tick_delivery_cooldown_hours ?? 1),
+        driftEnabled: Boolean(proactiveDrift.enabled ?? proactive.drift_enabled ?? false),
+        driftMaxSteps: Number(proactiveDrift.max_steps ?? proactive.drift_max_steps ?? 20),
+        driftMinIntervalHours: Number(proactiveDrift.min_interval_hours ?? proactive.drift_min_interval_hours ?? 3),
+        judgeSendThreshold: Number(proactive.judge_send_threshold ?? proactiveDefaults.judgeSendThreshold),
+        recentChatMessages: Number(proactive.recent_chat_messages ?? proactiveDefaults.recentChatMessages),
+        contextOnlyDailyMax: Number(proactive.context_only_daily_max ?? proactiveDefaults.contextOnlyDailyMax),
+        contextOnlyMinIntervalHours: Number(proactive.context_only_min_interval_hours ?? proactiveDefaults.contextOnlyMinIntervalHours),
+        feedPollIntervalSeconds: Number(proactiveFeed.poll_interval_seconds ?? proactive.feed_poller_interval_seconds ?? 150),
         sessionKey: String(proactive.session_key ?? ""),
         channel: String(proactiveTarget.channel ?? proactive.default_channel ?? "desktop"),
         chatId: String(proactiveTarget.chat_id ?? proactive.default_chat_id ?? ""),
         intervalSeconds: Number(proactive.interval_seconds ?? 1800),
+        profile: proactiveProfile,
+        adaptiveEnabled: Boolean(proactive.adaptive_enabled ?? true),
+        energyContactEnabled: Boolean(proactive.energy_contact_enabled ?? true),
+        energyContactThreshold: Number(proactive.energy_contact_threshold ?? 0.2),
+        scoreWeightEnergy: Number(proactive.score_weight_energy ?? 0.35),
+        deliveryDedupeHours: Number(proactive.delivery_dedupe_hours ?? proactiveDefaults.deliveryDedupeHours),
+        messageDedupeEnabled: Boolean(proactive.message_dedupe_enabled ?? true),
+        messageDedupeRecentN: Number(proactive.message_dedupe_recent_n ?? proactiveDefaults.messageDedupeRecentN),
+        tickIntervalS0: proactive.tick_interval_s0 == null ? undefined : Number(proactive.tick_interval_s0),
+        tickIntervalS1: proactive.tick_interval_s1 == null ? undefined : Number(proactive.tick_interval_s1),
+        tickJitter: proactive.tick_jitter == null ? undefined : Number(proactive.tick_jitter),
+        anyactionEnabled: Boolean(proactive.anyaction_enabled ?? proactiveDefaults.anyactionEnabled),
+        dailyMaxActions: Number(proactive.anyaction_daily_max_actions ?? proactiveDefaults.dailyMaxActions),
+        minIntervalSeconds: Number(proactive.anyaction_min_interval_seconds ?? proactiveDefaults.minIntervalSeconds),
+        probabilityMin: Number(proactive.anyaction_probability_min ?? proactiveDefaults.probabilityMin),
+        probabilityMax: Number(proactive.anyaction_probability_max ?? proactiveDefaults.probabilityMax),
+        idleScaleMinutes: Number(proactive.anyaction_idle_scale_minutes ?? proactiveDefaults.idleScaleMinutes),
+        resetHourLocal: Number(proactive.anyaction_reset_hour_local ?? proactiveDefaults.resetHourLocal),
+        timezone: String(proactive.anyaction_timezone ?? proactiveDefaults.timezone),
+        policyRawToml: extractProactivePolicyToml(content),
       },
       voice: {
         enabled: Boolean(voice.enabled),
@@ -330,12 +373,7 @@ function renderSettingsToml(formData: SettingsFormData): string {
       ? `output_dimensionality = ${Number(outputDimensionality)}`
       : "",
     "",
-    "[proactive]",
-    `enabled = ${formData.proactive?.enabled ? "true" : "false"}`,
-    `session_key = ${quote(formData.proactive?.sessionKey ?? "")}`,
-    `default_channel = ${quote(formData.proactive?.channel ?? "desktop")}`,
-    `default_chat_id = ${quote(formData.proactive?.chatId ?? "")}`,
-    `interval_seconds = ${formData.proactive?.intervalSeconds ?? 1800}`,
+    ...renderProactiveSettings(formData.proactive),
     "",
     "[voice]",
     `enabled = ${formData.voice.enabled ? "true" : "false"}`,
@@ -393,9 +431,7 @@ function validateSettings(formData: SettingsFormData): void {
   if (formData.advanced.maxIterations < 0) {
     throw new Error("max_iterations 不能小于 0");
   }
-  if (formData.proactive && (!Number.isInteger(formData.proactive.intervalSeconds) || formData.proactive.intervalSeconds < 60)) {
-    throw new Error("主动检查间隔不能小于 60 秒");
-  }
+  validateProactiveSettings(formData.proactive);
   if (formData.memory.outputDimensionality.trim()) {
     const value = Number(formData.memory.outputDimensionality);
     if (!Number.isInteger(value) || value <= 0) {

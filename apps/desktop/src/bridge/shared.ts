@@ -69,8 +69,53 @@ export type ModelRegistrationFormData = {
   effort: "none" | "low" | "high" | "max";
 };
 
+/** Session heartbeat policy edited in the desktop settings. */
+export type ProactiveSettingsFormData = {
+  enabled: boolean;
+  lifecycle?: "default" | "wake";
+  proactiveModel?: string;
+  agentModel?: string;
+  agentMaxSteps?: number;
+  contentLimit?: number;
+  webFetchMaxChars?: number;
+  contextProbability?: number;
+  deliveryCooldownHours?: number;
+  driftEnabled?: boolean;
+  driftMaxSteps?: number;
+  driftMinIntervalHours?: number;
+  judgeSendThreshold?: number;
+  recentChatMessages?: number;
+  contextOnlyDailyMax?: number;
+  contextOnlyMinIntervalHours?: number;
+  feedPollIntervalSeconds?: number;
+  sessionKey: string;
+  channel: string;
+  chatId: string;
+  intervalSeconds: number;
+  profile?: string;
+  adaptiveEnabled?: boolean;
+  energyContactEnabled?: boolean;
+  energyContactThreshold?: number;
+  scoreWeightEnergy?: number;
+  deliveryDedupeHours?: number;
+  messageDedupeEnabled?: boolean;
+  messageDedupeRecentN?: number;
+  tickIntervalS0?: number;
+  tickIntervalS1?: number;
+  tickJitter?: number;
+  anyactionEnabled?: boolean;
+  dailyMaxActions?: number;
+  minIntervalSeconds?: number;
+  probabilityMin?: number;
+  probabilityMax?: number;
+  idleScaleMinutes?: number;
+  resetHourLocal?: number;
+  timezone?: string;
+  policyRawToml?: string;
+};
+
 export type SettingsFormData = {
-  proactive?: { enabled: boolean; sessionKey: string; channel: string; chatId: string; intervalSeconds: number };
+  proactive?: ProactiveSettingsFormData;
   models: {
     registrations: ModelRegistrationFormData[];
   };

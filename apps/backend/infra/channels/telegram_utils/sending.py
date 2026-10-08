@@ -59,8 +59,10 @@ async def send_markdown(
     chat_id: int | str,
     text: str,
     limiter: TelegramOutboundLimiter | None = None,
-) -> None:
+) -> object | None:
+    """发送 Markdown 文本，返回最后一条已发送的 Telegram Message（无回执时 None）。"""
     cid = int(chat_id)
+    last_sent: object | None = None
     try:
         from . import convert_with_segments
 
@@ -69,19 +71,19 @@ async def send_markdown(
     except Exception as e:
         logger.warning(f"[telegram] Markdown 转换失败，降级纯文本: {e}")
         for chunk in _split_text(text, 4090):
-            await _run_outbound(
+            last_sent = await _run_outbound(
                 limiter,
                 cid,
                 kind="send",
                 action=lambda: bot.send_message(chat_id=cid, text=chunk),
                 label="send_message(plain)",
             )
-        return
+        return last_sent
     for chunk_text, chunk_entities in chunks:
         chunk_text, chunk_entities = _strip_chunk(chunk_text, chunk_entities)
         if not chunk_text:
             continue
-        await _run_outbound(
+        last_sent = await _run_outbound(
             limiter,
             cid,
             kind="send",
@@ -92,6 +94,7 @@ async def send_markdown(
             ),
             label="send_message(markdown)",
         )
+    return last_sent
 
 
 def _split_text(text: str, limit: int) -> list[str]:
@@ -194,12 +197,15 @@ async def send_stream_markdown(
     chat_id: int | str,
     text: str,
     limiter: TelegramOutboundLimiter | None = None,
-) -> None:
-    """主动推送场景的简化流式展示。"""
+) -> object | None:
+    """主动推送场景的简化流式展示。
+
+    返回带 `message_id` 的对象（流式消息本身或降级后的 Message），供投递回执使用。
+    """
     cid = int(chat_id)
     stripped = text.strip()
     if not stripped:
-        return
+        return None
 
     if cid > 0:
         try:
@@ -207,9 +213,9 @@ async def send_stream_markdown(
             for chunk in _iter_stream_chunks(stripped):
                 await stream.push_delta(chunk, force=True)
             await stream.finalize(text)
+            return stream if stream.message_id else None
         except Exception as e:
             logger.warning("[telegram] stream edit 失败，降级普通发送: %s", e)
-            await send_markdown(bot, cid, text, limiter)
+            return await send_markdown(bot, cid, text, limiter)
 
-    else:
-        await send_markdown(bot, cid, text, limiter)
+    return await send_markdown(bot, cid, text, limiter)

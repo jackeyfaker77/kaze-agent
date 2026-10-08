@@ -77,6 +77,7 @@ class CoreRuntime:
     plugin_manager: "PluginManager | None" = None
     memory_optimizer: Any | None = None
     screen_observation: Any | None = None
+    proactive_loop: Any | None = None
 
     async def start(self) -> None:
         self.mcp_registry.start_connect_all_background()

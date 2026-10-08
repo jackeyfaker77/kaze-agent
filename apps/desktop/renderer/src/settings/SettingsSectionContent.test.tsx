@@ -80,6 +80,30 @@ describe("SettingsSectionContent", () => {
     });
   });
 
+  it("shows Wake and Drift controls without inactive Default limits", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsSectionContent sectionId="advanced" subsectionId="general" draft={draft} updateDraft={updateDraft} />,
+    );
+    assert.match(markup, /<select[^>]*aria-label="主动策略"/);
+    assert.match(markup, /Wake：按资讯价值唤醒/);
+    assert.match(markup, /aria-label="空闲时主动联系"/);
+    assert.doesNotMatch(markup, /aria-label="每日推送上限"/);
+    assert.doesNotMatch(markup, /aria-label="检查间隔（秒）"/);
+  });
+
+  it("shows Default cadence and hides quotas when admission limits are disabled", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsSectionContent sectionId="advanced" subsectionId="general" draft={{ ...draft, proactive: {
+        enabled: true, sessionKey: "daily", channel: "desktop", chatId: "", intervalSeconds: 600,
+        lifecycle: "default", anyactionEnabled: false,
+      } }} updateDraft={updateDraft} />,
+    );
+    assert.match(markup, /aria-label="检查频率"/);
+    assert.match(markup, /aria-label="检查近期消息是否重复"/);
+    assert.doesNotMatch(markup, /aria-label="检查间隔（秒）"/);
+    assert.doesNotMatch(markup, /aria-label="每日推送上限"/);
+  });
+
   it("shows model registration previews without exposing detail fields", () => {
     const markup = renderToStaticMarkup(
       <SettingsSectionContent

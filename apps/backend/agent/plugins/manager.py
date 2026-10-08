@@ -6,6 +6,7 @@ import inspect
 import json
 import logging
 import sys
+from dataclasses import replace
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any, cast
@@ -28,6 +29,12 @@ from agent.plugins.registry import MetadataKind, PluginEventType, plugin_registr
 from agent.tool_hooks.base import ToolHook
 from agent.tool_hooks.types import HookContext, HookOutcome
 from agent.core.proactive_turn.gates import ProactiveGate
+from agent.plugins.specs import (
+    McpServerSpec,
+    ProactiveSourceSpec,
+    RegisteredProactiveSource,
+    proactive_source_key,
+)
 from bus.event_bus import EventBus
 from infra.channels.contract import Channel
 
@@ -74,6 +81,13 @@ class PluginManager:
         self._channels: list[Channel] = []
         self._tool_hooks: list[ToolHook] = []
         self._proactive_gates: list[ProactiveGate] = []
+        self._proactive_modules: list[object] = []
+        self._proactive_lifecycles: list[object] = []
+        self._proactive_module_factories: list[object] = []
+        self._proactive_runtime_factories: list[object] = []
+        self._proactive_sources: list[RegisteredProactiveSource] = []
+        self._mcp_servers: list[McpServerSpec] = []
+        self._drift_skill_roots: list[Path] = []
         self._before_turn_modules: list[object] = []
         self._before_reasoning_modules: list[object] = []
         self._prompt_render_modules: list[object] = []
@@ -97,6 +111,34 @@ class PluginManager:
     @property
     def proactive_gates(self) -> list[ProactiveGate]:
         return list(self._proactive_gates)
+
+    @property
+    def proactive_modules(self) -> list[object]:
+        return list(self._proactive_modules)
+
+    @property
+    def proactive_lifecycles(self) -> list[object]:
+        return list(self._proactive_lifecycles)
+
+    @property
+    def proactive_module_factories(self) -> list[object]:
+        return list(self._proactive_module_factories)
+
+    @property
+    def proactive_runtime_factories(self) -> list[object]:
+        return list(self._proactive_runtime_factories)
+
+    @property
+    def proactive_sources(self) -> list[RegisteredProactiveSource]:
+        return list(self._proactive_sources)
+
+    @property
+    def mcp_servers(self) -> list[McpServerSpec]:
+        return list(self._mcp_servers)
+
+    @property
+    def drift_skill_roots(self) -> list[Path]:
+        return list(self._drift_skill_roots)
 
     @property
     def before_turn_modules(self) -> list[object]:
@@ -244,9 +286,18 @@ class PluginManager:
         after_turn_count_before = len(self._after_turn_modules)
         self._collect_after_turn_modules(instance)
         # 5. 给插件机会做异步初始化；失败时回滚所有注册
+        contribution_names = (
+            "proactive_modules", "proactive_lifecycles", "proactive_module_factories",
+            "proactive_runtime_factories", "proactive_sources", "mcp_servers",
+            "drift_skill_roots",
+        )
+        contribution_counts = {
+            name: len(getattr(self, f"_{name}")) for name in contribution_names
+        }
         try:
             if hasattr(instance, "initialize"):
                 await instance.initialize()
+            self._collect_proactive_contributions(instance, plugin_id, plugin_dir)
         except Exception as e:
             logger.warning("插件 %s 初始化失败，回滚: %s", mod["name"], e)
             plugin_registry.remove_plugin(mp)
@@ -262,6 +313,8 @@ class PluginManager:
             del self._after_step_modules[after_step_count_before:]
             del self._after_reasoning_modules[after_reasoning_count_before:]
             del self._after_turn_modules[after_turn_count_before:]
+            for name, count in contribution_counts.items():
+                del getattr(self, f"_{name}")[count:]
             return
         self._loaded.add(mp)
         self._collect_channels(instance)
@@ -360,6 +413,61 @@ class PluginManager:
                 )
             self._proactive_gates.append(gate)
 
+    def _collect_proactive_contributions(
+        self, instance: Any, plugin_id: str, plugin_dir: Path
+    ) -> None:
+        """在插件初始化成功后发布主动流程、来源及 Drift skill 声明。"""
+        for name in (
+            "proactive_modules",
+            "proactive_lifecycles",
+            "proactive_module_factories",
+            "proactive_runtime_factories",
+        ):
+            getattr(self, f"_{name}").extend(_load_module_list(instance, name))
+        keys = {proactive_source_key(source) for source in self._proactive_sources}
+        for spec in _load_module_list(instance, "proactive_sources"):
+            if not isinstance(spec, ProactiveSourceSpec):
+                raise TypeError("proactive_sources 必须返回 ProactiveSourceSpec")
+            if not spec.id or not spec.server or not spec.fetch_tool:
+                raise ValueError("主动源必须声明 id、server 和 fetch_tool")
+            if not spec.channels or set(spec.channels) - {
+                "alert",
+                "content",
+                "context",
+            }:
+                raise ValueError("主动源 channels 无效")
+            if spec.fetch_page_size < 0:
+                raise ValueError("主动源分页大小不能为负数")
+            source = RegisteredProactiveSource(plugin_id=plugin_id, spec=spec)
+            key = proactive_source_key(source)
+            if key in keys:
+                raise ValueError(f"主动源重复: {key}")
+            keys.add(key)
+            self._proactive_sources.append(source)
+        for spec in _load_module_list(instance, "mcp_servers"):
+            if not isinstance(spec, McpServerSpec) or not spec.name or not spec.command:
+                raise ValueError("MCP 声明必须包含 name 和 command")
+            if any(server.name == spec.name for server in self._mcp_servers):
+                raise ValueError(f"MCP server 重复: {spec.name}")
+            cwd = Path(spec.cwd)
+            self._mcp_servers.append(
+                replace(
+                    spec,
+                    cwd=str(
+                        cwd.resolve()
+                        if cwd.is_absolute()
+                        else (plugin_dir / cwd).resolve()
+                    ),
+                )
+            )
+        for raw in _load_module_list(instance, "drift_skill_roots"):
+            if not isinstance(raw, (str, Path)):
+                raise TypeError("drift_skill_roots 必须返回路径字符串或 Path")
+            path = Path(raw)
+            self._drift_skill_roots.append(
+                path.resolve() if path.is_absolute() else (plugin_dir / path).resolve()
+            )
+
     def _collect_before_reasoning_modules(self, instance: Any) -> None:
         self._collect_phase_modules(
             instance,
@@ -430,6 +538,13 @@ class PluginManager:
         self._loaded.clear()
         self._tool_hooks.clear()
         self._proactive_gates.clear()
+        self._proactive_modules.clear()
+        self._proactive_lifecycles.clear()
+        self._proactive_module_factories.clear()
+        self._proactive_runtime_factories.clear()
+        self._proactive_sources.clear()
+        self._mcp_servers.clear()
+        self._drift_skill_roots.clear()
         self._before_turn_modules.clear()
         self._before_reasoning_modules.clear()
         self._prompt_render_modules.clear()

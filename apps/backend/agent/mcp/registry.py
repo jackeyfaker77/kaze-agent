@@ -59,6 +59,20 @@ class McpServerRegistry:
                 name="mcp_connect_all",
             )
 
+    async def connect_declared_servers(self, specs) -> None:
+        """接通插件声明的 MCP，保持与普通 Agent 共用连接及工具目录。"""
+        if self._connect_task is not None:
+            await self._connect_task
+        for spec in specs:
+            if spec.name in self._clients:
+                client = self._clients[spec.name]
+                if client.command != list(spec.command) or client.env != spec.env:
+                    raise ValueError(f"插件 MCP 与已连接的 server 配置冲突: {spec.name}")
+                if spec.cwd is not None and Path(client.cwd or ".").resolve() != Path(spec.cwd).resolve():
+                    raise ValueError(f"插件 MCP 与已连接的 server 工作目录冲突: {spec.name}")
+                continue
+            await self._connect(spec.name, list(spec.command), spec.env, spec.cwd)
+
     async def shutdown(self) -> None:
         if self._connect_task is not None and not self._connect_task.done():
             self._connect_task.cancel()

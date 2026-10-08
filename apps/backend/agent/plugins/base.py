@@ -51,5 +51,26 @@ class Plugin(ABC):
         """Return official policies that participate in proactive tick admission."""
         return []
 
+    def proactive_modules(self) -> list[object]:
+        return []
+
+    def proactive_lifecycles(self) -> list[object]:
+        return []
+
+    def proactive_module_factories(self) -> list[object]:
+        return []
+
+    def proactive_runtime_factories(self) -> list[object]:
+        return []
+
+    def proactive_sources(self) -> list[object]:
+        return []
+
+    def mcp_servers(self) -> list[object]:
+        return []
+
+    def drift_skill_roots(self) -> list[object]:
+        return []
+
     def channels(self) -> list["Channel"]:
         return []

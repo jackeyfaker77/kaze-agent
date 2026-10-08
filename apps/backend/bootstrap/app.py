@@ -152,8 +152,9 @@ class AppRuntime:
                 asyncio.create_task(self.scheduler.run(), name="scheduler"),
             ]
             if self.features.enable_proactive and self.config.proactive.enabled:
-                from bootstrap.proactive import run_proactive
-                self._background_tasks.append(asyncio.create_task(run_proactive(self.core), name="proactive"))
+                from bootstrap.proactive import prepare_proactive_loop, run_proactive
+                if await prepare_proactive_loop(self.core) is not None:
+                    self._background_tasks.append(asyncio.create_task(run_proactive(self.core), name="proactive"))
             self._started = True
         except Exception:
             await self.shutdown()

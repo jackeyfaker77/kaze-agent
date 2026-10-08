@@ -10,7 +10,7 @@ from dataclasses import asdict
 from uuid import uuid4
 
 from agent.looping.interrupt import TurnInterruptState
-from bus.events_lifecycle import StreamDeltaReady, ToolCallStarted, ToolCallCompleted
+from bus.events_lifecycle import StreamDeltaReady, ToolCallStarted, ToolCallCompleted, ProactiveMessageCommitted
 from desktop_bridge.models import BridgeError, BridgeResponse
 from desktop_bridge.voice.voice_handler import DesktopVoiceHandler
 from desktop_bridge.voice.voice_service import VoiceService
@@ -47,8 +47,16 @@ class DesktopBridgeService:
             session.add_message("assistant", content, proactive=True)
             await self.sessions.append_messages(session, session.messages[-1:])
             await committed_text(key, content)
-        runtime.push_tool.register_channel("desktop", text=text, committed_text=committed_text)
+        async def pending_text(key, content):
+            # 主动宿主负责提交历史，之后再发带完整快照的桌面通知。
+            return None
+        runtime.push_tool.register_channel("desktop", text=text, committed_text=committed_text, pending_text=pending_text)
         self._event_handlers = []
+        async def proactive_committed(event):
+            if event.channel == "desktop":
+                await committed_text(event.session_key, event.assistant_response)
+        runtime.event_bus.on(ProactiveMessageCommitted, proactive_committed)
+        self._event_handlers.append((ProactiveMessageCommitted, proactive_committed))
         for event_type, method in (
             (StreamDeltaReady, "chat.delta"),
             (ToolCallStarted, "chat.tool.started"),

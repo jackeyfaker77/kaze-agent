@@ -2,6 +2,7 @@ import { SettingsField as Field } from "./SettingsField";
 import { SettingsSectionCard, SettingsToggleField, settingsInputClass } from "./SettingsFieldPrimitives";
 import type { SettingsSectionEditorProps } from "./settingsPageTypes";
 import { parseSettingsNumber } from "./settingsSectionUtils";
+import { ProactiveSettingsFields } from "./ProactiveSettingsFields";
 
 /** Renders advanced runtime settings for the selected advanced subsection. */
 export function AdvancedSettingsSection({
@@ -10,15 +11,9 @@ export function AdvancedSettingsSection({
   updateDraft,
 }: SettingsSectionEditorProps) {
   if (subsectionId !== "general") return null;
-  const proactive = draft.proactive ?? { enabled: false, sessionKey: "", channel: "desktop", chatId: "", intervalSeconds: 1800 };
-  function updateProactive(change: Partial<typeof proactive>) {
-    updateDraft(current => ({ ...current, proactive: { ...proactive, ...change } }));
-  }
   return (
     <SettingsSectionCard>
-      <SettingsToggleField label="主动检查" hint="按工作区 HEARTBEAT.md 的内容定期检查。" checked={proactive.enabled} onChange={enabled => updateProactive({ enabled })} />
-      <Field label="主动检查会话" hint="填写侧栏会话的 session_key。桌面会话也将作为消息投递目标。"><input className={settingsInputClass} value={proactive.sessionKey} onChange={e => updateProactive({ sessionKey: e.target.value })} /></Field>
-      <Field label="检查间隔（秒）"><input className={settingsInputClass} type="number" min={60} value={proactive.intervalSeconds} onChange={e => updateProactive({ intervalSeconds: Number(e.target.value) })} /></Field>
+      <ProactiveSettingsFields draft={draft} updateDraft={updateDraft} />
       <Field label="max_tokens" hint="限制单轮响应可使用的最大 token 数。">
         <input className={settingsInputClass} value={String(draft.advanced.maxTokens)} onChange={(event) => updateDraft((current) => ({ ...current, advanced: { ...current.advanced, maxTokens: parseSettingsNumber(event.target.value, current.advanced.maxTokens) } }))} placeholder="最大令牌数" />
       </Field>

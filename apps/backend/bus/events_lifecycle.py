@@ -100,6 +100,35 @@ class ProactiveMessageCommitted:
     tools_used: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ProactiveFinished:
+    session_key: str
+    tick_id: str
+    mode: Literal["proactive", "drift"]
+    terminal_action: str | None
+    gate_exit: str | None
+    skip_reason: str
+    steps_taken: int
+    alert_count: int
+    content_count: int
+    context_count: int
+    final_message: str
+    llm_call_count: int
+    cache_prompt_tokens: int | None = None
+    cache_hit_tokens: int | None = None
+    timestamp: datetime | None = None
+
+
+@dataclass(frozen=True)
+class DriftFinished:
+    session_key: str
+    skill_name: str
+    status: str
+    briefing: str
+    message_result: str
+    timestamp: datetime
+
+
 @dataclass
 class DesktopPetActionRequested:
     """Carries one validated desktop-pet command from an agent tool to the desktop host."""

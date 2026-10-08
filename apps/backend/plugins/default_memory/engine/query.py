@@ -221,6 +221,10 @@ class _QueryMixin:
         request: MemoryQuery,
     ) -> MemoryQueryResult:
         scope = resolve_memory_scope(request.scope)
+        score_threshold = None
+        if request.filters.relevance_floor == "strong":
+            thresholds = self._default_config.retrieval.thresholds
+            score_threshold = max(thresholds.preference, thresholds.profile)
         requested_domains = self._resolve_memory_domains(request)
         memory_domains = self._guard_shared_memory_domains(
             requested_domains,
@@ -248,6 +252,7 @@ class _QueryMixin:
             scope_channel=scope.channel or None,
             scope_chat_id=scope.chat_id or None,
             require_scope_match=should_require_scope_match(request, scope),
+            score_threshold=score_threshold,
         )
         records = [self._build_record(item) for item in hits if isinstance(item, dict)]
         texts = [record.summary for record in records]
@@ -258,6 +263,8 @@ class _QueryMixin:
                 "source": self.DESCRIPTOR.name,
                 "intent": "interest",
                 "effect": request.effect,
+                "relevance_floor": request.filters.relevance_floor,
+                "native_score_threshold": score_threshold,
             },
             raw={"items": list(hits)},
         )

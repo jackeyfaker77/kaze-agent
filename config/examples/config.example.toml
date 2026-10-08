@@ -107,10 +107,39 @@ model = "text-embedding-v3"
 api_key = "sk-..."
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-# 普通会话主动检查：在工作区 HEARTBEAT.md 中填写检查事项。
+# 主动检查：HEARTBEAT.md 决定推送内容，互动电量决定检查频率。
 [proactive]
 enabled = false
+lifecycle = "wake"
 session_key = ""
 default_channel = "desktop"
 default_chat_id = ""
 interval_seconds = 1800
+profile = "daily"
+# 以下去重与 AnyAction 参数仅用于 Default 生命周期。
+delivery_dedupe_hours = 10.0
+message_dedupe_enabled = true
+message_dedupe_recent_n = 5
+
+[proactive.anyaction]
+enabled = true
+daily_max_actions = 48
+min_interval_seconds = 180
+probability_min = 0.2
+probability_max = 0.82
+idle_scale_minutes = 30
+reset_hour_local = 12
+timezone = "Asia/Shanghai"
+
+[proactive.agent]
+model = ""
+max_steps = 35
+content_limit = 5
+web_fetch_max_chars = 8000
+context_prob = 0.03
+delivery_cooldown_hours = 1
+
+[proactive.drift]
+enabled = false
+max_steps = 20
+min_interval_hours = 3

@@ -36,18 +36,24 @@ class _OutboundMixin:
                 )
         return resolved
 
-    async def send(self, chat_id: str, message: str) -> None:
-        """发送文本消息（供 MessagePushTool 调用）"""
-        await _call_send_markdown(
+    async def send(self, chat_id: str, message: str) -> object | None:
+        """发送文本消息（供 MessagePushTool 调用）。
+
+        返回 Telegram Message（带真实 message_id）或 None，供投递回执使用。
+        """
+        return await _call_send_markdown(
             self._app.bot,
             self._resolve_chat_id(chat_id),
             message,
             self._telegram_outbound_limiter,
         )
 
-    async def send_stream(self, chat_id: str, message: str) -> None:
-        """发送流式文本消息（私聊优先 draft，其他场景降级普通发送）"""
-        await _call_send_stream_markdown(
+    async def send_stream(self, chat_id: str, message: str) -> object | None:
+        """发送流式文本消息（私聊优先流式编辑，其他场景降级普通发送）。
+
+        返回带 message_id 的对象或 None，供投递回执使用。
+        """
+        return await _call_send_stream_markdown(
             self._app.bot,
             self._resolve_chat_id(chat_id),
             message,
@@ -73,33 +79,32 @@ class _OutboundMixin:
         file_path: str,
         name: str | None = None,
         caption: str | None = None,
-    ) -> None:
-        """发送文件，可附带说明文字"""
+    ) -> object | None:
+        """发送文件，可附带说明文字；返回 Telegram Message 或 None。"""
         cid = int(self._resolve_chat_id(chat_id))
-        await self._telegram_outbound_limiter.run(
+        return await self._telegram_outbound_limiter.run(
             cid,
             kind="send",
             label="send_document",
             action=lambda: self._send_document_file(cid, file_path, name, caption),
         )
 
-    async def send_image(self, chat_id: str, image: str) -> None:
-        """发送图片（本地路径或 URL）"""
+    async def send_image(self, chat_id: str, image: str) -> object | None:
+        """发送图片（本地路径或 URL）；返回 Telegram Message 或 None。"""
         cid = int(self._resolve_chat_id(chat_id))
         if image.startswith(("http://", "https://")):
-            await self._telegram_outbound_limiter.run(
+            return await self._telegram_outbound_limiter.run(
                 cid,
                 kind="send",
                 label="send_photo",
                 action=lambda: self._app.bot.send_photo(chat_id=cid, photo=image),
             )
-        else:
-            await self._telegram_outbound_limiter.run(
-                cid,
-                kind="send",
-                label="send_photo",
-                action=lambda: self._send_photo_file(cid, image),
-            )
+        return await self._telegram_outbound_limiter.run(
+            cid,
+            kind="send",
+            label="send_photo",
+            action=lambda: self._send_photo_file(cid, image),
+        )
 
     async def _send_document_file(
         self,

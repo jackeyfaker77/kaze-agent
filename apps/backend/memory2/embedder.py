@@ -35,6 +35,10 @@ class Embedder:
         results = await self.embed_batch([text])
         return results[0]
 
+    @property
+    def model_id(self) -> str:
+        return self._model
+
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """分批 embed，每批 ≤ MAX_BATCH，批间 sleep 0.3s"""
         results: list[list[float]] = []

@@ -135,6 +135,17 @@ class ToolRegistry:
     def get_context(self) -> dict[str, str]:
         return dict(self._context_var.get())
 
+    def snapshot(self) -> "ToolRegistry":
+        """固定工具目录，保留同一工具实例及其共享 MCP 连接。"""
+        registry = ToolRegistry()
+        for name, tool in self._tools.items():
+            meta, document = self._metadata[name], self._documents[name]
+            registry.register(tool, risk=meta.risk, always_on=meta.always_on,
+                              search_hint=meta.search_hint, source_type=document.source_type,
+                              source_name=document.source_name)
+        registry.set_context(**self.get_context())
+        return registry
+
     def register(
         self,
         tool: Tool,
@@ -245,9 +256,13 @@ class ToolRegistry:
         arguments: dict[str, Any],
         *,
         context: dict[str, Any] | None = None,
+        raise_errors: bool = False,
+        execution_timeout: float | None = None,
     ) -> str | ToolResult:
         tool = self._tools.get(name)
         if tool is None:
+            if raise_errors:
+                raise LookupError(f"工具 '{name}' 不存在")
             return f"工具 '{name}' 不存在"
         try:
             execution_context = context if context is not None else self.get_context()
@@ -262,8 +277,16 @@ class ToolRegistry:
                     merged[key] = execution_context[key]
             if not _tool_defines_parameter(tool, _PROGRESS_DESCRIPTION_FIELD):
                 merged.pop(_PROGRESS_DESCRIPTION_FIELD, None)
+            if execution_timeout is not None:
+                import asyncio
+
+                return await asyncio.wait_for(
+                    tool.execute(**merged), timeout=execution_timeout
+                )
             return await tool.execute(**merged)
         except Exception as e:
+            if raise_errors:
+                raise
             logger.error(f"工具 {name} 执行出错: {e}", exc_info=True)
             return f"工具执行出错: {e}"
 

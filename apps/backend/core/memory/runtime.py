@@ -45,6 +45,11 @@ class MemoryRuntime:
     def _session_metadata(self) -> dict[str, Any] | None:
         return self._session_metadata_var.get()
 
+    @property
+    def embedding_api(self):
+        """向主动兴趣匹配提供当前记忆插件使用的同一个向量客户端。"""
+        return getattr(self.engine, "embedding_api", None)
+
     def read_long_term(self) -> str:
         return self.markdown.read_long_term(session_metadata=self._session_metadata())
 

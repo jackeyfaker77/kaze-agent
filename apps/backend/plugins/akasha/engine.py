@@ -623,6 +623,10 @@ class AkashaMemoryEngine:
         )
 
     # 暂存本轮激活，等待 after-turn 拿到真实 message id 后建边。
+    @property
+    def embedding_api(self):
+        return self._embedder
+
     def _remember_pending_activation(
         self,
         request: MemoryQuery,

@@ -644,9 +644,9 @@ class SchedulerService:
                 f"[scheduler] soft AI 完成 {label!r}  耗时={elapsed:.1f}s  P90={self.tracker.lead:.1f}s"
             )
             if content:
-                result = await self._run_job_operation(
+                receipt = await self._run_job_operation(
                     job,
-                    lambda: self.push_tool.execute(
+                    lambda: self.push_tool.send(
                         channel=job.channel,
                         chat_id=job.chat_id,
                         message=content,
@@ -654,7 +654,16 @@ class SchedulerService:
                         session_key=job.session_key,
                     ),
                 )
-                logger.info(f"[scheduler] soft 推送完成 {label!r}: {result}")
+                if receipt.ok:
+                    logger.info(
+                        f"[scheduler] soft 推送完成 {label!r}: {receipt.text}"
+                        f"  delivery_ref={receipt.delivery_ref or '（无平台回执）'}"
+                    )
+                else:
+                    logger.error(
+                        f"[scheduler] soft 推送失败 {label!r}: "
+                        f"{receipt.error or receipt.text}"
+                    )
             else:
                 logger.warning(f"[scheduler] soft AI 返回空内容 {label!r}，跳过推送")
 

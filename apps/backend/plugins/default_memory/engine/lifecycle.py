@@ -56,6 +56,10 @@ class DefaultMemoryEngine(
 ):
     """默认的语义记忆引擎实现。"""
 
+    @property
+    def embedding_api(self):
+        return self._embedder
+
     DESCRIPTOR = MemoryEngineDescriptor(
         name="default",
         profile=EngineProfile.RICH_MEMORY_ENGINE,

@@ -54,6 +54,14 @@ class TelegramStreamMessage:
         self._last_sent_at = 0.0
         self._edit_cooldown_until = 0.0
 
+    @property
+    def message_id(self) -> int | None:
+        """已创建的真实 Telegram 消息号；尚未创建消息时为 None。
+
+        供上层做投递回执：MessagePushTool 读取返回对象的 `message_id` 属性。
+        """
+        return self._message_id
+
     # ------------------------------------------------------------------
     # public API
     # ------------------------------------------------------------------

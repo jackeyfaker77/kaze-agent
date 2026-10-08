@@ -1,6 +1,7 @@
 from agent.plugins.base import Plugin
 from agent.plugins.config import PluginConfig
 from agent.plugins.context import PluginContext, PluginKVStore
+from agent.plugins.specs import McpServerSpec, ProactiveSourceSpec, RegisteredProactiveSource
 from agent.plugins.decorators import (
     on_before_turn,
     on_before_reasoning,
@@ -20,6 +21,9 @@ __all__ = [
     "PluginConfig",
     "PluginContext",
     "PluginKVStore",
+    "McpServerSpec",
+    "ProactiveSourceSpec",
+    "RegisteredProactiveSource",
     "on_before_turn",
     "on_before_reasoning",
     "on_before_step",

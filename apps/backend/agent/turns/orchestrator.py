@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+from uuid import uuid4
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -55,19 +56,8 @@ class TurnOrchestrator:
             channel=channel,
             chat_id=chat_id,
         )
-        # 2. reply 路径只写 proactive session；后处理只归 passive commit 管。
-        self._persist_proactive_session(
-            session=session,
-            content=content,
-            media=media,
-            result=result,
-            metadata=source_metadata,
-        )
-        await self._session.session_manager.append_messages(
-            session, session.messages[-1:]
-        )
-
-        # 3. 先执行发送前 side_effects，再真正 dispatch 到 outbound。
+        source_metadata["delivery_id"] = uuid4().hex
+        # 2. 先执行发送前 side_effects，再真正 dispatch 到 outbound。
         await self._run_effects(result.side_effects)
         try:
             sent = await self._dispatch_outbound(
@@ -81,8 +71,18 @@ class TurnOrchestrator:
             await self._run_effects(result.failure_side_effects)
             raise
 
-        # 4. 根据是否真正发送成功，分别执行 success / failure side_effects。
+        # 3. 只有真实发送成功才提交可见历史及成功副作用。
         if sent:
+            self._persist_proactive_session(
+                session=session,
+                content=content,
+                media=media,
+                result=result,
+                metadata=source_metadata,
+            )
+            await self._session.session_manager.append_messages(
+                session, session.messages[-1:]
+            )
             if self._session.presence:
                 self._session.presence.record_proactive_sent(session_key)
             await self._run_effects(result.success_side_effects)
@@ -91,7 +91,6 @@ class TurnOrchestrator:
                     ProactiveMessageCommitted(
                         session_key=session_key,
                         channel=channel,
-                        
                         chat_id=chat_id,
                         assistant_response=content,
                         tools_used=("message_push",),
@@ -177,6 +176,7 @@ class TurnOrchestrator:
             content,
             media=media if media else None,
             proactive=True,
+            delivery_id=metadata.get("delivery_id", ""),
             tools_used=["message_push"],
             evidence_item_ids=[str(item_id) for item_id in result.evidence],
             source_refs=source_refs,
@@ -192,5 +192,9 @@ class TurnOrchestrator:
         channel: str,
         chat_id: str,
     ) -> dict[str, str]:
-        return {"source": "proactive", "session_key_override": session_key,
-                "transport_channel": channel, "transport_chat_id": chat_id}
+        return {
+            "source": "proactive",
+            "session_key_override": session_key,
+            "transport_channel": channel,
+            "transport_chat_id": chat_id,
+        }

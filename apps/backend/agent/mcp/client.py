@@ -70,6 +70,7 @@ class McpClient:
         self._process: asyncio.subprocess.Process | None = None
         self._next_id = 1
         self._tool_infos: list[McpToolInfo] = []
+        self._call_lock = asyncio.Lock()
         self._recent_stdout: deque[str] = deque(maxlen=8)
         self._recent_stderr: deque[str] = deque(maxlen=8)
 
@@ -150,6 +151,12 @@ class McpClient:
         timeout: float | None = None,
     ) -> str:
         """调用远端工具，返回结果字符串。"""
+        async with self._call_lock:
+            return await self._call_locked(tool_name, arguments, timeout=timeout)
+
+    async def _call_locked(
+        self, tool_name: str, arguments: dict[str, Any], *, timeout: float | None
+    ) -> str:
         call_id = self._new_id()
         await self._send(
             {
@@ -184,7 +191,10 @@ class McpClient:
                 data=data,
             )
 
-        content = resp.get("result", {}).get("content", [])
+        result = resp.get("result", {})
+        if result.get("isError"):
+            raise McpToolError(server=self.name, tool_name=tool_name, message=str(result.get("content", "MCP tool failed")))
+        content = result.get("content", [])
         if isinstance(content, list):
             return "\n".join(
                 block.get("text", str(block)) if isinstance(block, dict) else str(block)

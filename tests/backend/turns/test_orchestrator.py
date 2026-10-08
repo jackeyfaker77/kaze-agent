@@ -124,7 +124,7 @@ async def test_orchestrator_proactive_reply_persists_dispatches_and_runs_success
     assert sent is True
     assert session.messages[0]["proactive"] is True
     assert session.messages[0]["content"] == "hello"
-    assert order == ["persist", "side_effect", "dispatch", "presence", "success_effect"]
+    assert order == ["side_effect", "dispatch", "persist", "presence", "success_effect"]
 
 
 @pytest.mark.asyncio
