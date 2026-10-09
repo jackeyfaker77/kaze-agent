@@ -73,6 +73,9 @@ lme_error_log_*.txt
 # Local AI assistant docs
 /CLAUDE.md
 /AGENTS.md
+/.learn/
+/.archify/
+/docs/kaze-system-architecture.visual-check.*
 /memory_annotation_from_*.json
 .squad/
 /locks/reviewer.receive.lock
