@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
-import time
-from dataclasses import dataclass
+import secrets
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 import httpx
 
@@ -21,74 +23,66 @@ _REFRESH_SKEW_SECONDS = 120
 
 
 @dataclass(frozen=True)
-class DeviceCode:
-    user_code: str
-    device_auth_id: str
-    verification_uri: str
-    interval: int
+class BrowserLogin:
+    authorization_url: str = field(repr=False)
+    state: str = field(repr=False)
+    code_verifier: str = field(repr=False)
+    nonce: str = field(repr=False)
+    redirect_uri: str
 
 
 class CodexAuthDriver:
-    """执行 Codex device-code 登录并提供可刷新的请求头。"""
+    """执行 Codex 浏览器 OAuth 登录并提供可刷新的请求头。"""
 
     def __init__(self, store: CredentialStore, credential_id: str) -> None:
         self.store = store
         self.credential_id = credential_id
 
-    def begin_device_login(self) -> DeviceCode:
+    def begin_browser_login(self, redirect_uri: str) -> BrowserLogin:
+        """每次授权生成独立的 state、nonce 和 PKCE，密钥只留在后端。"""
+        state = secrets.token_urlsafe(32)
+        verifier = secrets.token_urlsafe(64)
+        nonce = secrets.token_urlsafe(32)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
+        params = {
+            "response_type": "code",
+            "client_id": CODEX_CLIENT_ID,
+            "redirect_uri": redirect_uri,
+            "scope": "openid profile email offline_access",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": state,
+            "nonce": nonce,
+            "id_token_add_organizations": "true",
+            "codex_cli_simplified_flow": "true",
+            "originator": "codex_cli_rs",
+        }
+        return BrowserLogin(f"{CODEX_AUTH_BASE}/oauth/authorize?{urlencode(params)}", state, verifier, nonce, redirect_uri)
+
+    def complete_browser_login(self, login: BrowserLogin, authorization_code: str) -> Credential:
+        """交换本机回调收到的授权码；由调用方在确认未取消后保存。"""
+        if not authorization_code:
+            raise AuthenticationError("OpenAI 回调缺少授权结果，请重新登录")
         response = httpx.post(
-            f"{CODEX_AUTH_BASE}/api/accounts/deviceauth/usercode",
-            json={"client_id": CODEX_CLIENT_ID},
-            timeout=15,
+            CODEX_TOKEN_URL,
+            data={
+                "grant_type": "authorization_code",
+                "code": authorization_code,
+                "redirect_uri": login.redirect_uri,
+                "client_id": CODEX_CLIENT_ID,
+                "code_verifier": login.code_verifier,
+            },
+            timeout=20,
         )
         if response.status_code == 429:
             raise RateLimitError("Codex 登录请求被限流，请稍后重试")
-        self._require_success(response, "获取 Codex device code 失败")
+        self._require_success(response, "Codex 登录授权交换失败，请重新登录")
         data = response.json()
-        try:
-            return DeviceCode(
-                user_code=str(data["user_code"]),
-                device_auth_id=str(data["device_auth_id"]),
-                verification_uri=f"{CODEX_AUTH_BASE}/codex/device",
-                interval=max(3, int(data.get("interval", 5))),
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise AuthenticationError("Codex device code 响应结构无效") from exc
-
-    def complete_device_login(
-        self,
-        code: DeviceCode,
-        *,
-        timeout_seconds: int = 900,
-    ) -> Credential:
-        """轮询授权结果、交换 token 并保存独立凭据。"""
-        deadline = time.monotonic() + timeout_seconds
-        while time.monotonic() < deadline:
-            time.sleep(code.interval)
-            response = httpx.post(
-                f"{CODEX_AUTH_BASE}/api/accounts/deviceauth/token",
-                json={"device_auth_id": code.device_auth_id, "user_code": code.user_code},
-                timeout=15,
-            )
-            if response.status_code in {403, 404}:
-                continue
-            self._require_success(response, "Codex 登录轮询失败")
-            credential = self._exchange_code(response.json())
-            self.store.put(self.credential_id, credential)
-            return credential
-        raise AuthenticationError("Codex 登录等待超时")
-
-    def poll_device_login(self, code: DeviceCode) -> Credential | None:
-        """只查询一次授权结果，由调用方决定是否保存，便于取消登录。"""
-        response = httpx.post(
-            f"{CODEX_AUTH_BASE}/api/accounts/deviceauth/token",
-            json={"device_auth_id": code.device_auth_id, "user_code": code.user_code},
-            timeout=15,
-        )
-        if response.status_code in {403, 404}:
-            return None
-        self._require_success(response, "Codex 登录查询失败")
-        return self._exchange_code(response.json())
+        claims = _id_token_claims(str(data.get("id_token") or ""))
+        returned_nonce = claims.get("nonce")
+        if not isinstance(returned_nonce, str) or not secrets.compare_digest(returned_nonce, login.nonce):
+            raise AuthenticationError("Codex 登录身份校验失败，请重新登录")
+        return self._credential_from_token(data)
 
     def headers(self, *, force_refresh: bool = False) -> dict[str, str]:
         credential = self.store.get(self.credential_id)
@@ -127,26 +121,6 @@ class CodexAuthDriver:
             )
             self.store.replace_locked(self.credential_id, refreshed)
             return refreshed
-
-    def _exchange_code(self, data: dict) -> Credential:
-        try:
-            authorization_code = str(data["authorization_code"])
-            code_verifier = str(data["code_verifier"])
-        except (KeyError, TypeError) as exc:
-            raise AuthenticationError("Codex 授权响应结构无效") from exc
-        response = httpx.post(
-            CODEX_TOKEN_URL,
-            data={
-                "grant_type": "authorization_code",
-                "code": authorization_code,
-                "redirect_uri": f"{CODEX_AUTH_BASE}/deviceauth/callback",
-                "client_id": CODEX_CLIENT_ID,
-                "code_verifier": code_verifier,
-            },
-            timeout=20,
-        )
-        self._require_success(response, "Codex token 交换失败")
-        return self._credential_from_token(response.json())
 
     @staticmethod
     def _credential_from_token(
@@ -197,16 +171,24 @@ class CodexAuthDriver:
         raise AuthenticationError(f"{message} (HTTP {response.status_code})")
 
 
-def _account_id_from_jwt(token: str) -> str:
-    """只解析账号路由声明，不验证已由 OAuth 端点签发的 token。"""
+def _id_token_claims(token: str) -> dict:
+    """只解析固定 HTTPS OAuth 端点返回的 ID token，不接受浏览器提交的 token。"""
     try:
         payload = token.split(".")[1]
         payload += "=" * (-len(payload) % 4)
         claims = json.loads(base64.urlsafe_b64decode(payload))
-    except (IndexError, ValueError, json.JSONDecodeError) as exc:
-        raise AuthenticationError("Codex access token 不是有效 JWT") from exc
+    except (IndexError, ValueError, UnicodeDecodeError) as exc:
+        raise AuthenticationError("Codex ID token 不是有效 JWT") from exc
+    if not isinstance(claims, dict):
+        raise AuthenticationError("Codex ID token 声明结构无效")
+    return claims
+
+
+def _account_id_from_jwt(token: str) -> str:
+    """解析 OAuth 端点签发的账号路由声明。"""
+    claims = _id_token_claims(token)
     auth_claims = claims.get("https://api.openai.com/auth", {})
-    account_id = auth_claims.get("chatgpt_account_id")
+    account_id = auth_claims.get("chatgpt_account_id") if isinstance(auth_claims, dict) else None
     if not isinstance(account_id, str) or not account_id:
         raise AuthenticationError("Codex token 缺少 chatgpt_account_id")
     return account_id
