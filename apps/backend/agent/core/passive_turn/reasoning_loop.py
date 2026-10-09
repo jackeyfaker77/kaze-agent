@@ -110,6 +110,7 @@ class _PassiveReasoningLoopMixin:
                 "yes" if len(visible_names) == len(always_on) else "maybe",
             )
 
+        # 最小 Agent loop：反复调用 LLM；有 tool_calls 就执行工具并继续，否则产出最终回答。
         iteration = -1
         while True:
             iteration += 1

@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Kaze 系统架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/jackeyfaker77/kaze-agent.git",
+      "provider": "github",
+      "revision": "53e5b248c970f28d7bdd81cca2c8fed0c5b6cf1b"
+    },
+    "viewBox": [1180, 700],
+    "views": [
+      {
+        "id": "desktop-path",
+        "label": "桌面对话主链路",
+        "focus": ["user", "react-ui", "electron-main", "desktop-bridge", "agent-loop", "model-runtime"],
+        "note": "从用户输入开始，沿桌面 RPC、Agent 编排直到模型推理。"
+      },
+      {
+        "id": "agent-capabilities",
+        "label": "Agent 能力与状态",
+        "focus": ["agent-loop", "tool-system", "session-store", "shared-memory"],
+        "note": "查看会话状态、长期记忆与可扩展工具如何围绕 AgentLoop 协作。"
+      },
+      {
+        "id": "background-inputs",
+        "label": "后台与外部入口",
+        "focus": ["external-channels", "scheduler", "agent-loop"],
+        "note": "Telegram、QQ、插件频道和定时任务汇入同一 Agent 会话机制。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户",
+      "sublabel": "对话 · 语音 · 桌宠",
+      "pos": [28, 280],
+      "size": [122, 72],
+      "sources": [{ "path": "README.md", "label": "桌面功能" }]
+    },
+    {
+      "id": "react-ui",
+      "type": "frontend",
+      "label": "React Renderer",
+      "sublabel": "SessionApp · 工作台",
+      "pos": [185, 280],
+      "size": [150, 72],
+      "sources": [{ "path": "apps/desktop/renderer/src/SessionApp.tsx", "label": "前端入口" }]
+    },
+    {
+      "id": "electron-main",
+      "type": "frontend",
+      "label": "Electron 主进程",
+      "sublabel": "窗口与后端进程",
+      "pos": [370, 280],
+      "size": [150, 72],
+      "sources": [{ "path": "apps/desktop/src/main.ts", "label": "桌面主进程" }]
+    },
+    {
+      "id": "desktop-bridge",
+      "type": "backend",
+      "label": "Desktop Bridge",
+      "sublabel": "JSONL RPC 服务",
+      "pos": [555, 280],
+      "size": [150, 72],
+      "sources": [
+        { "path": "apps/backend/desktop_bridge/server.py", "label": "Bridge server" },
+        { "path": "apps/backend/desktop_bridge/session_service.py", "label": "会话桥接" }
+      ]
+    },
+    {
+      "id": "agent-loop",
+      "type": "backend",
+      "label": "AgentLoop",
+      "sublabel": "推理 · 工具 · 生命周期",
+      "pos": [750, 280],
+      "size": [158, 72],
+      "sources": [
+        { "path": "apps/backend/agent/core/runner.py", "label": "Agent runner" },
+        { "path": "apps/backend/agent/looping/core/assembly.py", "label": "循环装配" },
+        { "path": "apps/backend/bootstrap/tools.py", "label": "工具装配" }
+      ]
+    },
+    {
+      "id": "model-runtime",
+      "type": "cloud",
+      "label": "Model Runtime",
+      "sublabel": "Provider · Responses API",
+      "pos": [970, 280],
+      "size": [164, 72],
+      "sources": [
+        { "path": "apps/backend/agent/model_runtime/provider.py", "label": "模型提供器" },
+        { "path": "apps/backend/agent/model_runtime/transports/responses.py", "label": "推理传输" }
+      ]
+    },
+    {
+      "id": "external-channels",
+      "type": "external",
+      "label": "外部频道",
+      "sublabel": "Telegram · QQ · 插件",
+      "pos": [555, 88],
+      "size": [150, 72],
+      "sources": [
+        { "path": "apps/backend/infra/channels/contract.py", "label": "频道契约" },
+        { "path": "apps/backend/infra/channels/base.py", "label": "频道基类" }
+      ]
+    },
+    {
+      "id": "scheduler",
+      "type": "messagebus",
+      "label": "后台调度",
+      "sublabel": "Cron · HEARTBEAT",
+      "pos": [555, 472],
+      "size": [150, 72],
+      "sources": [
+        { "path": "apps/backend/agent/scheduler.py", "label": "调度服务" },
+        { "path": "apps/backend/agent/scheduler_cron.py", "label": "Cron" }
+      ]
+    },
+    {
+      "id": "session-store",
+      "type": "database",
+      "label": "会话存储",
+      "sublabel": "SessionManager · sessions.db",
+      "pos": [970, 88],
+      "size": [164, 72],
+      "sources": [
+        { "path": "apps/backend/session/manager/manager.py", "label": "会话管理" },
+        { "path": "apps/backend/session/store/messages.py", "label": "消息持久化" }
+      ]
+    },
+    {
+      "id": "tool-system",
+      "type": "messagebus",
+      "label": "能力扩展层",
+      "sublabel": "Tools · MCP · Plugins",
+      "pos": [970, 424],
+      "size": [164, 72],
+      "sources": [
+        { "path": "apps/backend/agent/mcp/registry.py", "label": "MCP 注册表" },
+        { "path": "apps/backend/agent/plugins/manager.py", "label": "插件管理" },
+        { "path": "apps/backend/agent/tools/registry.py", "label": "内置工具" }
+      ]
+    },
+    {
+      "id": "shared-memory",
+      "type": "database",
+      "label": "共享长期记忆",
+      "sublabel": "workspace/memory · Memory2",
+      "pos": [970, 544],
+      "size": [164, 72],
+      "sources": [
+        { "path": "apps/backend/core/memory/engine.py", "label": "记忆抽象" },
+        { "path": "apps/backend/core/memory/markdown/runtime.py", "label": "Markdown 记忆" },
+        { "path": "apps/backend/memory2/store/__init__.py", "label": "语义记忆" }
+      ]
+    }
+  ],
+  "connections": [
+    { "id": "user-ui", "from": "user", "to": "react-ui", "label": "交互", "variant": "emphasis" },
+    { "id": "ui-electron", "from": "react-ui", "to": "electron-main", "label": "IPC" },
+    { "id": "electron-bridge", "from": "electron-main", "to": "desktop-bridge", "label": "JSONL stdio", "labelAt": [538, 276] },
+    { "id": "bridge-agent", "from": "desktop-bridge", "to": "agent-loop", "label": "session_key 请求", "variant": "emphasis", "labelAt": [780, 380] },
+    { "id": "agent-model", "from": "agent-loop", "to": "model-runtime", "label": "流式推理", "variant": "emphasis", "labelAt": [970, 260] },
+    { "id": "channels-agent", "from": "external-channels", "to": "agent-loop", "label": "频道消息" },
+    { "id": "scheduler-agent", "from": "scheduler", "to": "agent-loop", "label": "定时触发" },
+    { "id": "agent-session", "from": "agent-loop", "to": "session-store", "label": "消息与会话状态" },
+    { "id": "agent-tools", "from": "agent-loop", "to": "tool-system", "label": "工具调用", "labelAt": [976, 390] },
+    { "id": "agent-memory", "from": "agent-loop", "to": "shared-memory", "label": "召回与写入", "labelAt": [900, 516] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "统一会话主干",
+      "items": ["桌面 Bridge 与外部频道都进入 AgentLoop", "session_key 隔离消息记录与任务归属"]
+    },
+    {
+      "dot": "violet",
+      "title": "状态分层",
+      "items": ["会话消息持久化到 sessions.db", "workspace/memory 在不同会话间共享"]
+    },
+    {
+      "dot": "amber",
+      "title": "能力可扩展",
+      "items": ["内置 Tools、MCP 与 Plugins 通过统一工具链执行", "模型连接由 Model Runtime 抽象"]
+    }
+  ]
+}

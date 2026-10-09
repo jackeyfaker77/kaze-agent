@@ -163,13 +163,17 @@ class DesktopBridgeService:
             task.cancel()
         return task is not None
 
+    # [消息链路 6/6] Python 业务 RPC 入口，由 server.py::DesktopBridgeServer 调用：
+    # 解析 method + payload，路由到会话、记忆或 AgentLoop，并包装统一响应。
     async def handle(self, request, *, emit_event=None):
         request_id = str(request.get("id") or uuid4())
+        # Electron 传入的请求统一由 method 和 payload 描述。
         method = str(request.get("method") or "")
         payload = request.get("payload") or {}
         try:
             if not isinstance(payload, dict):
                 raise ValueError("payload 必须是对象")
+            # chat.send、session.get、memory.get 等请求共用同一个路由入口。
             result = await self._dispatch(method, payload, request_id)
             if method in {"session.get", "session.create", "session.draft"}:
                 await self.publish_event({"id": request_id, "type": "event", "method": "session.selected", "payload": {"session_key": self.active_session_key}})
@@ -266,11 +270,13 @@ class DesktopBridgeService:
                 raise ValueError("media 必须是文件路径列表")
             if not content and not media:
                 raise ValueError("消息不能为空")
+            # 同一个 session_key 同时只允许一个回复任务，避免会话历史并发写入。
             if key in self._requests:
                 raise ValueError("此会话正在回复，请等待或停止后重试")
             credential = self.runtime.config.api_key.strip()
             if credential in {"sk-...", "YOUR_API_KEY", "your-api-key"} or credential.startswith("${"):
                 raise ValueError(f"模型 {self.runtime.config.model} 的 API Key 尚未配置，请在“模型”中填写有效密钥或选择已配置的模型。")
+            # session_key 用于获取或创建彼此隔离的会话状态。
             session = self.sessions.get_or_create(key)
             previous_message_ids = {message["id"] for message in session.messages if message.get("id")}
             if not session.metadata.get("title") or session.metadata["title"] == "新会话":
@@ -281,6 +287,7 @@ class DesktopBridgeService:
             if voice_turn:
                 self._voice_turns[voice_turn] = key
             try:
+                # 把桌面消息交给 AgentLoop；stream_events=True 会持续发布增量与工具事件。
                 reply = await self.runtime.loop.process_direct(
                     content=content, session_key=key, channel="desktop", chat_id=key,
                     stream_events=True, media=media,
@@ -292,6 +299,7 @@ class DesktopBridgeService:
                     # A provider may finish normally while handling cancellation.
                     self.runtime.loop.discard_interrupt_state(key, interrupted)
                 result = {"session_key": key, "reply": reply, "session": self._snapshot(key)}
+                # 推理结束后发布完整 Session，Renderer 据此收敛 optimistic update 与流式状态。
                 await self.publish_event({"id": request_id, "type": "event", "method": "chat.done", "payload": result})
                 if voice_turn:
                     await self._speak_reply(key, voice_turn, request_id, reply)

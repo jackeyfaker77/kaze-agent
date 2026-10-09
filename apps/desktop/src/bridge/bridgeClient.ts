@@ -309,6 +309,8 @@ export class DesktopBridgeClient extends EventEmitter {
     return write;
   }
 
+  // [消息链路 4/6] Electron 侧的进程通信客户端：确保 Python 子进程已启动，
+  // 为请求分配 id，并通过 stdin/stdout 完成一次 JSONL 请求—响应匹配。
   async invoke(request: Omit<BridgeRequest, "id">, skipReady = false): Promise<BridgeResponse> {
     if (!this.session) {
       await this.start();
@@ -328,6 +330,7 @@ export class DesktopBridgeClient extends EventEmitter {
 
     const id = randomUUID();
     const payload: BridgeRequest = { id, method: request.method, payload: request.payload };
+    // 每条请求占一行；Python 接收位置是 apps/backend/desktop_bridge/server.py::serve_stdio()。
     const text = JSON.stringify(payload) + "\n";
     return await new Promise<BridgeResponse>((resolvePromise) => {
       let settled = false;

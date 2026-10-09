@@ -23,6 +23,7 @@ from .streaming import _StreamingMixin
 __all__ = ["AgentLoop"]
 
 
+# AgentLoop 是外部调用的稳定入口；内部职责拆给装配、流式、消息处理和中断 mixin。
 class AgentLoop(
     _AssemblyMixin,
     _StreamingMixin,

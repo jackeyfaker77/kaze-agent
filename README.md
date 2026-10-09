@@ -13,7 +13,7 @@ Kaze 的每段对话使用独立的 `session_key`，消息记录分别保存，�
 | 知识与运行 | 直观查看全局记忆文档，以及 MCP、Skills 和定时任务信息 |
 | 模型 | 添加、编辑、移除 API 模型连接；提供 Codex 的 ChatGPT 订阅登录入口 |
 | 桌宠 | 手动导入 ZIP、选择桌宠、显示／隐藏、拖动、动画和回复气泡 |
-| 语音与后台任务 | 配置语音输入／合成、热键、定时任务和基于 `HEARTBEAT.md` 的主动检查 |
+| 语音与后台任务 | 配置语音输入／合成、热键、定时任务和 Default／Wake 主动管线 |
 
 工作台展示已持久化的会话记录与工具调用链路，支持长文本预览与结果追踪。当前工作台侧重于查看历史、工具链路及执行状态，不提供工作台内的消息直接编辑、撤销和删除。
 
@@ -30,7 +30,10 @@ flowchart LR
   Agent --> Sessions[SessionManager / sessions.db]
   Agent --> Tools[工具 / MCP / 插件]
   Agent --> Memory[全局 workspace/memory]
-  Tasks[定时任务 / HEARTBEAT.md] --> Agent
+  Tasks[Cron 定时任务] --> Agent
+  Proactive[Default / Wake 主动 Kernel] -->|成功投递后写入| Sessions
+  Proactive --> Tools
+  Proactive --> Memory
 ```
 
 - 会话直接使用 `session_key`，桌面 RPC 也接受 `chat_id`。新桌面会话默认生成 `desktop:<uuid>`；外部频道使用 `<channel>:<chat_id>`。会话间消息记录独立，长期记忆共享。
@@ -38,9 +41,11 @@ flowchart LR
 - `workspace/memory/` 存放 Markdown 长期记忆、历史、待整理内容及近期上下文。可选语义记忆插件使用全局索引。
 - 桌宠包统一放在 `workspace/pets/`。桌宠选择属于应用，可在不同会话中使用；支持导入、切换、显示、隐藏、拖动、动画和回复气泡。
 - 语音使用全局 `[voice.tts].voice_id`，热键输入发送到当前会话。模型目录的第一个注册项为全局主模型。
-- 定时任务按 `session_key` 归属。普通主动检查读取工作区 `HEARTBEAT.md`，设置中的“高级”可以配置会话和间隔；配置文件还支持外部频道目标。
+- 定时任务按 `session_key` 归属。Default／Wake 主动管线每轮读取工作区 `PROACTIVE_CONTEXT.md`，可选 `HEARTBEAT.md` 作为附加任务规则。主动检查默认关闭，设置中的“高级”可配置策略、会话和外部频道目标，详见 [主动推送指南](docs/_handbook/proactive-guide.md)。
 
 核心入口：`apps/backend/bootstrap/tools.py`；会话桥接：`apps/backend/desktop_bridge/session_service.py`；前端入口：`apps/desktop/renderer/src/SessionApp.tsx`。
+
+[桌面主链路交互架构图](docs/kaze-system-architecture.html) 提供路径演示、主题切换和导出，源码引用固定在 `53e5b24` 快照；当前主动管线以以上架构和主动推送指南为准。图源为 [kaze-system.archify.json](docs/kaze-system.archify.json)。
 
 ## Windows 开发
 

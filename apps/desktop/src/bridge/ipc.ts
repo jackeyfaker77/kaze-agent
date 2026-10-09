@@ -95,10 +95,13 @@ export function registerDesktopIpc({
   onVoiceSettingsChanged,
   onPetVisibilityChanged,
 }: RegisterDesktopIpcOptions): void {
+  // [消息链路 3/6] Electron 主进程在这里接收 Renderer 的 desktop:invoke。
   ipcMain.handle("desktop:invoke", async (_event: IpcMainInvokeEvent, request: { method: string; payload: Record<string, unknown> }) => {
     if (request.method.startsWith("observation.")) {
       throw new Error("observation bridge methods are restricted to the main process");
     }
+    // 下一步：bridge 是同目录 bridgeClient.ts 的 DesktopBridgeClient 实例；
+    // invoke() 会把 method + payload 编码成一行 JSON，并写入 Python 子进程 stdin。
     const response = await bridge.invoke(request);
     return assetTransport(response, localAssets.grantTrustedPayload(response.payload));
   });

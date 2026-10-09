@@ -72,12 +72,15 @@ export function useConversation() {
     finally { navigating.current = false; setLoading(false); }
   }
   async function send() {
+    // [消息链路 1/6] 检查 Electron↔Python 通信是否就绪，并阻止重复发送、导航冲突和空消息。
     if (!ready || locked.current || navigating.current || (!draft.trim() && !attachments.length)) return;
     locked.current = true; textSending.current = true; setBusy(true); setError("");
     const content = draft, media = attachments, currentKey = key.current, previous = session;
     setDraft(""); setAttachments([]); setDelta("");
+    // Optimistic update：后端返回前先把用户消息写入本地 Session，让界面立即响应。
     setSession({ session_key: currentKey, title: previous?.title || content.slice(0, 60) || "附件会话", messages: [...(previous?.messages ?? []), { role: "user", content, media }] });
     try {
+      // 下一步：调用同目录 api.ts 的 rpc()，把 session_key、content、media 发给 Electron 主进程。
       const result = await rpc<{ session: Session }>("chat.send", { session_key: currentKey, content, media });
       saved.current = result.session.messages.length > 0; setSession(saved.current ? result.session : null);
       await refresh().catch(fail);

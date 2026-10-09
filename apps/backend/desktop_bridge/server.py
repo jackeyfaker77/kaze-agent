@@ -46,6 +46,8 @@ class DesktopBridgeServer:
 
         async def _handle_request(request: dict[str, Any]) -> None:
             try:
+                # [消息链路 5/6] 收到 Electron 写入的 JSON 请求后，交给
+                # session_service.py::DesktopBridgeService.handle() 做业务路由。
                 response = await self.service.handle(
                     request,
                     emit_event=_emit_event,
@@ -145,6 +147,7 @@ class DesktopBridgeServer:
     async def serve_stdio(self) -> None:
         """Runs the bridge against process stdin and stdout."""
 
+        # Electron 的 DesktopBridgeClient 写 stdin、读 stdout；这里是对应的 Python 接收端。
         # The Electron side always sends and decodes UTF-8 JSON lines.  Windows
         # otherwise gives these streams the active console code page (usually
         # CP936), which corrupts Chinese payloads when global UTF-8 is disabled.
