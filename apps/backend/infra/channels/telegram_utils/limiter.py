@@ -24,7 +24,7 @@ class TelegramOutboundLimiter:
         self,
         *,
         send_interval_s: float = 2.0,
-        edit_interval_s: float = 5.0,
+        edit_interval_s: float = 2.0,
         typing_interval_s: float = 8.0,
         global_interval_s: float = 0.25,
         retry_padding_s: float = 1.0,

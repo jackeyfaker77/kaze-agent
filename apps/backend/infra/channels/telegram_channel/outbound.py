@@ -11,15 +11,21 @@ from telegram.ext import ContextTypes
 
 from bus.events import OutboundMessage
 from infra.channels.session_key import resolve_outbound_session_key
-from infra.channels.telegram_utils import TelegramStreamMessage
+from infra.channels.telegram_utils import (
+    TelegramStreamMessage,
+    render_telegram_preview_html,
+)
 
 from .compat import (
     _call_send_markdown,
     _call_send_stream_markdown,
-    _call_send_thinking_block,
 )
 
 logger = logging.getLogger("infra.channels.telegram_channel")
+
+# 以 UTF-16 code units 留出余量，避免最终回复被 live 消息的 3900 上限截断。
+# 超过此长度时使用普通发送的完整分段流程。
+_LIVE_REPLY_MAX_UTF16 = 3800
 
 
 class _OutboundMixin:
@@ -127,6 +133,7 @@ class _OutboundMixin:
         msg: OutboundMessage,
         *,
         delivery_status: str,
+        external_message_id: str = "",
     ) -> None:
         if self._channel_hub is None:
             return
@@ -134,6 +141,7 @@ class _OutboundMixin:
             msg,
             default_channel=self._channel,
             delivery_status=delivery_status,
+            external_message_id=external_message_id,
         )
 
     async def _on_response(self, msg: OutboundMessage) -> None:
@@ -144,55 +152,113 @@ class _OutboundMixin:
             msg,
             default_channel=self._channel,
         )
+        # 预览任务可能尚未创建消息，仍需先停止，避免最终回复后出现迟到的预览。
+        await self._cancel_live_tasks(session_key)
         had_live = self._has_live_messages(session_key)
-        if had_live:
-            await self._cancel_live_tasks(session_key)
-            await self._delete_live_message(session_key)
         final_thinking = self._final_thinking_text(session_key, msg.thinking)
-        if had_live:
-            if final_thinking:
-                await _call_send_thinking_block(
-                    self._app.bot,
-                    msg.chat_id,
-                    final_thinking,
-                    self._telegram_outbound_limiter,
-                )
-            await self._send_final_tool_snapshot(session_key, msg.chat_id)
         streamed_reply = bool((msg.metadata or {}).get("streamed_reply"))
         send_failed = False
+        sent_message_id = ""
         try:
+            if streamed_reply and had_live:
+                await self._delete_live_message(session_key)
             if msg.content.strip():
                 if streamed_reply:
                     stream = self._active_streams.pop(str(msg.chat_id), None)
                     if stream is not None:
                         await stream.finalize(msg.content)
+                        sent_message_id = str(getattr(stream, "message_id", "") or "")
                     else:
-                        await _call_send_markdown(
+                        sent = await _call_send_markdown(
                             self._app.bot,
                             msg.chat_id,
                             msg.content,
                             self._telegram_outbound_limiter,
                         )
+                        sent_message_id = str(getattr(sent, "message_id", "") or "")
+                elif had_live:
+                    # live 消息原地改写成最终回复，省掉「删除 live + 重新发送」两次限流排队。
+                    live = self._live_messages.get(session_key)
+                    if not await self._finalize_live_into_reply(
+                        session_key, msg.content
+                    ):
+                        await self._delete_live_message(session_key)
+                        sent = await _call_send_markdown(
+                            self._app.bot,
+                            msg.chat_id,
+                            msg.content,
+                            self._telegram_outbound_limiter,
+                        )
+                        sent_message_id = str(getattr(sent, "message_id", "") or "")
+                    else:
+                        sent_message_id = str(getattr(live, "message_id", "") or "")
                 else:
-                    await _call_send_markdown(
+                    sent = await _call_send_markdown(
                         self._app.bot,
                         msg.chat_id,
                         msg.content,
                         self._telegram_outbound_limiter,
                     )
+                    sent_message_id = str(getattr(sent, "message_id", "") or "")
+            elif had_live:
+                await self._delete_live_message(session_key)
             if final_thinking and not had_live:
                 await self._send_final_thinking(cid, msg.chat_id, final_thinking)
-            self._reply_buffers.pop(session_key, None)
-            self._thinking_buffers.pop(session_key, None)
             for image in (msg.media or []):
-                await self.send_image(str(msg.chat_id), image)
-        except Exception:
+                media_msg = await self.send_image(str(msg.chat_id), image)
+                sent_message_id = sent_message_id or str(
+                    getattr(media_msg, "message_id", "") or ""
+                )
+        except (Exception, asyncio.CancelledError):
             send_failed = True
             self._record_delivery_status(msg, delivery_status="failed")
             raise
         finally:
+            self._reply_buffers.pop(session_key, None)
+            self._thinking_buffers.pop(session_key, None)
+            self._tool_lines.pop(session_key, None)
+            self._thinking_live_next_at.pop(session_key, None)
+            self._live_last_lengths.pop(session_key, None)
+            self._live_tasks_by_session.pop(session_key, None)
             if not send_failed:
-                self._record_delivery_status(msg, delivery_status="sent")
+                self._record_delivery_status(
+                    msg,
+                    delivery_status="sent",
+                    external_message_id=sent_message_id,
+                )
+
+    async def _finalize_live_into_reply(
+        self,
+        session_key: str,
+        content: str,
+    ) -> bool:
+        """把回合中的 live 消息原地编辑成最终回复。
+
+        省掉「删除 live 消息 + 重新发送最终文本」两次限流排队，缩短最终消息的可见延迟。
+        超长内容或编辑失败时返回 False，由调用方降级为删除 + 普通发送。
+        """
+
+        message = self._live_messages.get(session_key)
+        if message is None:
+            return False
+        text = (content or "").strip()
+        if not text:
+            return False
+        if len(text.encode("utf-16-le")) // 2 > _LIVE_REPLY_MAX_UTF16:
+            return False
+        try:
+            ok = await message.update(
+                text,
+                html_text=render_telegram_preview_html(text),
+                force=True,
+            )
+        except Exception as e:
+            logger.warning("[telegram] live 消息改写成最终回复失败，降级删除+发送: %s", e)
+            return False
+        if not ok:
+            return False
+        self._live_messages.pop(session_key, None)
+        return True
 
     async def _safe_send_typing(
         self, context: ContextTypes.DEFAULT_TYPE, chat_id: int

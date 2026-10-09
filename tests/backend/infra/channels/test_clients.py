@@ -21,6 +21,7 @@ from bus.events_lifecycle import (
 )
 from core.channels.hub import ChannelHub
 from infra.channels.base import AttachmentStore
+from infra.channels.telegram_utils import render_telegram_preview_html
 
 
 class _Bus:
@@ -424,8 +425,8 @@ async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
         min_interval_s=0.0,
         limiter=channel._telegram_outbound_limiter,
     )
-    monkeypatch.setattr(mod, "send_markdown", AsyncMock())
-    monkeypatch.setattr(mod, "send_stream_markdown", AsyncMock())
+    monkeypatch.setattr(mod, "send_markdown", AsyncMock(return_value=SimpleNamespace(message_id=101)))
+    monkeypatch.setattr(mod, "send_stream_markdown", AsyncMock(return_value=SimpleNamespace(message_id=102)))
     monkeypatch.setattr(mod, "send_thinking_block", AsyncMock())
     await channel.start()
     assert len(channel._app.handlers) == 5
@@ -717,6 +718,7 @@ async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
     mod.send_thinking_block.reset_mock()
     before_final_markdown = mod.send_markdown.await_count
     before_delete = channel._app.bot.delete_message.await_count
+    live_message_id = channel._live_messages["telegram:456"].message_id
     await channel._on_response(
         OutboundMessage(
             channel="telegram",
@@ -725,14 +727,19 @@ async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
             thinking="继续分析",
         )
     )
-    assert channel._app.bot.delete_message.await_count == before_delete + 1
-    mod.send_thinking_block.assert_awaited_once()
-    assert mod.send_markdown.await_count == before_final_markdown + 2
-    snapshot_text = mod.send_markdown.await_args_list[-2].args[2]
-    assert "工具调用" in snapshot_text
-    assert "事件思考继续分析" not in snapshot_text
-    assert "临时回复" not in snapshot_text
-    assert snapshot_text.startswith("```")
+    assert channel._app.bot.delete_message.await_count == before_delete
+    mod.send_thinking_block.assert_not_awaited()
+    assert mod.send_markdown.await_count == before_final_markdown
+    final_edit = channel._app.bot.edit_message_text.await_args.kwargs
+    assert final_edit["message_id"] == live_message_id
+    assert final_edit["text"] == "事件最终回复"
+    assert "telegram:456" not in channel._live_messages
+    assert session_manager.delivery_updates[-1] == {
+        "session_key": "telegram:456",
+        "thread_id": "",
+        "delivery_status": "sent",
+        "external_message_id": str(live_message_id),
+    }
 
     mod.send_thinking_block.reset_mock()
     sender = channel.create_stream_sender("123")
@@ -780,7 +787,7 @@ async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
         "session_key": "role:mira",
         "thread_id": "",
         "delivery_status": "sent",
-        "external_message_id": "",
+        "external_message_id": "99",
     } in session_manager.delivery_updates
 
     merged, meta = mod._build_inbound_text_with_reply("hi", None)
@@ -790,6 +797,129 @@ async def test_telegram_channel_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
         SimpleNamespace(text="", caption="", photo=[1], from_user=None, message_id=11),
     )
     assert "[图片]" in merged
+
+
+@pytest.fixture
+def telegram_outbound(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    mod = _import_telegram_channel(monkeypatch)
+    sessions = _SessionManager(tmp_path)
+    channel = mod.TelegramChannel(
+        "token", _Bus(), sessions, channel_hub=ChannelHub(sessions, {}),
+    )
+    channel._app = SimpleNamespace(bot=SimpleNamespace(
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=101)),
+        edit_message_text=AsyncMock(return_value=True),
+        delete_message=AsyncMock(return_value=True),
+    ))
+    channel._telegram_outbound_limiter = mod.TelegramOutboundLimiter(
+        send_interval_s=0.0, edit_interval_s=0.0, typing_interval_s=0.0,
+        global_interval_s=0.0, retry_padding_s=0.0,
+    )
+    channel._live_edit_queue = mod.TelegramLiveEditQueue(
+        min_interval_s=0.0, limiter=channel._telegram_outbound_limiter,
+    )
+    monkeypatch.setattr(mod, "send_markdown", AsyncMock(return_value=SimpleNamespace(message_id=202)))
+    monkeypatch.setattr(mod, "send_thinking_block", AsyncMock())
+    return channel, mod, sessions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["**最终回复**", "😀" * 1900], ids=["markdown", "utf16_boundary"])
+async def test_telegram_final_reply_reuses_preview_and_receipt(telegram_outbound, content):
+    channel, mod, sessions = telegram_outbound
+    key = "telegram:123"
+    channel._reply_buffers[key] = "临时回复"
+    channel._thinking_buffers[key] = "分析中"
+    await channel._sync_live_message(key, 123)
+    await channel._on_response(OutboundMessage(
+        channel="telegram", chat_id="123", content=content, thinking="分析结束",
+    ))
+    edit = channel._app.bot.edit_message_text.await_args.kwargs
+    assert edit["message_id"] == 101
+    assert edit["text"] == render_telegram_preview_html(content)
+    channel._app.bot.delete_message.assert_not_awaited()
+    mod.send_markdown.assert_not_awaited()
+    mod.send_thinking_block.assert_not_awaited()
+    assert sessions.delivery_updates[-1]["external_message_id"] == "101"
+    assert key not in channel._live_messages
+    assert key not in channel._reply_buffers and key not in channel._thinking_buffers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["long", "emoji", "edit_error", "edit_skipped", "delete_error"])
+async def test_telegram_final_reply_falls_back_without_losing_text(telegram_outbound, failure):
+    channel, mod, sessions = telegram_outbound
+    key = "telegram:123"
+    channel._reply_buffers[key] = "临时回复"
+    await channel._sync_live_message(key, 123)
+    content = "x" * 4100 if failure == "long" else "😀" * 2000 if failure == "emoji" else "最终回复"
+    if failure in {"edit_error", "delete_error"}:
+        channel._app.bot.edit_message_text.side_effect = RuntimeError("preview no longer editable")
+    elif failure == "edit_skipped":
+        channel._live_messages[key].update = AsyncMock(return_value=False)
+    if failure == "delete_error":
+        channel._app.bot.delete_message.side_effect = RuntimeError("preview already deleted")
+    await channel._on_response(OutboundMessage(channel="telegram", chat_id="123", content=content))
+    assert mod.send_markdown.await_args.args[2] == content
+    channel._app.bot.delete_message.assert_awaited_once()
+    assert sessions.delivery_updates[-1]["delivery_status"] == "sent"
+    assert sessions.delivery_updates[-1]["external_message_id"] == "202"
+    assert key not in channel._live_messages
+
+
+@pytest.mark.asyncio
+async def test_telegram_streamed_reply_removes_separate_live_preview(telegram_outbound):
+    channel, mod, sessions = telegram_outbound
+    key = "telegram:123"
+    channel._reply_buffers[key] = "临时回复"
+    await channel._sync_live_message(key, 123)
+    stream = SimpleNamespace(message_id=303, finalize=AsyncMock())
+    channel._active_streams["123"] = stream
+    await channel._on_response(OutboundMessage(
+        channel="telegram", chat_id="123", content="流式最终回复", metadata={"streamed_reply": True},
+    ))
+    stream.finalize.assert_awaited_once_with("流式最终回复")
+    channel._app.bot.delete_message.assert_awaited_once()
+    mod.send_markdown.assert_not_awaited()
+    assert key not in channel._live_messages and "123" not in channel._active_streams
+    assert sessions.delivery_updates[-1]["external_message_id"] == "303"
+
+
+@pytest.mark.asyncio
+async def test_telegram_final_reply_cancels_preview_before_it_is_created(telegram_outbound):
+    channel, mod, _ = telegram_outbound
+    key = "telegram:123"
+    gate = asyncio.Event()
+    async def preview():
+        await gate.wait()
+        await channel._sync_live_message(key, 123)
+    channel._start_live_task(key, preview())
+    task = next(iter(channel._live_tasks))
+    try:
+        await channel._on_response(OutboundMessage(channel="telegram", chat_id="123", content="最终回复"))
+        assert task.done()
+        assert key not in channel._live_messages
+        mod.send_markdown.assert_awaited_once()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_telegram_failed_final_reply_clears_buffers_and_records_failure(telegram_outbound):
+    channel, mod, sessions = telegram_outbound
+    key = "telegram:123"
+    channel._reply_buffers[key] = "临时回复"
+    channel._thinking_buffers[key] = "分析中"
+    await channel._sync_live_message(key, 123)
+    channel._app.bot.edit_message_text.side_effect = RuntimeError("edit failed")
+    mod.send_markdown.side_effect = RuntimeError("send failed")
+    with pytest.raises(RuntimeError, match="send failed"):
+        await channel._on_response(OutboundMessage(channel="telegram", chat_id="123", content="最终回复"))
+    assert sessions.delivery_updates[-1]["delivery_status"] == "failed"
+    assert sessions.delivery_updates[-1]["external_message_id"] == ""
+    assert key not in channel._live_messages
+    assert key not in channel._reply_buffers and key not in channel._thinking_buffers
 
 
 @pytest.mark.asyncio

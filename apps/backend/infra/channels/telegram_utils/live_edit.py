@@ -162,15 +162,22 @@ class TelegramLiveTextMessage:
         self._last_plain = ""
         self._update_lock = asyncio.Lock()
 
+    @property
+    def message_id(self) -> int | None:
+        """已创建的真实 Telegram 消息号；尚未创建时为 None（供投递回执使用）。"""
+        return self._message_id
+
     async def update(
         self,
         text: str,
         *,
         html_text: str | None = None,
         force: bool = False,
-    ) -> None:
+    ) -> bool:
+        """更新 live 消息文本；返回是否真的落到 Telegram（供最终改写判定）。"""
+
         async with self._update_lock:
-            await self._update_locked(text, html_text=html_text, force=force)
+            return await self._update_locked(text, html_text=html_text, force=force)
 
     async def _update_locked(
         self,
@@ -178,12 +185,12 @@ class TelegramLiveTextMessage:
         *,
         html_text: str | None = None,
         force: bool = False,
-    ) -> None:
+    ) -> bool:
         plain = _clip_live_text(text.strip())
         if not plain:
-            return
+            return False
         if not force and plain == self._last_plain:
-            return
+            return False
         html_body = html_text or f"<pre>{html.escape(plain)}</pre>"
         if self._message_id is None:
             sent = await self._queue.run(
@@ -197,10 +204,10 @@ class TelegramLiveTextMessage:
                 ),
             )
             if sent is None:
-                return
+                return False
             self._message_id = int(getattr(sent, "message_id", 0) or 0) or None
             self._last_plain = plain
-            return
+            return True
         ok = await self._queue.run(
             self._chat_id,
             label="edit_message(live)",
@@ -215,6 +222,7 @@ class TelegramLiveTextMessage:
         )
         if ok:
             self._last_plain = plain
+        return bool(ok)
 
     async def delete(self) -> None:
         if self._message_id is None:

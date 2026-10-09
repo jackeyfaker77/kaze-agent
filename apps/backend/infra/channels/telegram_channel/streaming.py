@@ -179,7 +179,11 @@ class _StreamingMixin:
     async def _delete_live_message(self, session_key: str) -> None:
         message = self._live_messages.pop(session_key, None)
         if message is not None:
-            await message.delete()
+            try:
+                await message.delete()
+            except Exception as exc:
+                # 预览已删除或不可删除时，仍应继续投递最终回复。
+                logger.warning("[telegram] live 预览删除失败，继续发送最终回复: %s", exc)
 
     async def _drain_live_tasks(self) -> None:
         tasks = [task for task in self._live_tasks if not task.done()]
