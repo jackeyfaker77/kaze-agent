@@ -129,6 +129,7 @@ subagent 没有看过当前会话。像给刚进房间的同事写交接文档�
         retry_count: int = 0,
         channel: str = "",
         chat_id: str = "",
+        session_key: str = "",
         **_: Any,
     ) -> str:
         retry_count = max(0, int(retry_count))
@@ -170,6 +171,11 @@ subagent 没有看过当前会话。像给刚进房间的同事写交接文档�
                 "profile": profile,
                 "retry_count": retry_count,
             }
+            origin_session_key = str(
+                session_key or ctx.get("session_key") or ""
+            ).strip()
+            if origin_session_key:
+                spawn_kwargs["origin_session_key"] = origin_session_key
             return await self._manager.spawn(
                 **spawn_kwargs,
             )

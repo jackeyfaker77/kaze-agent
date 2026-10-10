@@ -51,11 +51,15 @@ class _SyncToolContextModule:
         before_turn = frame.input.before_turn
         if state.session is None:
             raise RuntimeError("BeforeReasoning requires TurnState.session")
-        message_metadata = state.msg.metadata if isinstance(state.msg.metadata, dict) else {}
+        message_metadata = (
+            state.msg.metadata if isinstance(state.msg.metadata, dict) else {}
+        )
         self._tools.set_context(
             channel=before_turn.channel,
             chat_id=before_turn.chat_id,
-            session_key=before_turn.session_key,
+            session_key=str(
+                message_metadata.get("context_session_key") or before_turn.session_key
+            ).strip(),
             current_user_message=before_turn.content,
             thread_id=str(
                 message_metadata.get("thread_id")
@@ -63,10 +67,17 @@ class _SyncToolContextModule:
                 or ""
             ),
             delivery_key=str(message_metadata.get("delivery_key") or ""),
+            session_config_version=str(
+                message_metadata.get("session_config_version") or ""
+            ),
             current_timestamp=before_turn.timestamp.isoformat(),
-            current_user_source_ref="" if message_metadata.get("stateless") else predict_current_user_source_ref(
-                session_manager=self._session_manager,
-                session=state.session,
+            current_user_source_ref=(
+                ""
+                if message_metadata.get("stateless")
+                else predict_current_user_source_ref(
+                    session_manager=self._session_manager,
+                    session=state.session,
+                )
             ),
             defer_push_session_sync="true",
         )

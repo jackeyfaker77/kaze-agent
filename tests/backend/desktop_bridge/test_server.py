@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from bus.event_bus import EventBus
+from bus.queue import MessageBus
 from desktop_bridge.models import BridgeResponse
 from desktop_bridge.server import DesktopBridgeServer
 from session.manager import SessionManager
@@ -53,6 +54,7 @@ def _build_server(tmp_path: Path) -> DesktopBridgeServer:
         push_tool=MessagePushTool(),
         loop=SimpleNamespace(process_direct=AsyncMock(return_value="ok")),
         event_bus=EventBus(),
+        bus=MessageBus(),
         provider=None,
     )
     return DesktopBridgeServer(runtime)

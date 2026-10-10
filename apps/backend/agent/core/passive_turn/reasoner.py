@@ -343,8 +343,8 @@ class DefaultReasoner(
             prompt_render = await self.render_prompt(
                 PromptRenderInput(
                     session_key=session.key,
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
+                    channel=getattr(msg, "context_channel", msg.channel),
+                    chat_id=getattr(msg, "context_chat_id", msg.chat_id),
                     content=msg.content,
                     media=msg.media if msg.media else None,
                     timestamp=msg.timestamp,

@@ -136,6 +136,7 @@ async def test_agent_core_process_runs_prepare_prompt_run_commit_in_order():
 
         thread_id="",
             delivery_key="",
+            session_config_version="",
             current_user_source_ref="telegram:123:0",
             current_timestamp="2026-04-04T22:00:00",
             defer_push_session_sync="true",

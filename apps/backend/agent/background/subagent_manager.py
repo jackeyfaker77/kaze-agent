@@ -50,6 +50,7 @@ class RunningSubagentJob:
     task_dir: str
     retry_count: int
     started_at: str
+    origin_session_key: str = ""
     status: str = "running"
 
 
@@ -116,6 +117,7 @@ class SubagentManager:
         )
 
         try:
+
             async def _run(snapshot_runtime: SubagentRuntime | None) -> tuple[str, str]:
                 if snapshot_runtime is None:
                     subagent = self._build_subagent(
@@ -154,7 +156,9 @@ class SubagentManager:
             exit_reason,
             len(truncated),
         )
-        return f"[子任务「{display_label}」结果]\n退出原因: {exit_reason}\n\n{truncated}"
+        return (
+            f"[子任务「{display_label}」结果]\n退出原因: {exit_reason}\n\n{truncated}"
+        )
 
     async def spawn(
         self,
@@ -166,6 +170,7 @@ class SubagentManager:
         decision: SpawnDecision | None = None,
         profile: str = PROFILE_RESEARCH,
         retry_count: int = 0,
+        origin_session_key: str = "",
     ) -> str:
         """创建后台 subagent 任务，并立即把控制权还给主 agent。"""
         job_id = uuid.uuid4().hex[:8]
@@ -194,6 +199,7 @@ class SubagentManager:
                 task_dir=task_dir,
                 origin_channel=origin_channel,
                 origin_chat_id=origin_chat_id,
+                origin_session_key=origin_session_key,
                 decision=decision,
                 profile=profile,
                 retry_count=retry_count,
@@ -212,6 +218,7 @@ class SubagentManager:
             task_dir=str(task_dir),
             retry_count=retry_count,
             started_at=datetime.now(timezone.utc).isoformat(),
+            origin_session_key=origin_session_key,
         )
         bg_task.add_done_callback(lambda _: self._forget_running_job(job_id))
         logger.info(
@@ -266,9 +273,11 @@ class SubagentManager:
         decision: SpawnDecision | None,
         profile: str = PROFILE_RESEARCH,
         retry_count: int = 0,
+        origin_session_key: str = "",
     ) -> None:
         """运行后台 subagent，并把统一结果协议回灌给主 agent。"""
         try:
+
             async def _run(snapshot_runtime: SubagentRuntime | None):
                 def _build():
                     if snapshot_runtime is None:
@@ -282,9 +291,7 @@ class SubagentManager:
                         runtime=snapshot_runtime,
                     )
 
-                job_runner = AgentBackgroundJobRunner(
-                    _build
-                )
+                job_runner = AgentBackgroundJobRunner(_build)
                 # 1. 先按统一 background job spec 执行 subagent，本层不直接碰 loop 细节。
                 return await job_runner.run(
                     AgentBackgroundJobSpec(
@@ -311,6 +318,7 @@ class SubagentManager:
                     task=task,
                     origin_channel=origin_channel,
                     origin_chat_id=origin_chat_id,
+                    origin_session_key=origin_session_key,
                     status="cancelled",
                     exit_reason="cancelled",
                     result="后台任务已按请求取消。",
@@ -338,6 +346,7 @@ class SubagentManager:
             task=task,
             origin_channel=origin_channel,
             origin_chat_id=origin_chat_id,
+            origin_session_key=origin_session_key,
             status=result.status,
             exit_reason=result.exit_reason,
             result=result.result_summary,
@@ -371,6 +380,7 @@ class SubagentManager:
             task=job.task,
             origin_channel=job.origin_channel,
             origin_chat_id=job.origin_chat_id,
+            origin_session_key=job.origin_session_key,
             status="cancelled",
             exit_reason="cancelled",
             result="后台任务已按请求取消。",
@@ -400,10 +410,9 @@ class SubagentManager:
         )
         return spec.build(runtime or self._runtime)
 
-
-
-
-    def _build_subagent_prompt(self, task_dir: Path, profile: str = PROFILE_RESEARCH) -> str:
+    def _build_subagent_prompt(
+        self, task_dir: Path, profile: str = PROFILE_RESEARCH
+    ) -> str:
         return build_spawn_subagent_prompt(self._workspace, task_dir, profile)
 
     async def _announce_result(
@@ -420,6 +429,7 @@ class SubagentManager:
         decision: SpawnDecision | None,
         profile: str = PROFILE_RESEARCH,
         retry_count: int = 0,
+        origin_session_key: str = "",
     ) -> None:
         """把后台结果包装成内部事件，重新投回主 agent 的消息总线。"""
         payload_result = result
@@ -445,6 +455,11 @@ class SubagentManager:
                 profile=profile,
             ),
             decision=decision,
+            metadata=(
+                {"session_key_override": origin_session_key}
+                if origin_session_key
+                else {}
+            ),
         )
         # 3. 最后发布到 bus，让主 agent 以同一会话身份继续回复用户。
         await self._bus.publish_inbound(item)

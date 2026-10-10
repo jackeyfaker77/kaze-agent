@@ -19,6 +19,7 @@ from core.net.http import (
     configure_default_shared_http_resources,
 )
 
+
 def configure_logging_stream(stream) -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -133,9 +134,7 @@ class AppRuntime:
                 http_resources=self.http_resources,
                 event_bus=event_bus,
                 bot_commands=(
-                    plugin_manager.telegram_bot_commands
-                    if plugin_manager
-                    else None
+                    plugin_manager.telegram_bot_commands if plugin_manager else None
                 ),
                 interrupt_controller=self.agent_loop,
                 plugin_channels=plugin_manager.channels if plugin_manager else None,
@@ -153,13 +152,16 @@ class AppRuntime:
             ]
             if self.features.enable_proactive and self.config.proactive.enabled:
                 from bootstrap.proactive import prepare_proactive_loop, run_proactive
+
                 try:
                     proactive_loop = await prepare_proactive_loop(self.core)
                 except Exception:
                     logger.exception("[proactive] 初始化失败，本次运行关闭主动推送")
                     proactive_loop = None
                 if proactive_loop is not None:
-                    self._background_tasks.append(asyncio.create_task(run_proactive(self.core), name="proactive"))
+                    self._background_tasks.append(
+                        asyncio.create_task(run_proactive(self.core), name="proactive")
+                    )
             self._started = True
         except Exception:
             await self.shutdown()
@@ -195,6 +197,10 @@ class AppRuntime:
                     pass
             self._background_tasks = []
             await _run_cleanup_steps(
+                (
+                    "scheduler.aclose",
+                    self.scheduler.aclose if self.scheduler else _noop_async,
+                ),
                 ("core.stop", self.core.stop if self.core else _noop_async),
                 (
                     "channels.stop",

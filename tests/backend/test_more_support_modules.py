@@ -691,7 +691,7 @@ async def test_app_runtime_desktop_mode_enables_message_channels(
         tools=MagicMock(),
         push_tool=MagicMock(),
         session_manager=MagicMock(),
-        scheduler=SimpleNamespace(run=_scheduler_task, stop=MagicMock()),
+        scheduler=SimpleNamespace(run=_scheduler_task, stop=MagicMock(), aclose=AsyncMock()),
         provider=MagicMock(),
         light_provider=MagicMock(),
         mcp_registry=MagicMock(),
@@ -723,6 +723,7 @@ async def test_app_runtime_desktop_mode_enables_message_channels(
 
     assert observed["enable_message_channels"] is True
     await app.shutdown()
+    core.scheduler.aclose.assert_awaited_once()
 
 
 @pytest.mark.asyncio

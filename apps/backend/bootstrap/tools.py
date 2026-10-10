@@ -217,6 +217,7 @@ class CoreRuntime:
         return "\n".join(parts)
 
     async def stop(self) -> None:
+        await self.scheduler.aclose()
         if self.plugin_manager is not None:
             await self.plugin_manager.terminate_all()
         await self.mcp_registry.shutdown()

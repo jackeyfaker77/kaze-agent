@@ -253,6 +253,10 @@ class JobStore:
 # ── SchedulerService ─────────────────────────────────────────────
 
 
+class _CommittedJobCancelled(asyncio.CancelledError):
+    """Cancellation arrived after delivery, and its history commit finished."""
+
+
 class SchedulerService:
     """
     asyncio 定时任务服务。
@@ -310,9 +314,18 @@ class SchedulerService:
 
     def stop(self) -> None:
         self._running = False
-        for job_id, task in list(self._active_tasks.items()):
-            task.cancel()
-            self._active_tasks.pop(job_id, None)
+        for task in list(self._active_tasks.values()):
+            if not task.done() and not task.cancelling():
+                task.cancel()
+
+    async def aclose(self) -> None:
+        """Cancel unfinished inference and join delivered work before resources close."""
+        self.stop()
+        tasks = list(self._active_tasks.items())
+        if tasks:
+            await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
+            for job_id, task in tasks:
+                self._on_job_task_done(job_id, task)
 
     def add_job(self, job: ScheduledJob) -> None:
         self._require_session_key(job.session_key)
@@ -412,8 +425,8 @@ class SchedulerService:
             return False
         next_jobs = {key: job for key, job in self._jobs.items() if key != job_id}
         self._replace_jobs(next_jobs)
-        active_task = self._active_tasks.pop(job_id, None)
-        if active_task is not None:
+        active_task = self._active_tasks.get(job_id)
+        if active_task is not None and not active_task.cancelling():
             active_task.cancel()
         return True
 
@@ -595,6 +608,10 @@ class SchedulerService:
         try:
             await self._execute(job)
             job.run_count += 1
+        except _CommittedJobCancelled:
+            # This occurrence is delivered and committed even if shutdown arrived.
+            job.run_count += 1
+            logger.info("Job %s committed before cancellation", job.id[:8])
         except asyncio.CancelledError:
             cancelled = True
             logger.info("Job %s cancelled during shutdown", job.id[:8])
@@ -604,6 +621,9 @@ class SchedulerService:
         finally:
             self._in_flight.discard(job.id)
             if cancelled:
+                return
+            if self._jobs.get(job.id) is not job:
+                # A user may have deleted the recurring job while it was committing.
                 return
             now = self._now()
             if job.trigger == "every":
@@ -621,6 +641,7 @@ class SchedulerService:
     def _on_job_task_done(self, job_id: str, task: asyncio.Task[None]) -> None:
         if self._active_tasks.get(job_id) is task:
             self._active_tasks.pop(job_id, None)
+            self._in_flight.discard(job_id)
 
     async def _execute(self, job: ScheduledJob) -> None:
         self._require_session_key(job.session_key)
@@ -645,7 +666,17 @@ class SchedulerService:
                     "memorize",
                     "forget_memory",
                 ],
-                metadata={"source": "scheduler", "request_id": job.id},
+                metadata={
+                    **self._job_metadata(job),
+                    "context_channel": job.channel,
+                    "context_chat_id": self.push_tool.resolve_target(
+                        job.channel, job.chat_id
+                    ),
+                    "context_session_key": job.session_key,
+                    "thread_id": job.thread_id,
+                    "session_config_version": job.session_config_version,
+                    "delivery_key": job.delivery_key,
+                },
             )
             elapsed = time.monotonic() - t0
             self.tracker.record(elapsed)
@@ -712,7 +743,7 @@ class SchedulerService:
                     await asyncio.shield(commit)
                 except asyncio.CancelledError:
                     await commit
-                    raise
+                    raise _CommittedJobCancelled() from None
             return receipt
 
         return await self._run_job_operation(job, send_and_commit)

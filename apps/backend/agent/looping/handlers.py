@@ -4,7 +4,11 @@ from typing import TYPE_CHECKING, cast
 
 from agent.core.passive_support import predict_current_user_source_ref
 from agent.core.passive_turn import get_session_metadata
-from agent.core.runtime_support import AgentLoopRunner, PromptRenderRunner, TurnRunResult
+from agent.core.runtime_support import (
+    AgentLoopRunner,
+    PromptRenderRunner,
+    TurnRunResult,
+)
 from agent.lifecycle.types import PromptRenderInput
 from agent.looping.ports import SessionServices
 from bus.events import InboundMessage, OutboundMessage, SpawnCompletionItem
@@ -12,6 +16,7 @@ from bus.events import InboundMessage, OutboundMessage, SpawnCompletionItem
 if TYPE_CHECKING:
     from agent.core.passive_turn import PassiveTurnPipeline
     from agent.tools.registry import ToolRegistry
+
 
 async def process_spawn_completion_event(
     *,
@@ -133,7 +138,7 @@ async def process_spawn_completion_event(
         content=marker,
         timestamp=item.timestamp,
         media=[],
-        metadata={"skip_post_memory": True},
+        metadata={**item.metadata, "skip_post_memory": True},
     )
     parsed_tool_chain = cast(list[dict[str, object]], tool_chain)
     return await pipeline.post_reasoning(

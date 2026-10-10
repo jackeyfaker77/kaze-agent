@@ -45,6 +45,15 @@ class MessageBus:
         """订阅某 channel 的出站消息"""
         self._subscribers.setdefault(channel, []).append(callback)
 
+    def unsubscribe_outbound(
+        self, channel: str, callback: Callable[[OutboundMessage], Awaitable[None]]
+    ) -> None:
+        subscribers = self._subscribers.get(channel, [])
+        if callback in subscribers:
+            subscribers.remove(callback)
+        if not subscribers:
+            self._subscribers.pop(channel, None)
+
     async def dispatch_outbound(self) -> None:
         """后台任务：将出站消息分发给对应 channel 的订阅者。
 
@@ -54,7 +63,9 @@ class MessageBus:
         while self._running:
             try:
                 msg = await asyncio.wait_for(self._outbound.get(), timeout=1.0)
-                await self.chat_lane.run_passive(msg.channel, msg.chat_id, lambda: self._send_outbound(msg))
+                await self.chat_lane.run_passive(
+                    msg.channel, msg.chat_id, lambda: self._send_outbound(msg)
+                )
             except asyncio.TimeoutError:
                 continue
 

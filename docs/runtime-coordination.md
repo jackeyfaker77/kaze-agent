@@ -6,8 +6,8 @@
 
 | 身份 | 取值 | 用途 |
 | --- | --- | --- |
-| 调度内部执行 | `scheduler:{job.id}` | 推理任务登记、工具上下文与取消；Session 为临时对象 |
-| 目标会话 | `job.session_key` | ProcessingState 忙计数、投递成功后的历史归属 |
+| 调度内部执行 | `scheduler:{job.id}` | 推理任务登记与取消；Session 为临时对象 |
+| 目标会话 | `job.session_key` | 工具归属、ProcessingState 忙计数、投递成功后的历史归属 |
 | 发送协调目标 | `(channel, resolve_target(chat_id))` | ChatLane；渠道别名在申请发送窗口前归一化 |
 
 桌面 `chat_id` 本身可以是 `desktop:...` 或其他已保存的会话 key，不再按渠道重复加前缀。传输目标和历史归属分别来自渠道解析器与保存的任务，不互相推导。
@@ -15,6 +15,12 @@
 Soft 推理不加载目标或旧内部会话的消息，不保存内部用户、助手、重试裁剪结果，不发布普通 TurnCommitted / AfterTurnCtx，因此不将后台任务算成普通互动或安排普通记忆整理。静态工作区规则和工具仍由普通 Agent 提供；`message_push` 和显式记忆读写工具在调度推理中禁用，由宿主投递生成结果。空输出、提供方异常、安全拦截、上下文重试耗尽和流超时均不会发送控制提示作为调度结果。
 
 Instant 和 soft 的结果共用成功提交器：MessagePushTool 回执为 `ok` 后，追加一条带 `source=scheduler`、任务 ID、delivery_id 和渠道回执的主动助手消息到目标会话。失败不追加。桌面使用 pending_text 把提交责任交给宿主，完成落库后才发布 message.pushed；不会先在内部历史写一次、再在目标历史复制一次。
+
+Soft 通过 `context_channel`、`context_chat_id` 和 `context_session_key` 给模型提示及工具提供原目标上下文，并携带 thread、配置版本和 delivery key。推理任务和工具事件仍使用内部执行 key。后台 spawn 的完成与取消事件保留原目标会话 key；桌面经出站 bus 发送完成通知，避免内部 `scheduler:*` 历史及重复渠道前缀。
+
+调度 `stop()` 请求取消但保留在途 Task，`aclose()` 等待它们结束。AppRuntime 和 CoreRuntime 在关闭 EventBus、SQLite 前执行该等待。重复 stop 不会再次打断正在完成的提交。发送前取消保留任务供恢复；已发送并提交成功的发生次数正常累计，一次性任务删除、周期任务推进。若用户已删除任务，收尾不会重新登记它。上述保证针对受控关闭，不代表平台幂等或进程崩溃恢复。
+
+对应修复记录：[关闭提交 #7](https://github.com/jackeyfaker77/kaze-agent/issues/7)、[工具目标 #8](https://github.com/jackeyfaker77/kaze-agent/issues/8)、[完成收尾 #9](https://github.com/jackeyfaker77/kaze-agent/issues/9)。回归包括真实关闭路径、成功提交期间取消后恢复、实际调度工具与后台 spawn 返回。
 
 ChatLane 对同一传输目标保证：
 

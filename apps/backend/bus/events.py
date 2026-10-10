@@ -68,9 +68,13 @@ class SpawnCompletionItem:
     event: "SpawnCompletionEvent"
     decision: "SpawnDecision | None" = None
     timestamp: datetime = field(default_factory=datetime.now)
+    metadata: dict[str, Any] = field(default_factory=_empty_metadata)
 
     @property
     def session_key(self) -> str:
+        override = str(self.metadata.get("session_key_override") or "").strip()
+        if override:
+            return override
         return f"{self.channel}:{self.chat_id}"
 
 

@@ -10,6 +10,7 @@ from dataclasses import asdict
 from uuid import uuid4
 
 from agent.looping.interrupt import TurnInterruptState
+from bus.events import OutboundMessage
 from bus.events_lifecycle import StreamDeltaReady, ToolCallStarted, ToolCallCompleted, ProactiveMessageCommitted
 from desktop_bridge.models import BridgeError, BridgeResponse
 from desktop_bridge.voice.voice_handler import DesktopVoiceHandler
@@ -51,6 +52,11 @@ class DesktopBridgeService:
             # 主动宿主负责提交历史，之后再发带完整快照的桌面通知。
             return None
         runtime.push_tool.register_channel("desktop", text=text, committed_text=committed_text, pending_text=pending_text)
+        async def outbound_text(message: OutboundMessage):
+            key = str(message.metadata.get("session_key_override") or message.chat_id).strip()
+            await committed_text(key, message.content)
+        self._outbound_handler = outbound_text
+        runtime.bus.subscribe_outbound("desktop", outbound_text)
         self._event_handlers = []
         async def proactive_committed(event):
             if event.channel == "desktop":
@@ -350,6 +356,7 @@ class DesktopBridgeService:
             await emit("voice.tts.finished")
 
     async def aclose(self):
+        self.runtime.bus.unsubscribe_outbound("desktop", self._outbound_handler)
         await self.codex.aclose()
         for event_type, handler in self._event_handlers:
             self.runtime.event_bus.off(event_type, handler)

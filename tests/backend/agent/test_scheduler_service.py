@@ -156,8 +156,9 @@ async def test_soft_records_latency(tmp_path, mock_push, mock_loop, fixed_now):
     assert len(tracker._samples) == 1
 
 
+@pytest.mark.parametrize("started_before_stop", [False, True])
 async def test_stop_cancels_inflight_job_tasks(
-    tmp_path, mock_push, mock_loop, fixed_now
+    tmp_path, mock_push, mock_loop, fixed_now, started_before_stop
 ):
     started = asyncio.Event()
     cancelled = asyncio.Event()
@@ -181,12 +182,13 @@ async def test_stop_cancels_inflight_job_tasks(
     svc._jobs[job.id] = job
 
     await svc._tick()
-    await started.wait()
+    if started_before_stop:
+        await started.wait()
     svc.stop()
-    await asyncio.wait_for(cancelled.wait(), timeout=0.1)
-    await drain_tasks()
+    assert job.id in svc._active_tasks
+    await svc.aclose()
 
-    assert cancelled.is_set()
+    assert cancelled.is_set() is started_before_stop
     assert job.id in svc._jobs
     assert job.id not in svc._in_flight
     assert job.id not in svc._active_tasks

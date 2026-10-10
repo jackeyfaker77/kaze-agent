@@ -4,7 +4,7 @@ import asyncio
 import json
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,15 +12,17 @@ import pytest
 import pytest_asyncio
 
 from agent.config_models import Config
-from agent.provider import ContentSafetyError, ContextLengthError, LLMResponse
-from agent.scheduler import ScheduledJob
+from agent.provider import ContentSafetyError, ContextLengthError, LLMResponse, ToolCall
+from agent.scheduler import ScheduledJob, SchedulerService
 from agent.tools.message_push import DeliveryReceipt
 from agent.turns.orchestrator import TurnOrchestrator, TurnOrchestratorDeps
 from agent.turns.result import TurnOutbound, TurnResult
 from agent.looping.ports import SessionServices
 from bootstrap.proactive import _PushPort
+from bootstrap.app import AppRuntime, RuntimeFeatures
 from bootstrap.tools import build_core_runtime
 from bus.events import InboundMessage
+from bus.events_lifecycle import ProactiveMessageCommitted
 from core.net.http import SharedHttpResources
 from desktop_bridge.session_service import DesktopBridgeService
 
@@ -51,6 +53,38 @@ async def desktop(tmp_path):
         await http.aclose()
 
 
+@pytest_asyncio.fixture
+async def app_runtime(tmp_path):
+    """Use the production shutdown path without starting network integrations."""
+    app = AppRuntime(
+        Config(
+            provider="openai",
+            model="fake",
+            api_key="fake",
+            memory_optimizer_enabled=False,
+        ),
+        tmp_path,
+        features=RuntimeFeatures(enable_message_channels=False, enable_proactive=False),
+    )
+    core = build_core_runtime(app.config, tmp_path, app.http_resources)
+    app.core = core
+    app.agent_loop = core.loop
+    app.bus = core.bus
+    app.scheduler = core.scheduler
+    app.memory_runtime = core.memory_runtime
+    app.session_manager = core.session_manager
+    app._background_tasks = [
+        asyncio.create_task(core.loop.run()),
+        asyncio.create_task(core.bus.dispatch_outbound()),
+        asyncio.create_task(core.scheduler.run()),
+    ]
+    await asyncio.sleep(0)
+    try:
+        yield app, core
+    finally:
+        await app.shutdown()
+
+
 def job(tier="soft", **kwargs):
     return ScheduledJob(
         trigger="at",
@@ -77,6 +111,236 @@ def durable_contents(runtime, key):
 
 
 @pytest.mark.asyncio
+async def test_app_shutdown_joins_delivery_commit_after_runtime_loops_stop(app_runtime):
+    app, runtime = app_runtime
+    entered, release, delivered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def sender(key, content):
+        entered.set()
+        await release.wait()
+        delivered.set()
+        return DeliveryReceipt(True, "desktop", key, "sent", "1")
+
+    runtime.push_tool.register_channel("desktop", text=sender, pending_text=sender)
+    scheduled = job("instant")
+    runtime.scheduler.add_job(scheduled)
+    await runtime.scheduler._tick()
+    task = runtime.scheduler._active_tasks[scheduled.id]
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        # AppRuntime.run's cancelled gather may already have stopped all loops.
+        for background in app._background_tasks:
+            background.cancel()
+        await asyncio.gather(*app._background_tasks, return_exceptions=True)
+        release.set()
+        await delivered.wait()
+        await app.shutdown()
+        assert task.done()
+        assert durable_contents(runtime, KEY) == ["定时提醒"]
+        assert not runtime.scheduler._active_tasks
+        assert not runtime.bus.chat_lane._states
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recurring", [False, True])
+@pytest.mark.parametrize("user_cancel", [False, True])
+async def test_committed_cancelled_occurrence_is_not_replayed_or_resurrected(
+    desktop, recurring, user_cancel
+):
+    runtime, _ = desktop
+    entered, release = asyncio.Event(), asyncio.Event()
+    now = datetime.now(timezone.utc)
+    runtime.scheduler._now = lambda: now
+    scheduled = job("instant")
+    scheduled.fire_at = now - timedelta(seconds=1)
+    if recurring:
+        scheduled.trigger = "every"
+        scheduled.interval_seconds = 60
+
+    async def held_completion(event):
+        entered.set()
+        await release.wait()
+
+    runtime.event_bus.on(ProactiveMessageCommitted, held_completion)
+    runtime.scheduler.add_job(scheduled)
+    await runtime.scheduler._tick()
+    task = runtime.scheduler._active_tasks[scheduled.id]
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert durable_contents(runtime, KEY) == ["定时提醒"]
+        if user_cancel:
+            assert runtime.scheduler.cancel_job(scheduled.id)
+        else:
+            runtime.scheduler.stop()
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert scheduled.run_count == 1
+        persisted = runtime.scheduler.store.load()
+        if recurring and not user_cancel:
+            assert len(persisted) == 1
+            assert persisted[0].fire_at > now and persisted[0].run_count == 1
+        else:
+            assert persisted == []
+        recovered = SchedulerService(
+            runtime.scheduler.store.path,
+            runtime.push_tool,
+            _now_fn=lambda: now,
+            chat_lane=runtime.bus.chat_lane,
+        )
+        recovered.load_and_recover()
+        await recovered._tick()
+        await asyncio.gather(*recovered._active_tasks.values())
+        assert durable_contents(runtime, KEY) == ["定时提醒"]
+        assert not runtime.bus.chat_lane._states
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        runtime.event_bus.off(ProactiveMessageCommitted, held_completion)
+
+
+@pytest.mark.asyncio
+async def test_soft_schedule_tools_use_original_target_and_ownership(desktop):
+    runtime, _ = desktop
+    existing = job("instant", name="existing")
+    existing.fire_at += timedelta(hours=1)
+    runtime.scheduler.add_job(existing)
+    scheduled = job(
+        thread_id="thread-7", session_config_version="v7", delivery_key="route-7"
+    )
+    calls = [
+        ToolCall("list", "list_schedules", {}),
+        ToolCall("cancel", "cancel_schedule", {"name": "existing"}),
+        ToolCall(
+            "create",
+            "schedule",
+            {
+                "name": "child",
+                "tier": "instant",
+                "trigger": "after",
+                "when": "1h",
+                "message": "子提醒",
+            },
+        ),
+    ]
+    contexts, prompts, prompt_targets = [], [], []
+
+    async def chat(**kwargs):
+        contexts.append(runtime.tools.get_context())
+        prompts.append(json.dumps(kwargs["messages"], ensure_ascii=False))
+        prompt_lines = "\n".join(
+            message["content"]
+            for message in kwargs["messages"]
+            if isinstance(message.get("content"), str)
+        ).splitlines()
+        channel = next(
+            line.removeprefix("Channel: ")
+            for line in prompt_lines
+            if line.startswith("Channel: ")
+        )
+        chat_id = next(
+            line.removeprefix("Chat ID: ")
+            for line in prompt_lines
+            if line.startswith("Chat ID: ")
+        )
+        prompt_targets.append((channel, chat_id))
+        if calls:
+            call = calls.pop(0)
+            if call.name == "schedule":
+                call.arguments.update(channel=channel, chat_id=chat_id)
+            return LLMResponse("", tool_calls=[call])
+        return LLMResponse("已处理提醒")
+
+    runtime.provider.chat = chat
+    await runtime.scheduler._execute(scheduled)
+    assert "existing" in prompts[1]
+    assert "没有找到" not in prompts[2]
+    assert all(target == ("desktop", KEY) for target in prompt_targets)
+    assert all(
+        context["session_key"] == KEY
+        and context["channel"] == "desktop"
+        and context["chat_id"] == KEY
+        for context in contexts
+    )
+    tasks = runtime.scheduler.list_jobs()
+    assert len(tasks) == 1 and tasks[0].name == "child"
+    assert tasks[0].session_key == KEY
+    assert (tasks[0].channel, tasks[0].chat_id) == ("desktop", KEY)
+    assert tasks[0].thread_id == "thread-7"
+    assert tasks[0].session_config_version == "v7"
+    assert tasks[0].delivery_key == "route-7"
+    assert durable_contents(runtime, f"scheduler:{scheduled.id}") == []
+
+
+@pytest.mark.asyncio
+async def test_soft_background_spawn_returns_to_desktop_without_internal_history(
+    desktop,
+):
+    runtime, bridge = desktop
+    started, release, notified = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    contexts, notifications = [], []
+    main_calls = 0
+
+    async def chat(**kwargs):
+        nonlocal main_calls
+        current = asyncio.current_task()
+        if current and current.get_name().startswith("spawn:"):
+            started.set()
+            await release.wait()
+            return LLMResponse("后台研究结果")
+        messages = json.dumps(kwargs["messages"], ensure_ascii=False)
+        if "后台任务回传" in messages:
+            contexts.append(runtime.tools.get_context())
+            return LLMResponse("后台结果已完成")
+        main_calls += 1
+        if main_calls == 1:
+            return LLMResponse(
+                "",
+                tool_calls=[
+                    ToolCall(
+                        "spawn",
+                        "spawn",
+                        {
+                            "task": "任务目标：调研测试材料。关键约束：只读。期望输出格式：文本报告。",
+                            "run_in_background": True,
+                        },
+                    )
+                ],
+            )
+        return LLMResponse("已开始后台任务")
+
+    def listener(event):
+        if event["method"] == "message.pushed":
+            notifications.append(event["payload"])
+            if event["payload"]["content"] == "后台结果已完成":
+                notified.set()
+
+    runtime.provider.chat = chat
+    bridge.add_event_listener(listener)
+    runner = asyncio.create_task(runtime.loop.run())
+    dispatcher = asyncio.create_task(runtime.bus.dispatch_outbound())
+    scheduled = job()
+    try:
+        await runtime.scheduler._execute(scheduled)
+        await asyncio.wait_for(started.wait(), 2)
+        release.set()
+        await asyncio.wait_for(notified.wait(), 2)
+        assert notifications[-1]["session_key"] == KEY
+        assert contexts[-1]["session_key"] == KEY
+        assert durable_contents(runtime, f"scheduler:{scheduled.id}") == []
+        assert durable_contents(runtime, f"desktop:{KEY}") == []
+        assert durable_contents(runtime, KEY)[-1] == "后台结果已完成"
+        assert runtime.session_manager.list_sessions()[0]["key"] == KEY
+    finally:
+        release.set()
+        runner.cancel()
+        dispatcher.cancel()
+        await asyncio.gather(runner, dispatcher, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_process_direct_preserves_existing_positional_channel_arguments(desktop):
     runtime, _ = desktop
     runtime.provider.chat = AsyncMock(return_value=LLMResponse("普通回复"))
@@ -86,9 +350,7 @@ async def test_process_direct_preserves_existing_positional_channel_arguments(de
     assert reply == "普通回复"
     assert durable_contents(runtime, KEY) == ["普通输入", "普通回复"]
     assert (
-        runtime.session_manager.get_or_create(KEY).messages[-1]["metadata"][
-            "source"
-        ]
+        runtime.session_manager.get_or_create(KEY).messages[-1]["metadata"]["source"]
         == "desktop"
     )
 
