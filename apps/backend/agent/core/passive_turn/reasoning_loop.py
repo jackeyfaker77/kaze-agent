@@ -54,6 +54,7 @@ class _PassiveReasoningLoopMixin:
         tool_event_chat_id: str = "",
         tool_execution_context: dict[str, Any] | None = None,
         disabled_tools: set[str] | None = None,
+        allow_empty_reply: bool = False,
     ) -> ReasonerResult:
         # 1. 初始化消息上下文、本轮工具轨迹。
         messages = initial_messages
@@ -655,7 +656,7 @@ class _PassiveReasoningLoopMixin:
                 has_more=False,
             ))
             return self._build_result(
-                reply=response.content or "（无响应）",
+                reply=response.content or ("" if allow_empty_reply else "（无响应）"),
                 tools_used=tools_used,
                 tool_chain=tool_chain,
                 visible_names=visible_names,

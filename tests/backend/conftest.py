@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from agent.scheduler import LatencyTracker, SchedulerService, ScheduledJob
+from agent.tools.message_push import DeliveryReceipt
 
 
 def make_job(
@@ -47,6 +48,7 @@ def make_job(
 def mock_push():
     m = AsyncMock()
     m.execute = AsyncMock(return_value="文本已发送")
+    m.send = AsyncMock(return_value=DeliveryReceipt(True, "telegram", "123", "文本已发送"))
     return m
 
 

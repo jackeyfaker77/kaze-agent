@@ -24,7 +24,8 @@ Linux 中将 `.venv/Scripts/` 换为 `.venv/bin/`。Pyright 测试配置仍保�
 | 会话持久化、迁移幂等、同一会话串行执行 | `backend/test_session_architecture.py` |
 | 桌面 RPC、取消后保留部分正文/思考/工具结果与旧历史、重开与重试、重复取消和提交竞态、独立 SQLite 连接验证提交、流式事件先于完成事件和响应 | `backend/test_session_desktop_services.py` |
 | EOF 取消、健康检查并发、单一响应写入器 | `backend/desktop_bridge/test_server.py`、`test_request_dispatcher.py` |
-| 调度会话归属、已持久化消息只投递一次 | `backend/agent/test_scheduler_*.py` |
+| 调度无会话历史推理、成功投递后提交目标历史、失败与取消、规范目标和发送顺序 | `backend/test_scheduler_coordination.py`、`backend/agent/test_scheduler_*.py` |
+| 被动回合及回复优先、非被动 FIFO、取消票据和发送窗口释放、回合内工具发送 | `backend/bus/test_chat_lane.py` |
 | 全局记忆读写、旧数据兼容、显式渠道过滤、维护任务和失败处理 | `backend/core/memory/test_engine_contract.py` |
 | 渠道白名单、传输路由和送达状态 | `backend/core/channels/test_hub.py`、`backend/infra/channels/test_clients.py` |
 | 心跳配置与忙碌状态、跳过无动作回复 | `backend/bootstrap/test_proactive*.py` |

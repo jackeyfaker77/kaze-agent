@@ -20,6 +20,7 @@ from agent.retrieval.protocol import (
 from agent.tools.base import Tool
 from agent.tools.registry import ToolRegistry
 from bus.event_bus import EventBus
+from bus.queue import MessageBus
 from bus.events import InboundMessage, OutboundMessage
 from bus.events_lifecycle import TurnCommitted
 from core.memory.engine import MemoryQueryResult
@@ -121,6 +122,7 @@ def test_stream_event_sink_respects_suppression_flag():
 async def test_process_direct_suppresses_stream_and_memory_when_requested():
     loop = object.__new__(AgentLoop)
     loop._session_turn_locks = {}
+    loop.bus = MessageBus()
     loop._active_tasks = {}
     loop._active_turn_states = {}
     loop._process = AsyncMock(
@@ -160,6 +162,7 @@ async def test_process_direct_suppresses_stream_and_memory_when_requested():
 async def test_process_direct_registers_interruptible_active_task():
     loop = object.__new__(AgentLoop)
     loop._session_turn_locks = {}
+    loop.bus = MessageBus()
     loop._active_tasks = {}
     loop._active_turn_states = {}
     loop._interrupt_states = {}

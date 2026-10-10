@@ -11,11 +11,14 @@
 | plugins/wake_proactive、wake_proactive_flow | apps/backend/plugins | reservoir、ACK 重试、兴趣 / 内容 / Context 驱动、结构化决策 |
 | plugins/drift_flow、wake_drift_flow | apps/backend/plugins | 完整 Drift 活动管线与 Wake 调度衔接 |
 | core/clock.py、session/embedding_store.py | apps/backend 对应目录 | 可控回放时间与消息向量缓存 |
+| bus/queue.py 中的 ChatLane | apps/backend/bus/chat_lane.py、queue.py | 被动优先、非被动 FIFO、发送窗口和取消收束；适配桌面直接入口与回合内工具发送 |
 | skills/create-drift-skill | apps/backend/skills | Drift 活动创作说明 |
 | tests/proactive_v2、tests/wake_proactive | tests/backend/proactive_v2/akashic_default、akashic_wake | 参考行为契约回归 |
 
 Kaze 宿主适配包括：配置默认 Wake 与默认桌面渠道、规则每轮重读、JSON 旧源声明编译及独立刷新、插件声明收集和不可变能力目录、共享 ToolRegistry / MCP 连接、完整被动互动的消息向量补齐、旧成功消息的主动历史识别、用户活动检查、成功回执后历史提交及桌面通知顺序。AnyAction 的 enabled 开关、ACK 明确失败结果和旧时间戳处理做了修正。
 
 Kaze 同时提供 Default 与 Wake 的插件组，由 lifecycle 唯一选择运行组。源刷新独立于候选判断；插件热更新的通用管理系统、Akasha 整体改写、角色关系系统和 Akashic 的其他应用界面不在主动链路迁移范围内。
+
+发送协调纳入主动链路验收，主动和调度的窗口均覆盖成功历史提交。调度改为不读取或保存会话历史的内部执行，目标归属仍取任务保存的 session_key。跨会话推理并行以及整个 `agent/control` 的迁移分别评估，详见 [运行协调说明](../runtime-coordination.md)。
 
 原简化入口不再用于生产。旧 JSON 成功投递与配额文件不删除，新管线的成功历史与持久化状态各自采用上游机制。运行和配置说明见 [主动推送指南](../_handbook/proactive-guide.md)。

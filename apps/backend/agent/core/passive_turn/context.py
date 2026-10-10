@@ -59,7 +59,7 @@ class DefaultContextStore(ContextStore):
         session: "SessionLike",
     ) -> ContextBundle:
         # 1. 先读取 session history，并转换成 retrieval pipeline 需要的结构。
-        raw_history = list(session.get_history())
+        raw_history = [] if msg.metadata.get("skip_session_history") else list(session.get_history())
         history_messages = support.to_history_messages(raw_history)
 
         # 2. 系统轮次可显式跳过预检索，避免污染检索诊断和激活状态。

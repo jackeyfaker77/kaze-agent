@@ -12,6 +12,7 @@ from bootstrap.toolsets.protocol import (
 from bootstrap.toolsets.schedule import SchedulerToolsetProvider
 from bootstrap.tools import build_registered_tools
 from bus.event_bus import EventBus
+from bus.queue import MessageBus
 
 
 def test_scheduler_toolset_provider_registers_expected_tools(tmp_path: Path):
@@ -98,7 +99,7 @@ def test_build_registered_tools_uses_toolset_providers(monkeypatch, tmp_path: Pa
             config=cast(Any, SimpleNamespace(spawn_enabled=False, model="test", multimodal=False, proactive=SimpleNamespace())),
             workspace=tmp_path,
             http_resources=cast(Any, SimpleNamespace()),
-            bus=cast(Any, SimpleNamespace()),
+            bus=MessageBus(),
             provider=object(),
             light_provider=object(),
             session_store=object(),

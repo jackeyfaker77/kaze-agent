@@ -253,7 +253,7 @@ def build_registered_tools(
         http_resources, multimodal=multimodal
     )
     store = session_store or SessionStore(workspace / "sessions.db")
-    push_tool = MessagePushTool(event_bus=event_publisher)
+    push_tool = MessagePushTool(event_bus=event_publisher, chat_lane=bus.chat_lane)
     memory_result = resolve_memory_toolset_provider(wiring.memory).register(
         tools,
         ToolsetDeps(
@@ -469,6 +469,35 @@ def build_core_runtime(
         ),
     )
     loop_ref["loop"] = loop
+    from uuid import uuid4
+    from agent.scheduler import ScheduledJob
+    from agent.tools.message_push import DeliveryReceipt
+    from agent.turns.orchestrator import TurnOrchestrator, TurnOrchestratorDeps
+    from agent.turns.outbound import BusOutboundPort
+    from agent.turns.result import TurnOutbound, TurnResult
+
+    delivery_committer = TurnOrchestrator(TurnOrchestratorDeps(
+        session=SessionServices(session_manager=session_manager, presence=presence),
+        outbound=BusOutboundPort(bus), event_bus=event_bus,
+    ))
+
+    async def commit_scheduler_delivery(job: ScheduledJob, content: str, receipt: DeliveryReceipt) -> None:
+        """只在投递成功后把调度正文追加到原目标会话。"""
+        metadata = {
+            "source": "scheduler", "session_key_override": job.session_key,
+            "transport_channel": job.channel, "transport_chat_id": receipt.chat_id,
+            "request_id": job.id, "delivery_id": uuid4().hex,
+            "delivery_ref": receipt.delivery_ref or "",
+            "thread_id": job.thread_id, "session_config_version": job.session_config_version,
+            "delivery_key": job.delivery_key,
+        }
+        await delivery_committer.commit_sent_turn(
+            result=TurnResult("reply", TurnOutbound(job.session_key, content)),
+            session_key=job.session_key, channel=job.channel, chat_id=receipt.chat_id,
+            metadata=metadata,
+        )
+
+    scheduler.bind_delivery_committer(commit_scheduler_delivery)
     wire_turn_lifecycle(
         lifecycle=TurnLifecycle(event_bus),
         active_turn_states=loop.active_turn_states,

@@ -183,7 +183,8 @@ class _FanoutTurnCommittedModule:
         self._bus = bus
 
     async def run(self, frame: AfterTurnFrame) -> AfterTurnFrame:
-        await self._bus.fanout(cast(TurnCommitted, frame.slots[_TURN_COMMITTED_SLOT]))
+        if not frame.input.state.msg.metadata.get("stateless"):
+            await self._bus.fanout(cast(TurnCommitted, frame.slots[_TURN_COMMITTED_SLOT]))
         return frame
 
 
@@ -232,7 +233,8 @@ class _FanoutAfterTurnCtxModule:
         self._bus = bus
 
     async def run(self, frame: AfterTurnFrame) -> AfterTurnFrame:
-        await self._bus.fanout(cast(AfterTurnCtx, frame.slots[_CTX_SLOT]))
+        if not frame.input.state.msg.metadata.get("stateless"):
+            await self._bus.fanout(cast(AfterTurnCtx, frame.slots[_CTX_SLOT]))
         return frame
 
 

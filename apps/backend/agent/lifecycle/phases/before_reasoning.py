@@ -64,7 +64,7 @@ class _SyncToolContextModule:
             ),
             delivery_key=str(message_metadata.get("delivery_key") or ""),
             current_timestamp=before_turn.timestamp.isoformat(),
-            current_user_source_ref=predict_current_user_source_ref(
+            current_user_source_ref="" if message_metadata.get("stateless") else predict_current_user_source_ref(
                 session_manager=self._session_manager,
                 session=state.session,
             ),

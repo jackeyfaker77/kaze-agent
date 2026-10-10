@@ -35,7 +35,7 @@ async def test_instant_calls_push_not_ai(tmp_path, mock_push, mock_loop, fixed_n
     await svc._tick()
     await drain_tasks()
 
-    mock_push.execute.assert_called_once()
+    mock_push.send.assert_called_once()
     mock_loop.process_direct.assert_not_called()
 
 
@@ -55,8 +55,10 @@ async def test_instant_push_receives_correct_args(
     await svc._tick()
     await drain_tasks()
 
-    mock_push.execute.assert_called_once_with(
-        channel="telegram", chat_id="999", message="喝水了", session_key="mira"
+    mock_push.send.assert_called_once_with(
+        channel="telegram", chat_id="999", message="喝水了", session_key="mira",
+        commit_after_delivery=False,
+        _outbound_metadata={"session_key_override": "mira", "source": "scheduler", "request_id": job.id},
     )
 
 
@@ -84,10 +86,12 @@ async def test_soft_calls_process_direct_not_push_directly(
     mock_loop.process_direct.assert_called_once()
     call_kwargs = mock_loop.process_direct.call_args
     assert call_kwargs.kwargs["content"] == "查询北京天气"
-    assert call_kwargs.kwargs["channel"] == "telegram"
-    assert call_kwargs.kwargs["chat_id"] == "123"
-    assert call_kwargs.kwargs["skip_post_memory"] is True
-    assert call_kwargs.kwargs["skip_memory_retrieval"] is True
+    assert call_kwargs.kwargs["channel"] == "scheduler"
+    assert call_kwargs.kwargs["chat_id"] == job.id
+    assert call_kwargs.kwargs["session_key"] == f"scheduler:{job.id}"
+    assert call_kwargs.kwargs["busy_session_key"] == job.session_key
+    assert call_kwargs.kwargs["stateless"] is True
+    assert call_kwargs.kwargs["raise_on_error"] is True
     assert call_kwargs.kwargs["disabled_tools"] == [
         "message_push",
         "recall_memory",
@@ -116,7 +120,8 @@ async def test_soft_sends_ai_response_via_push(
         channel=job.channel,
         chat_id=job.chat_id,
         message="北京今天晴，15°C",
-        already_persisted=True,
+        commit_after_delivery=False,
+        _outbound_metadata={"session_key_override": "mira", "source": "scheduler", "request_id": job.id},
         session_key="mira",
     )
     mock_push.execute.assert_not_called()

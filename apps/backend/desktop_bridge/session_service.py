@@ -286,32 +286,33 @@ class DesktopBridgeService:
             voice_turn = str(payload.get("voice_turn_id") or "")
             if voice_turn:
                 self._voice_turns[voice_turn] = key
-            try:
-                # 把桌面消息交给 AgentLoop；stream_events=True 会持续发布增量与工具事件。
-                reply = await self.runtime.loop.process_direct(
-                    content=content, session_key=key, channel="desktop", chat_id=key,
-                    stream_events=True, media=media,
-                    raise_on_error=True,
-                    metadata={"request_id": request_id, "input_method": payload.get("input_method", "text")},
-                )
-                interrupted = self._chat_interrupts.get(key)
-                if interrupted is not None:
-                    # A provider may finish normally while handling cancellation.
-                    self.runtime.loop.discard_interrupt_state(key, interrupted)
-                result = {"session_key": key, "reply": reply, "session": self._snapshot(key)}
-                # 推理结束后发布完整 Session，Renderer 据此收敛 optimistic update 与流式状态。
-                await self.publish_event({"id": request_id, "type": "event", "method": "chat.done", "payload": result})
-                if voice_turn:
-                    await self._speak_reply(key, voice_turn, request_id, reply)
-                return result
-            except asyncio.CancelledError:
-                await self._persist_interrupted_turn(key, request_id, media, previous_message_ids)
-                return {"session_key": key, "cancelled": True, "session": self._snapshot(key)}
-            finally:
-                self._requests.pop(key, None)
-                self._chat_tasks.pop(key, None)
-                self._chat_interrupts.pop(key, None)
-                self._voice_turns.pop(voice_turn, None)
+            async with self.runtime.bus.chat_lane.passive_turn("desktop", key):
+                try:
+                    # 把桌面消息交给 AgentLoop；stream_events=True 会持续发布增量与工具事件。
+                    reply = await self.runtime.loop.process_direct(
+                        content=content, session_key=key, channel="desktop", chat_id=key,
+                        stream_events=True, media=media,
+                        raise_on_error=True,
+                        metadata={"request_id": request_id, "input_method": payload.get("input_method", "text")},
+                    )
+                    interrupted = self._chat_interrupts.get(key)
+                    if interrupted is not None:
+                        # A provider may finish normally while handling cancellation.
+                        self.runtime.loop.discard_interrupt_state(key, interrupted)
+                    result = {"session_key": key, "reply": reply, "session": self._snapshot(key)}
+                    # 推理结束后发布完整 Session，Renderer 据此收敛 optimistic update 与流式状态。
+                    await self.publish_event({"id": request_id, "type": "event", "method": "chat.done", "payload": result})
+                    if voice_turn:
+                        await self._speak_reply(key, voice_turn, request_id, reply)
+                    return result
+                except asyncio.CancelledError:
+                    await self._persist_interrupted_turn(key, request_id, media, previous_message_ids)
+                    return {"session_key": key, "cancelled": True, "session": self._snapshot(key)}
+                finally:
+                    self._requests.pop(key, None)
+                    self._chat_tasks.pop(key, None)
+                    self._chat_interrupts.pop(key, None)
+                    self._voice_turns.pop(voice_turn, None)
         if method == "tasks.list":
             key = payload.get("session_key")
             return {"tasks": [json.loads(json.dumps(asdict(job), default=lambda value: value.isoformat())) for job in self.runtime.scheduler.list_jobs()

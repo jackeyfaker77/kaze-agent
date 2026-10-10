@@ -282,7 +282,11 @@ class DefaultReasoner(
             "selected_plan": None,
             "trimmed_sections": [],
         }
-        source_history = (
+        message_metadata = getattr(msg, "metadata", None)
+        message_metadata = message_metadata if isinstance(message_metadata, dict) else {}
+        stateless = bool(message_metadata.get("stateless"))
+        skip_history = bool(message_metadata.get("skip_session_history"))
+        source_history = [] if skip_history else (
             base_history
             if base_history is not None
             else get_history_since_consolidated(session, self._memory_window)
@@ -370,6 +374,7 @@ class DefaultReasoner(
                     tool_event_chat_id=msg.chat_id,
                     tool_execution_context=tool_execution_context,
                     disabled_tools=disabled_tools,
+                    allow_empty_reply=stateless,
                 )
                 tools_used = list(result.metadata.get("tools_used") or [])
                 tools_unlocked = list(result.metadata.get("tools_unlocked") or [])
@@ -389,7 +394,8 @@ class DefaultReasoner(
                     else:
                         session.messages = session.messages[-window:]
                     session.last_consolidated = 0
-                    await self._session_manager.save_async(cast(Any, session))
+                    if not skip_history:
+                        await self._session_manager.save_async(cast(Any, session))
 
                 if self._tool_search_enabled and (tools_used or tools_unlocked):
                     self._discovery.update(
@@ -436,6 +442,8 @@ class DefaultReasoner(
                     )
                 else:
                     logger.warning("安全拦截：所有窗口均失败，当前消息本身可能违规")
+                    if stateless:
+                        raise
                     return TurnRunResult(
                         reply="你的消息触发了安全审查，无法处理。",
                         context_retry=retry_trace,
@@ -452,12 +460,16 @@ class DefaultReasoner(
                     )
                 else:
                     logger.warning("上下文超长：所有窗口均失败，清空历史后仍超长")
+                    if stateless:
+                        raise
                     return TurnRunResult(
                         reply="上下文过长无法处理，请尝试新建对话。",
                         context_retry=retry_trace,
                     )
             except asyncio.TimeoutError:
                 logger.warning("LLM 流响应超时 (attempt=%d)，远端连接中断", attempt + 1)
+                if stateless:
+                    raise
                 return TurnRunResult(
                     reply="模型流响应中断，请刷新对话重试。",
                     context_retry=retry_trace,

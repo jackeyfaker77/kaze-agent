@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 import time
 from datetime import datetime
 
@@ -42,6 +43,9 @@ class _ProcessingMixin:
             try:
                 await task
             except asyncio.CancelledError:
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
                 logger.info(f"Turn cancelled for {key}")
             except Exception as e:
                 logger.error(f"处理消息出错: {e}", exc_info=True)
@@ -55,8 +59,10 @@ class _ProcessingMixin:
                     )
                 )
             finally:
-                self._active_tasks.pop(key, None)
-                self._active_turn_states.pop(key, None)
+                if self._active_tasks.get(key) is task:
+                    self._active_tasks.pop(key, None)
+                    self._active_turn_states.pop(key, None)
+                await self.bus.complete_inbound(item)
 
     @property
     def processing_state(self) -> ProcessingState | None:
@@ -122,45 +128,58 @@ class _ProcessingMixin:
         msg: InboundItem,
         session_key: str | None = None,
         dispatch_outbound: bool = True,
+        *,
+        busy_session_key: str | None = None,
     ) -> OutboundMessage:
         started = time.time()
         key = session_key or msg.session_key
+        busy_key = busy_session_key or key
+        stateless = isinstance(msg, InboundMessage) and bool(msg.metadata.get("stateless"))
         # 给本 turn task 打上 session 归属，供 observe 全局错误采集关联。
-        _ = current_session_key.set(key)
-
-        # 1. 先处理可能存在的续跑态，并发布 turn started。
-        msg, resumed_from_interrupt = self._resume_interrupted_message(msg, key)
-        await self._observe_turn_started(msg, key)
-        content = _item_content(msg)
-        preview = content[:60] + "..." if len(content) > 60 else content
-        logger.info(f"Processing message from {msg.channel}: {preview}")
-
-        # 2. 再进入 busy 状态并执行核心处理。
-        if self._processing_state:
-            self._processing_state.enter(key)
+        session_token = current_session_key.set(key)
         try:
-            outbound = await self._core_runner.process(
-                msg, key, dispatch_outbound=dispatch_outbound,
-            )
-            if resumed_from_interrupt:
-                self._interrupt_states.pop(key, None)
-            return outbound
+            # 1. 先处理可能存在的续跑态，并发布 turn started。
+            msg, resumed_from_interrupt = (msg, False) if stateless else self._resume_interrupted_message(msg, key)
+            if not stateless:
+                await self._observe_turn_started(msg, key)
+            content = _item_content(msg)
+            preview = content[:60] + "..." if len(content) > 60 else content
+            logger.info(f"Processing message from {msg.channel}: {preview}")
+
+            # 2. 再进入 busy 状态并执行核心处理。
+            if self._processing_state:
+                self._processing_state.enter(busy_key)
+            try:
+                outbound = await self._core_runner.process(
+                    msg, key, dispatch_outbound=dispatch_outbound,
+                )
+                if resumed_from_interrupt:
+                    self._interrupt_states.pop(key, None)
+                return outbound
+            finally:
+                if self._processing_state:
+                    self._processing_state.exit(busy_key)
         finally:
             # 3. 最后无论成功失败都直接释放 busy 状态。
-            if self._processing_state:
-                self._processing_state.exit(key)
+            current_session_key.reset(session_token)
             _ = started
 
     async def _process_session_scoped(
         self, item: InboundItem, session_key: str, *, dispatch_outbound: bool = True,
+        busy_session_key: str | None = None,
     ) -> OutboundMessage:
         lock = self._session_turn_locks.setdefault(session_key, asyncio.Lock())
-        async with lock:
+        stateless = isinstance(item, InboundMessage) and bool(item.metadata.get("stateless"))
+        scope = nullcontext() if stateless else self.bus.chat_lane.passive_turn(
+            item.channel, item.chat_id, pending=not dispatch_outbound,
+        )
+        async with scope, lock:
             task = asyncio.current_task()
             self._active_tasks[session_key] = task
             self._active_turn_states[session_key] = self._build_initial_turn_state(item, session_key)
             try:
                 return await self._process(item, session_key=session_key,
+                                           busy_session_key=busy_session_key,
                                            dispatch_outbound=dispatch_outbound)
             finally:
                 if self._active_tasks.get(session_key) is task:
@@ -181,9 +200,22 @@ class _ProcessingMixin:
         media: list[str] | None = None,
         metadata: dict[str, object] | None = None,
         raise_on_error: bool = False,
+        *,
+        stateless: bool = False,
+        busy_session_key: str | None = None,
     ) -> str:
         merged_metadata: dict[str, object] = dict(metadata or {})
         merged_metadata["session_key_override"] = session_key
+        if stateless:
+            merged_metadata.update({
+                "stateless": True,
+                "omit_user_turn": True,
+                "omit_assistant_turn": True,
+                "skip_session_history": True,
+                "skip_memory_context_guard": True,
+                "skip_post_memory": True,
+                "skip_memory_retrieval": True,
+            })
         if raise_on_error:
             merged_metadata["raise_on_error"] = True
         if omit_user_turn:
@@ -210,6 +242,7 @@ class _ProcessingMixin:
                 msg,
                 session_key=key,
                 dispatch_outbound=False,
+                busy_session_key=busy_session_key,
             ),
             name=f"agent_loop_direct:{key}",
         )

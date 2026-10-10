@@ -3,6 +3,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from bus.events import InboundItem, OutboundMessage
+from bus.chat_lane import ChatLane
 
 logger = logging.getLogger(__name__)
 
@@ -10,16 +11,18 @@ logger = logging.getLogger(__name__)
 class MessageBus:
     """agent 与各 channel 之间的异步消息总线"""
 
-    def __init__(self) -> None:
+    def __init__(self, chat_lane: ChatLane | None = None) -> None:
         self._inbound: asyncio.Queue[InboundItem] = asyncio.Queue()
         self._outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue()
         self._subscribers: dict[
             str, list[Callable[[OutboundMessage], Awaitable[None]]]
         ] = {}
         self._running = False
+        self.chat_lane = chat_lane or ChatLane()
 
     async def publish_inbound(self, msg: InboundItem) -> None:
         """channel → agent"""
+        await self.chat_lane.mark_passive_pending(msg.channel, msg.chat_id)
         await self._inbound.put(msg)
 
     async def consume_inbound(self) -> InboundItem:
@@ -28,7 +31,11 @@ class MessageBus:
 
     async def publish_outbound(self, msg: OutboundMessage) -> None:
         """agent → channel"""
+        await self.chat_lane.mark_passive_send_pending(msg.channel, msg.chat_id)
         await self._outbound.put(msg)
+
+    async def complete_inbound(self, msg: InboundItem) -> None:
+        await self.chat_lane.mark_passive_done(msg.channel, msg.chat_id)
 
     def subscribe_outbound(
         self,
@@ -47,35 +54,38 @@ class MessageBus:
         while self._running:
             try:
                 msg = await asyncio.wait_for(self._outbound.get(), timeout=1.0)
-                for cb in self._subscribers.get(msg.channel, []):
-                    try:
-                        await cb(msg)
-                    except Exception as first_err:
-                        logger.warning(
-                            f"分发消息到 {msg.channel} 首次失败，2s 后重试: {first_err}"
-                        )
-                        await asyncio.sleep(2)
-                        try:
-                            await cb(msg)
-                        except Exception as second_err:
-                            logger.error(
-                                f"分发消息到 {msg.channel} 重试仍失败，发送降级通知: {second_err}"
-                            )
-                            fallback = OutboundMessage(
-                                channel=msg.channel,
-                                chat_id=msg.chat_id,
-                                content="（消息发送失败，请稍后重试）",
-                                metadata=dict(msg.metadata or {}),
-                            )
-                            try:
-                                await cb(fallback)
-                            except Exception:
-                                logger.error(
-                                    f"降级通知也失败，消息彻底丢失  channel={msg.channel} "
-                                    f"chat_id={msg.chat_id}"
-                                )
+                await self.chat_lane.run_passive(msg.channel, msg.chat_id, lambda: self._send_outbound(msg))
             except asyncio.TimeoutError:
                 continue
+
+    async def _send_outbound(self, msg: OutboundMessage) -> None:
+        for cb in self._subscribers.get(msg.channel, []):
+            try:
+                await cb(msg)
+            except Exception as first_err:
+                logger.warning(
+                    f"分发消息到 {msg.channel} 首次失败，2s 后重试: {first_err}"
+                )
+                await asyncio.sleep(2)
+                try:
+                    await cb(msg)
+                except Exception as second_err:
+                    logger.error(
+                        f"分发消息到 {msg.channel} 重试仍失败，发送降级通知: {second_err}"
+                    )
+                    fallback = OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="（消息发送失败，请稍后重试）",
+                        metadata=dict(msg.metadata or {}),
+                    )
+                    try:
+                        await cb(fallback)
+                    except Exception:
+                        logger.error(
+                            f"降级通知也失败，消息彻底丢失  channel={msg.channel} "
+                            f"chat_id={msg.chat_id}"
+                        )
 
     def stop(self) -> None:
         self._running = False

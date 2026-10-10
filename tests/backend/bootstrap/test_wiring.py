@@ -27,6 +27,7 @@ from bootstrap.wiring import (
     resolve_toolset_provider,
 )
 from bus.event_bus import EventBus
+from bus.queue import MessageBus
 
 
 def _toml_value(value):
@@ -549,7 +550,7 @@ def test_build_registered_tools_respects_toolset_order_and_subset(monkeypatch, t
         config=config,
         workspace=tmp_path,
         http_resources=cast(Any, SimpleNamespace()),
-        bus=cast(Any, SimpleNamespace()),
+        bus=MessageBus(),
         provider=object(),
         light_provider=object(),
         session_store=object(),
@@ -758,7 +759,7 @@ def test_build_registered_tools_without_mcp_toolset_still_returns_empty_registry
         config=config,
         workspace=tmp_path,
         http_resources=cast(Any, SimpleNamespace()),
-        bus=cast(Any, SimpleNamespace()),
+        bus=MessageBus(),
         provider=object(),
         light_provider=object(),
         session_store=object(),
