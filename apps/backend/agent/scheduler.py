@@ -24,12 +24,16 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from collections.abc import Awaitable
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.common.timekit import parse_iso as _parse_iso
 from infra.persistence.json_store import atomic_save_json, load_json
 from agent.scheduler_cron import is_cron_expr, next_cron_fire
+from agent.tools.message_push import DeliveryReceipt
+from agent.turns.outbound import sanitize_user_visible_content
+from bus.chat_lane import ChatLane
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +253,10 @@ class JobStore:
 # ── SchedulerService ─────────────────────────────────────────────
 
 
+class _CommittedJobCancelled(asyncio.CancelledError):
+    """Cancellation arrived after delivery, and its history commit finished."""
+
+
 class SchedulerService:
     """
     asyncio 定时任务服务。
@@ -269,6 +277,7 @@ class SchedulerService:
         agent_loop_provider: Callable[[], Any] | None = None,
         tracker: LatencyTracker | None = None,
         _now_fn: Callable[[], datetime] | None = None,
+        chat_lane: ChatLane | None = None,
     ) -> None:
         self.store = JobStore(store_path)
         self.push_tool = push_tool
@@ -280,6 +289,18 @@ class SchedulerService:
         self._in_flight: set[str] = set()
         self._active_tasks: dict[str, asyncio.Task[None]] = {}
         self._running = False
+        self._chat_lane = chat_lane
+        self._commit_delivery: (
+            Callable[[ScheduledJob, str, DeliveryReceipt], Awaitable[None]] | None
+        ) = None
+
+    def bind_delivery_committer(
+        self, commit: Callable[[ScheduledJob, str, DeliveryReceipt], Awaitable[None]]
+    ) -> None:
+        """由宿主绑定成功投递后的目标历史提交。"""
+        if self._commit_delivery is not None:
+            raise RuntimeError("调度投递提交器已经绑定")
+        self._commit_delivery = commit
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -293,9 +314,18 @@ class SchedulerService:
 
     def stop(self) -> None:
         self._running = False
-        for job_id, task in list(self._active_tasks.items()):
-            task.cancel()
-            self._active_tasks.pop(job_id, None)
+        for task in list(self._active_tasks.values()):
+            if not task.done() and not task.cancelling():
+                task.cancel()
+
+    async def aclose(self) -> None:
+        """Cancel unfinished inference and join delivered work before resources close."""
+        self.stop()
+        tasks = list(self._active_tasks.items())
+        if tasks:
+            await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
+            for job_id, task in tasks:
+                self._on_job_task_done(job_id, task)
 
     def add_job(self, job: ScheduledJob) -> None:
         self._require_session_key(job.session_key)
@@ -395,8 +425,8 @@ class SchedulerService:
             return False
         next_jobs = {key: job for key, job in self._jobs.items() if key != job_id}
         self._replace_jobs(next_jobs)
-        active_task = self._active_tasks.pop(job_id, None)
-        if active_task is not None:
+        active_task = self._active_tasks.get(job_id)
+        if active_task is not None and not active_task.cancelling():
             active_task.cancel()
         return True
 
@@ -578,6 +608,10 @@ class SchedulerService:
         try:
             await self._execute(job)
             job.run_count += 1
+        except _CommittedJobCancelled:
+            # This occurrence is delivered and committed even if shutdown arrived.
+            job.run_count += 1
+            logger.info("Job %s committed before cancellation", job.id[:8])
         except asyncio.CancelledError:
             cancelled = True
             logger.info("Job %s cancelled during shutdown", job.id[:8])
@@ -587,6 +621,9 @@ class SchedulerService:
         finally:
             self._in_flight.discard(job.id)
             if cancelled:
+                return
+            if self._jobs.get(job.id) is not job:
+                # A user may have deleted the recurring job while it was committing.
                 return
             now = self._now()
             if job.trigger == "every":
@@ -604,39 +641,42 @@ class SchedulerService:
     def _on_job_task_done(self, job_id: str, task: asyncio.Task[None]) -> None:
         if self._active_tasks.get(job_id) is task:
             self._active_tasks.pop(job_id, None)
+            self._in_flight.discard(job_id)
 
     async def _execute(self, job: ScheduledJob) -> None:
         self._require_session_key(job.session_key)
         label = job.name or job.id[:8]
         if job.tier == "instant":
-            result = await self._run_job_operation(
-                job,
-                lambda: self.push_tool.execute(
-                    channel=job.channel,
-                    chat_id=job.chat_id,
-                    message=job.message,
-                    session_key=job.session_key,
-                ),
-            )
+            result = await self._deliver(job, job.message or "")
             logger.info(f"[scheduler] instant 推送完成 {label!r}: {result}")
         else:
             loop = self._get_agent_loop()
             t0 = time.monotonic()
             content = await loop.process_direct(
                 content=job.prompt,
-                channel=job.channel,
-                chat_id=job.chat_id,
-                session_key=job.session_key,
-                omit_user_turn=True,
-                skip_post_memory=True,
-                skip_memory_retrieval=True,
+                channel="scheduler",
+                chat_id=job.id,
+                session_key=f"scheduler:{job.id}",
+                busy_session_key=job.session_key,
+                stateless=True,
+                raise_on_error=True,
                 disabled_tools=[
                     "message_push",
                     "recall_memory",
                     "memorize",
                     "forget_memory",
                 ],
-                metadata=self._job_metadata(job),
+                metadata={
+                    **self._job_metadata(job),
+                    "context_channel": job.channel,
+                    "context_chat_id": self.push_tool.resolve_target(
+                        job.channel, job.chat_id
+                    ),
+                    "context_session_key": job.session_key,
+                    "thread_id": job.thread_id,
+                    "session_config_version": job.session_config_version,
+                    "delivery_key": job.delivery_key,
+                },
             )
             elapsed = time.monotonic() - t0
             self.tracker.record(elapsed)
@@ -644,16 +684,7 @@ class SchedulerService:
                 f"[scheduler] soft AI 完成 {label!r}  耗时={elapsed:.1f}s  P90={self.tracker.lead:.1f}s"
             )
             if content:
-                receipt = await self._run_job_operation(
-                    job,
-                    lambda: self.push_tool.send(
-                        channel=job.channel,
-                        chat_id=job.chat_id,
-                        message=content,
-                        already_persisted=True,
-                        session_key=job.session_key,
-                    ),
-                )
+                receipt = await self._deliver(job, content)
                 if receipt.ok:
                     logger.info(
                         f"[scheduler] soft 推送完成 {label!r}: {receipt.text}"
@@ -685,10 +716,45 @@ class SchedulerService:
         return key
 
     def _job_metadata(self, job: ScheduledJob) -> dict[str, str]:
-        return {"session_key_override": job.session_key, "source": "scheduler", "request_id": job.id}
+        return {
+            "session_key_override": job.session_key,
+            "source": "scheduler",
+            "request_id": job.id,
+        }
 
-    async def _run_job_operation(self, job: ScheduledJob, operation):
-        return await operation()
+    async def _deliver(self, job: ScheduledJob, content: str) -> DeliveryReceipt:
+        """发送成功后提交目标历史；提交完成前保留发送窗口。"""
+        content = sanitize_user_visible_content(content)
+
+        async def send_and_commit() -> DeliveryReceipt:
+            receipt = await self.push_tool.send(
+                channel=job.channel,
+                chat_id=job.chat_id,
+                message=content,
+                session_key=job.session_key,
+                commit_after_delivery=self._commit_delivery is not None,
+                _outbound_metadata=self._job_metadata(job),
+            )
+            if receipt.ok and self._commit_delivery is not None:
+                commit = asyncio.ensure_future(
+                    self._commit_delivery(job, content, receipt)
+                )
+                try:
+                    await asyncio.shield(commit)
+                except asyncio.CancelledError:
+                    await commit
+                    raise _CommittedJobCancelled() from None
+            return receipt
+
+        return await self._run_job_operation(job, send_and_commit)
+
+    async def _run_job_operation(
+        self, job: ScheduledJob, operation: Callable[[], Awaitable[DeliveryReceipt]]
+    ) -> DeliveryReceipt:
+        if self._chat_lane is None:
+            return await operation()
+        target = self.push_tool.resolve_target(job.channel, job.chat_id)
+        return await self._chat_lane.run_non_passive(job.channel, target, operation)
 
     def _advance_every(self, job: ScheduledJob, after: datetime) -> datetime:
         """将 every job 的 fire_at 推进到 after 之后的下一个触发时间。"""

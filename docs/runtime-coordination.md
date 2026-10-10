@@ -1,0 +1,53 @@
+# 主动与调度运行协调
+
+2026-10-10，基于 Kaze `9ef475e3` 及本次修改，对照 Akashic `98e96e94`。本次验收包括调度无会话历史执行、目标 key、投递后的历史提交和 ChatLane；跨会话推理并行独立评估。
+
+## 已接入的运行边界
+
+| 身份 | 取值 | 用途 |
+| --- | --- | --- |
+| 调度内部执行 | `scheduler:{job.id}` | 推理任务登记与取消；Session 为临时对象 |
+| 目标会话 | `job.session_key` | 工具归属、ProcessingState 忙计数、投递成功后的历史归属 |
+| 发送协调目标 | `(channel, resolve_target(chat_id))` | ChatLane；渠道别名在申请发送窗口前归一化 |
+
+桌面 `chat_id` 本身可以是 `desktop:...` 或其他已保存的会话 key，不再按渠道重复加前缀。传输目标和历史归属分别来自渠道解析器与保存的任务，不互相推导。
+
+Soft 推理不加载目标或旧内部会话的消息，不保存内部用户、助手、重试裁剪结果，不发布普通 TurnCommitted / AfterTurnCtx，因此不将后台任务算成普通互动或安排普通记忆整理。静态工作区规则和工具仍由普通 Agent 提供；`message_push` 和显式记忆读写工具在调度推理中禁用，由宿主投递生成结果。空输出、提供方异常、安全拦截、上下文重试耗尽和流超时均不会发送控制提示作为调度结果。
+
+Instant 和 soft 的结果共用成功提交器：MessagePushTool 回执为 `ok` 后，追加一条带 `source=scheduler`、任务 ID、delivery_id 和渠道回执的主动助手消息到目标会话。失败不追加。桌面使用 pending_text 把提交责任交给宿主，完成落库后才发布 message.pushed；不会先在内部历史写一次、再在目标历史复制一次。
+
+Soft 通过 `context_channel`、`context_chat_id` 和 `context_session_key` 给模型提示及工具提供原目标上下文，并携带 thread、配置版本和 delivery key。推理任务和工具事件仍使用内部执行 key。后台 spawn 的完成与取消事件保留原目标会话 key；桌面经出站 bus 发送完成通知，避免内部 `scheduler:*` 历史及重复渠道前缀。
+
+调度 `stop()` 请求取消但保留在途 Task，`aclose()` 等待它们结束。AppRuntime 和 CoreRuntime 在关闭 EventBus、SQLite 前执行该等待。重复 stop 不会再次打断正在完成的提交。发送前取消保留任务供恢复；已发送并提交成功的发生次数正常累计，一次性任务删除、周期任务推进。若用户已删除任务，收尾不会重新登记它。上述保证针对受控关闭，不代表平台幂等或进程崩溃恢复。
+
+对应修复记录：[关闭提交 #7](https://github.com/jackeyfaker77/kaze-agent/issues/7)、[工具目标 #8](https://github.com/jackeyfaker77/kaze-agent/issues/8)、[完成收尾 #9](https://github.com/jackeyfaker77/kaze-agent/issues/9)。回归包括真实关闭路径、成功提交期间取消后恢复、实际调度工具与后台 spawn 返回。
+
+ChatLane 对同一传输目标保证：
+
+1. 渠道消息在入队时登记被动 pending，直到该回合结束才确认；排队的被动回复有独立计数，直到实际发送、重试或取消收束。
+2. 桌面直接入口覆盖推理、历史提交、chat.done 和取消清理。普通用户回合内的工具采用被动发送规则，只等待目标的在途发送，不等待目标回合结束，避免等待自身以及两回合向对方发送时的循环等待。
+3. 主动、定时及其他非被动发送等待已准入被动回合与回复，然后按 FIFO 申请窗口。窗口覆盖整条消息的正文、附件及宿主历史提交。被动新输入不撤销已经在途的发送。
+4. 排队取消跳过相应票据；发送失败或取消释放窗口；发送确认成功后发生取消，先完成历史提交再释放。窗口结束后，后台任务继承的旧 ContextVar 身份失效。
+
+协调对象在空闲后释放。不同传输目标分别协调，但现有渠道主循环与出站 dispatcher 的消费方式仍为串行。ChatLane 不负责推理并发限额、平台幂等或进程崩溃后的投递恢复。
+
+回归入口为 `tests/backend/bus/test_chat_lane.py`、`tests/backend/test_scheduler_coordination.py`，以及现有桌面、调度、主动生命周期和同会话串行测试。新增测试使用真实宿主、SQLite 独立读连接和队列，模型与渠道显式替换为本地实现，不实际联网发送。
+
+## 跨会话并行的独立评估
+
+当前 Kaze `AgentLoop.run()` 取一个入站项后等待它完成；不同渠道会话的被动推理仍会互相排队。桌面 `process_direct()` 通过各自的调用任务执行，只持有对应的会话锁；不同会话可以并行。调度改用内部执行 key 后，也能在用户回合期间生成结果，但向同一目标发送仍等待 ChatLane。
+
+Akashic 的 `agent/control/runtime.py` 使用全局 `_admission`，`agent/looping/core.py` 使用 `_passive_runtime_lock`。它的线程准入与 ChatLane 不能作为“普通推理已经跨会话并行”的证据。移植整个 agent/control 也不会自然消除渠道排队。
+
+如果渠道排队的实测延迟构成问题，可以独立增加有上限的入站执行池，同时保留每会话串行及现有发送协调。实施前需要明确这些边界：
+
+| 资源 | 当前证据 | 并行验收要求 |
+| --- | --- | --- |
+| 工具归属 | ToolRegistry 的上下文已用 ContextVar | 不同会话的工具参数、事件、流式正文及取消不得串线 |
+| 会话历史 | AgentLoop 会话锁、SessionManager 写锁 | 同一会话 FIFO，后台整理与历史裁剪不丢失并发追加 |
+| 全局记忆 | Markdown maintenance 有 `_global_write_lock` | 保留共享写入协调，不把全局记忆锁当作普通推理锁 |
+| MCP | 同一客户端的 `_call_lock` 串行 RPC | 保留同连接约束，测量实际瓶颈，不强行并发同一连接 |
+| 诊断 | ContextBuilder 的 last_debug_breakdown / last_assembled_contexts 为共享实例字段 | 改为每轮数据或上下文局部数据，防止并行时统计归属错误 |
+| 容量与停止 | 主循环当前没有工作池容量、排队公平性或 drain 契约 | 明确并发上限、每会话准入顺序、单任务取消和全局停机清理 |
+
+结论：本次完成发送协调，保持渠道推理的既有串行方式。跨会话并行适合单独实现有上限的工作池，并以 A 慢/B 快、同会话顺序、不同会话工具隔离、停机及记忆并发提交测试验收。只有需要完整的准入、排队、替换和中断管理时，才进一步比较整个 agent/control 的迁移成本。

@@ -6,6 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
+from bus.chat_lane import ChatLane
 
 from agent.tools.base import Tool
 from bus.event_bus import EventBus
@@ -97,11 +98,12 @@ class MessagePushTool(Tool):
         "required": ["channel", "chat_id"],
     }
 
-    def __init__(self, event_bus: EventBus | None = None) -> None:
+    def __init__(self, event_bus: EventBus | None = None, *, chat_lane: ChatLane | None = None) -> None:
         # channel -> {type: sender_fn}
         self._senders: dict[str, dict[str, Callable[..., Awaitable[Any]]]] = {}
         self._target_resolvers: dict[str, Callable[[str], str]] = {}
         self._event_bus = event_bus
+        self.chat_lane = chat_lane
 
     def register_channel(
         self,
@@ -146,9 +148,28 @@ class MessagePushTool(Tool):
         )
 
     async def send(self, **kwargs: Any) -> DeliveryReceipt:
+        """在目标发送窗口内执行整条消息，包括全部附件。"""
+        channel = str(kwargs["channel"])
+        requested = str(kwargs["chat_id"])
+        try:
+            chat_id = self.resolve_target(channel, requested)
+        except Exception as exc:
+            return DeliveryReceipt(False, channel, requested, f"发送失败：{exc}", error=str(exc))
+        if self.chat_lane is None:
+            return await self._send_now(**{**kwargs, "chat_id": chat_id})
+        return await self.chat_lane.run_send(
+            channel, chat_id, lambda: self._send_now(**{**kwargs, "chat_id": chat_id})
+        )
+
+    def resolve_target(self, channel: str, chat_id: str) -> str:
+        """使用渠道注册的解析器取得发送协调所需的规范目标。"""
+        resolver = self._target_resolvers.get(channel)
+        return resolver(chat_id) if resolver is not None else chat_id
+
+    async def _send_now(self, **kwargs: Any) -> DeliveryReceipt:
         """执行一次推送并返回结构化回执。
 
-        宿主代码（scheduler / proactive）应当调用本方法并按 `ok` 判定成败；
+        宿主代码（scheduler / proactive）调用 `send()` 并按 `ok` 判定成败；
         `execute()` 只是它的文本渲染版本，行为与改造前一致。
         """
         channel: str = str(kwargs["channel"])
@@ -167,18 +188,7 @@ class MessagePushTool(Tool):
                 error="缺少内容参数",
             )
 
-        try:
-            resolver = self._target_resolvers.get(channel)
-            chat_id = resolver(requested_chat_id) if resolver is not None else requested_chat_id
-        except Exception as e:
-            logger.error(f"[message_push] 目标解析失败 {channel}:{requested_chat_id}: {e}")
-            return DeliveryReceipt(
-                ok=False,
-                channel=channel,
-                chat_id=requested_chat_id,
-                text=f"发送失败：{e}",
-                error=str(e),
-            )
+        chat_id = requested_chat_id
 
         session_key = session_key or (chat_id if channel == "desktop" else f"{channel}:{chat_id}")
         senders = self._senders.get(channel)

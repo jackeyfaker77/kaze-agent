@@ -5,6 +5,7 @@ import logging
 from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 
 from bus.event_bus import EventBus
+from session.manager import Session
 from agent.core.runtime_support import SessionLike
 from agent.core.types import ContextBundle
 from agent.lifecycle.phase import (
@@ -60,7 +61,8 @@ class _AcquireSessionModule:
 
     async def run(self, frame: BeforeTurnFrame) -> BeforeTurnFrame:
         state = frame.input
-        session = self._session_manager.get_or_create(state.session_key)
+        session = (Session(state.session_key) if state.msg.metadata.get("skip_session_history")
+                   else self._session_manager.get_or_create(state.session_key))
         session_metadata = session.metadata if isinstance(session.metadata, dict) else {}
         state.session = session
         frame.slots[_SESSION_SLOT] = session

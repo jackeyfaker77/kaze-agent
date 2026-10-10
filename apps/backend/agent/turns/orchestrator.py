@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import inspect
 import logging
+import asyncio
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, nullcontext
 from uuid import uuid4
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -23,6 +26,9 @@ class TurnOrchestratorDeps:
     session: SessionServices
     outbound: OutboundPort
     event_bus: EventBus | None = None
+    delivery_scope: Callable[[str, str], AbstractAsyncContextManager[None]] | None = (
+        None
+    )
 
 
 class TurnOrchestrator:
@@ -30,6 +36,7 @@ class TurnOrchestrator:
         self._session = deps.session
         self._outbound = deps.outbound
         self._event_bus = deps.event_bus
+        self._delivery_scope = deps.delivery_scope
 
     async def handle_proactive_turn(
         self,
@@ -59,47 +66,98 @@ class TurnOrchestrator:
         source_metadata["delivery_id"] = uuid4().hex
         # 2. 先执行发送前 side_effects，再真正 dispatch 到 outbound。
         await self._run_effects(result.side_effects)
-        try:
-            sent = await self._dispatch_outbound(
-                channel=channel,
-                chat_id=chat_id,
-                content=content,
-                media=media,
-                metadata=source_metadata,
-            )
-        except OutboundDispatchError:
-            await self._run_effects(result.failure_side_effects)
-            raise
-
-        # 3. 只有真实发送成功才提交可见历史及成功副作用。
-        if sent:
-            self._persist_proactive_session(
-                session=session,
-                content=content,
-                media=media,
-                result=result,
-                metadata=source_metadata,
-            )
-            await self._session.session_manager.append_messages(
-                session, session.messages[-1:]
-            )
-            if self._session.presence:
-                self._session.presence.record_proactive_sent(session_key)
-            await self._run_effects(result.success_side_effects)
-            if self._event_bus is not None:
-                await self._event_bus.fanout(
-                    ProactiveMessageCommitted(
-                        session_key=session_key,
-                        channel=channel,
-                        chat_id=chat_id,
-                        assistant_response=content,
-                        tools_used=("message_push",),
-                    )
+        scope = (
+            self._delivery_scope(channel, chat_id)
+            if self._delivery_scope
+            else nullcontext()
+        )
+        async with scope:
+            try:
+                sent = await self._dispatch_outbound(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=content,
+                    media=media,
+                    metadata=source_metadata,
                 )
-        else:
-            await self._run_effects(result.failure_side_effects)
+            except OutboundDispatchError:
+                await self._run_effects(result.failure_side_effects)
+                raise
+
+            # 3. 只有真实发送成功才提交可见历史及成功副作用。
+            if sent:
+                await self.commit_sent_turn(
+                    result=result,
+                    session_key=session_key,
+                    channel=channel,
+                    chat_id=chat_id,
+                    metadata=source_metadata,
+                )
+            else:
+                await self._run_effects(result.failure_side_effects)
 
         return sent
+
+    async def commit_sent_turn(
+        self,
+        *,
+        result: TurnResult,
+        session_key: str,
+        channel: str,
+        chat_id: str,
+        metadata: dict[str, str],
+    ) -> None:
+        """供主动及调度宿主在真实投递成功后提交历史和完成事件。"""
+        commit = asyncio.create_task(
+            self._commit_sent_turn(
+                result=result,
+                session_key=session_key,
+                channel=channel,
+                chat_id=chat_id,
+                metadata=metadata,
+            )
+        )
+        try:
+            await asyncio.shield(commit)
+        except asyncio.CancelledError:
+            await commit
+            raise
+
+    async def _commit_sent_turn(
+        self,
+        *,
+        result: TurnResult,
+        session_key: str,
+        channel: str,
+        chat_id: str,
+        metadata: dict[str, str],
+    ) -> None:
+        if result.outbound is None:
+            raise ValueError("已投递回合必须包含正文")
+        session = self._session.session_manager.get_or_create(session_key)
+        self._persist_proactive_session(
+            session=session,
+            content=result.outbound.content,
+            media=list(result.outbound.media),
+            result=result,
+            metadata=metadata,
+        )
+        await self._session.session_manager.append_messages(
+            session, session.messages[-1:]
+        )
+        if self._session.presence:
+            self._session.presence.record_proactive_sent(session_key)
+        await self._run_effects(result.success_side_effects)
+        if self._event_bus is not None:
+            await self._event_bus.fanout(
+                ProactiveMessageCommitted(
+                    session_key=session_key,
+                    channel=channel,
+                    chat_id=chat_id,
+                    assistant_response=result.outbound.content,
+                    tools_used=("message_push",),
+                )
+            )
 
     async def dispatch_proactive_retry(
         self,

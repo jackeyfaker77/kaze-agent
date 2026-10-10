@@ -55,6 +55,7 @@ def build_scheduler(
         agent_loop=None,
         agent_loop_provider=agent_loop_provider,
         tracker=LatencyTracker(),
+        chat_lane=push_tool.chat_lane,
     )
 
 

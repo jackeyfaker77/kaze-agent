@@ -19,6 +19,8 @@ from bootstrap.proactive import (
     run_proactive,
 )
 from bus.event_bus import EventBus
+from bus.queue import MessageBus
+from bus.processing import ProcessingState
 from bus.events_lifecycle import ProactiveMessageCommitted
 from plugins.wake_proactive.state import WakeStateStore
 from proactive_v2.config_loader import load_proactive_config
@@ -95,7 +97,8 @@ async def proactive_setup(tmp_path, monkeypatch):
     sender = AsyncMock(
         return_value=DeliveryReceipt(True, "telegram", "42", "sent", "99")
     )
-    push = MessagePushTool(bus)
+    message_bus = MessageBus()
+    push = MessagePushTool(bus, chat_lane=message_bus.chat_lane)
     push.register_channel("telegram", text=sender)
     committed = []
     bus.on(ProactiveMessageCommitted, lambda event: committed.append(event))
@@ -119,11 +122,12 @@ async def proactive_setup(tmp_path, monkeypatch):
         presence=presence,
         tools=tools,
         event_bus=bus,
+        bus=message_bus,
         provider=SimpleNamespace(chat=AsyncMock(return_value=structured())),
         push_tool=push,
         memory_runtime=None,
         plugin_manager=None,
-        loop=SimpleNamespace(_active_tasks={}, process_direct=AsyncMock()),
+        loop=SimpleNamespace(_active_tasks={}, processing_state=ProcessingState(), process_direct=AsyncMock()),
     )
     loops = []
 
@@ -245,7 +249,7 @@ async def test_user_reply_during_model_work_suppresses_send_and_consumption(
 @pytest.mark.asyncio
 async def test_busy_session_does_not_fetch_or_generate(proactive_setup):
     setup = proactive_setup
-    setup.runtime.loop._active_tasks[KEY] = object()
+    setup.runtime.loop.processing_state.enter(KEY)
     loop = await setup.start()
     await loop._tick()
     setup.fetch.assert_not_awaited()

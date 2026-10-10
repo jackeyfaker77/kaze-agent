@@ -4,11 +4,12 @@ import asyncio
 import inspect
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from agent.scheduler import LatencyTracker, SchedulerService, ScheduledJob
+from agent.tools.message_push import DeliveryReceipt
 
 
 def make_job(
@@ -47,6 +48,8 @@ def make_job(
 def mock_push():
     m = AsyncMock()
     m.execute = AsyncMock(return_value="文本已发送")
+    m.send = AsyncMock(return_value=DeliveryReceipt(True, "telegram", "123", "文本已发送"))
+    m.resolve_target = Mock(side_effect=lambda channel, chat_id: chat_id)
     return m
 
 

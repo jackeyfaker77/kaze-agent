@@ -15,6 +15,7 @@ from agent.turns.result import TurnOutbound, TurnResult
 from bootstrap.app import AppRuntime, RuntimeFeatures
 from bootstrap.proactive import KazeProactiveLoop, _PushPort
 from bus.event_bus import EventBus
+from bus.queue import MessageBus
 from bus.events_lifecycle import ProactiveMessageCommitted
 from conversation.push_sync import ExternalImageSyncService
 from proactive_v2.config_loader import load_proactive_config
@@ -116,12 +117,13 @@ async def test_proactive_media_commits_once_only_after_delivery(tmp_path, images
         not failure, "telegram", "42", "offline" if failure else "sent",
         error="offline" if failure else None,
     ))
-    push = MessagePushTool(bus)
+    message_bus = MessageBus()
+    push = MessagePushTool(bus, chat_lane=message_bus.chat_lane)
     push.register_channel("telegram", text=text_sender, image=image_sender)
     loop = SimpleNamespace(can_send=lambda: True, _target_session_key=lambda: "telegram:42", delivered=False)
     orchestrator = TurnOrchestrator(TurnOrchestratorDeps(
         session=SessionServices(session_manager=sessions, presence=None),
-        outbound=_PushPort(SimpleNamespace(push_tool=push), loop), event_bus=bus,
+        outbound=_PushPort(SimpleNamespace(push_tool=push, bus=message_bus), loop), event_bus=bus,
     ))
     success, failed = AsyncMock(), AsyncMock()
     result = TurnResult(

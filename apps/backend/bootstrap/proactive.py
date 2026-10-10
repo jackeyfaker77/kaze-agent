@@ -44,7 +44,17 @@ class _PushPort:
         self.runtime = runtime
         self.loop = loop
 
+    def delivery_scope(self, channel: str, chat_id: str):
+        target = self.runtime.push_tool.resolve_target(channel, chat_id)
+        return self.runtime.bus.chat_lane.non_passive_send(channel, target)
+
     async def dispatch(self, outbound: OutboundDispatch) -> bool:
+        target = self.runtime.push_tool.resolve_target(outbound.channel, outbound.chat_id)
+        return await self.runtime.bus.chat_lane.run_send(
+            outbound.channel, target, lambda: self._dispatch_now(outbound)
+        )
+
+    async def _dispatch_now(self, outbound: OutboundDispatch) -> bool:
         if not self.loop.can_send():
             return False
         push = self.runtime.push_tool
@@ -119,7 +129,8 @@ class KazeProactiveLoop(ProactiveLoop):
             await refresher.aclose()
 
     def _busy(self) -> bool:
-        return self._target_session_key() in self.runtime.loop._active_tasks
+        state = self.runtime.loop.processing_state
+        return state.is_busy(self._target_session_key()) if state is not None else False
 
     def can_send(self) -> bool:
         if self._busy():
@@ -132,13 +143,15 @@ class KazeProactiveLoop(ProactiveLoop):
         return current == self._tick_last_user_at
 
     def _build_turn_orchestrator(self) -> TurnOrchestrator:
+        outbound = _PushPort(self.runtime, self)
         return TurnOrchestrator(
             TurnOrchestratorDeps(
                 session=SessionServices(
                     session_manager=self._sessions, presence=self._presence
                 ),
-                outbound=_PushPort(self.runtime, self),
+                outbound=outbound,
                 event_bus=self._event_bus,
+                delivery_scope=outbound.delivery_scope,
             )
         )
 
@@ -305,7 +318,7 @@ def build_proactive_loop(runtime) -> KazeProactiveLoop | None:
             state_store_owned=True,
             memory_store=runtime.memory_runtime,
             presence=runtime.presence,
-            passive_busy_fn=lambda key: key in runtime.loop._active_tasks,
+            passive_busy_fn=(runtime.loop.processing_state.is_busy if runtime.loop.processing_state else None),
             shared_tools=runtime.tools,
             event_bus=runtime.event_bus,
             runtime_snapshot_store=RuntimeSnapshotStore(snapshot),

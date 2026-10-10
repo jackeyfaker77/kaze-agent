@@ -212,6 +212,8 @@ class _PersistAssistantMessageModule:
     requires = ("after_reasoning.persist_user", _CTX_SLOT)
 
     async def run(self, frame: AfterReasoningFrame) -> AfterReasoningFrame:
+        if frame.input.state.msg.metadata.get("omit_assistant_turn"):
+            return frame
         ctx = cast(AfterReasoningCtx, frame.slots[_CTX_SLOT])
         raw_session = frame.input.state.session
         if raw_session is None:
@@ -272,6 +274,8 @@ class _AppendMessagesModule:
 
     async def run(self, frame: AfterReasoningFrame) -> AfterReasoningFrame:
         state = frame.input.state
+        if state.msg.metadata.get("skip_session_history"):
+            return frame
         raw_session = state.session
         if raw_session is None:
             raise RuntimeError("AfterReasoning requires TurnState.session")
