@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from agent.looping.interrupt import TurnInterruptState
 from bus.events import OutboundMessage
-from bus.events_lifecycle import StreamDeltaReady, ToolCallStarted, ToolCallCompleted, ProactiveMessageCommitted
+from bus.events_lifecycle import StreamDeltaReady, ToolCallStarted, ToolCallCompleted, ProactiveMessageCommitted, TurnCommitted
 from desktop_bridge.models import BridgeError, BridgeResponse
 from desktop_bridge.voice.voice_handler import DesktopVoiceHandler
 from desktop_bridge.voice.voice_service import VoiceService
@@ -59,10 +59,14 @@ class DesktopBridgeService:
         runtime.bus.subscribe_outbound("desktop", outbound_text)
         self._event_handlers = []
         async def proactive_committed(event):
-            if event.channel == "desktop":
-                await committed_text(event.session_key, event.assistant_response)
+            await committed_text(event.session_key, event.assistant_response)
         runtime.event_bus.on(ProactiveMessageCommitted, proactive_committed)
         self._event_handlers.append((ProactiveMessageCommitted, proactive_committed))
+        async def external_committed(event):
+            if event.channel != "desktop":
+                await committed_text(event.session_key, event.assistant_response)
+        runtime.event_bus.on(TurnCommitted, external_committed)
+        self._event_handlers.append((TurnCommitted, external_committed))
         for event_type, method in (
             (StreamDeltaReady, "chat.delta"),
             (ToolCallStarted, "chat.tool.started"),

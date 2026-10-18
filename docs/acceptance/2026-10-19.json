@@ -1,0 +1,198 @@
+{
+  "date": "2026-10-19",
+  "timezone": "Asia/Shanghai",
+  "branch": "codex/full-acceptance",
+  "conclusion": "本轮验收完成，已发现的代码问题已修复并回归；未配置或认证失败的服务不能视为端到端通过。",
+  "fixes": [
+    {
+      "issue": "soft 定时任务提前推送",
+      "change": "提前生成后等待到 fire_at 再投递；等待可取消且不占会话投递锁",
+      "real_machine": "指定 03:46:30.932805，实际 03:46:30.943293，仅一次"
+    },
+    {
+      "issue": "Telegram 等外部渠道提交后工作台不自动刷新",
+      "change": "提交事件通知桌面；所有会话刷新目录，当前会话才替换快照；工作台自动重新查询",
+      "real_machine": "打开工作台期间用户发送验收同步复测，22 条自动变为 24 条且出现消息，无手动刷新"
+    },
+    {
+      "issue": "空 API Key 导致 SDK 初始化失败，整个后端无法启动",
+      "change": "使用非秘密占位值初始化，云端认证仍由服务端校验",
+      "real_machine": "独立工作区空密钥配置，打包版主窗口显示本地服务已连接；真实打包后端重启持久化通过"
+    },
+    {
+      "issue": "图片被模型适配层移除后屏幕观察仍报告可用",
+      "change": "屏幕分析显式要求保留图片，不满足时在网络请求前报错",
+      "real_machine": "重启后只调用一次，返回当前模型连接不支持图片输入；不再虚报可用"
+    },
+    {
+      "issue": "中文文件写入回执把字符数当字节数",
+      "change": "读取实际落盘文件大小",
+      "real_machine": "中文验收四字返回 12 字节"
+    }
+  ],
+  "coverage": [
+    {
+      "module": "桌面对话与会话",
+      "status": "passed",
+      "evidence": "真实 DeepSeek 回复、停止生成保留部分回复、下一轮正常完成、重启保留历史；打包后端会话创建重命名删除"
+    },
+    {
+      "module": "Telegram",
+      "status": "passed",
+      "evidence": "用户许可的私聊发出一次，用户确认收到并回复；接收持久化、会话同步和工作台自动刷新"
+    },
+    {
+      "module": "定时任务",
+      "status": "passed",
+      "evidence": "instant 和 soft 各一次；取消任务不再出现在清单；修复 soft 提前投递"
+    },
+    {
+      "module": "主动提醒",
+      "status": "passed_with_prior_live_evidence",
+      "evidence": "保留本轮之前 02:16 的真实待办提醒、ACK、重启及后续轮询不重复证据；此次未改 300 秒轮询；MCP 集成重复检查通过"
+    },
+    {
+      "module": "记忆",
+      "status": "passed",
+      "evidence": "memorize 写入合成记录、桌面及 Telegram 召回、后端重启后召回、forget_memory 精确失效该记录"
+    },
+    {
+      "module": "附件和文件工具",
+      "status": "passed",
+      "evidence": "通过系统文件框导入合成 txt，模型读出琥珀海鸥；write_file/read_file 一致；中文实际字节数复测"
+    },
+    {
+      "module": "网络工具",
+      "status": "passed",
+      "evidence": "web_fetch 返回 HTTP 200，HTML 标题 Example Domain；web_search 返回 IANA 搜索结果"
+    },
+    {
+      "module": "知识与运行界面",
+      "status": "passed",
+      "evidence": "3 个文档、19 个 MCP 工具、9 个技能和任务清单可见；工作台消息搜索"
+    },
+    {
+      "module": "设备 MCP",
+      "status": "passed",
+      "evidence": "真机 session/idle/foreground/power 均可用；此前沙箱前台窗口限制不再复现"
+    },
+    {
+      "module": "Calendar MCP",
+      "status": "integration_passed",
+      "evidence": "真实 stdio MCP + 本地 HTTP ICS 固件，同步、修改、取消、ACK、去重、重启；未配置外部日历订阅账户"
+    },
+    {
+      "module": "Feed MCP",
+      "status": "passed_with_external_limit",
+      "evidence": "4 个真实 RSS 源正常拉取；2 个文章站点正文返回 403；本地 RSS 集成和 ACK/去重/重启检查通过"
+    },
+    {
+      "module": "桌宠",
+      "status": "passed",
+      "evidence": "实际打开 Kaze 小风鼬小尺寸桌宠窗口并渲染；打包后端 pet.get 正常"
+    },
+    {
+      "module": "模型切换",
+      "status": "partial_configuration_blocked",
+      "evidence": "切到第二模型后认证失败，界面保留输入并明确报错；恢复 DeepSeek 后实际工具调用成功"
+    },
+    {
+      "module": "屏幕观察",
+      "status": "configuration_blocked",
+      "evidence": "当前 DeepSeek 适配链路不接受图片；误报修复后明确提示不支持，成功识别画面的流程仍需可用视觉模型"
+    },
+    {
+      "module": "语音",
+      "status": "skipped_unconfigured_by_user",
+      "evidence": "按用户要求跳过；ASR 和 TTS 凭据未配置，voice.enabled=false"
+    },
+    {
+      "module": "QQ",
+      "status": "skipped_unconfigured",
+      "evidence": "未配置 QQ 账号"
+    },
+    {
+      "module": "Codex 订阅连接",
+      "status": "automated_only",
+      "evidence": "完整后端回归覆盖连接接口；本轮未进行登录和真实订阅模型调用"
+    },
+    {
+      "module": "Windows 打包",
+      "status": "passed",
+      "evidence": "构建 NSIS 和 win-unpacked；主窗口正常连接；最终真实打包后端通过 13 个 RPC 检查及跨进程重启；未安装或卸载到系统"
+    }
+  ],
+  "validation": {
+    "backend": {
+      "passed": 1853,
+      "log": ".tmp/acceptance-20261019/backend-final-all.log"
+    },
+    "desktop": {
+      "passed": 208,
+      "skipped": 1,
+      "failed": 0,
+      "log": ".tmp/acceptance-20261019/desktop-unit.log"
+    },
+    "typecheck": "passed",
+    "eslint": "passed",
+    "desktop_build": "passed",
+    "git_diff_check": "passed",
+    "mcp": {
+      "device": {
+        "passed": true,
+        "checks": 12,
+        "evidence": ".tmp/acceptance-20261019/device.log"
+      },
+      "calendar": {
+        "passed": true,
+        "checks": 15,
+        "evidence": ".tmp/acceptance-20261019/calendar.log"
+      },
+      "feed": {
+        "passed": true,
+        "checks": 15,
+        "evidence": ".tmp/acceptance-20261019/feed.log"
+      }
+    },
+    "packaged_bridge": {
+      "passed": true,
+      "real_packaged_binary": "release/acceptance-installer/win-unpacked/resources/runtime/shiori-runtime.exe",
+      "isolated_workspace": ".tmp/acceptance-20261019/packaged-workspace",
+      "checks": [
+        "health",
+        "session.create",
+        "session.rename",
+        "memory.save",
+        "memory.get",
+        "runtime.catalog",
+        "tasks.list",
+        "pet.get",
+        "session.get",
+        "memory.get",
+        "session.delete",
+        "sessions.list",
+        "memory.save"
+      ]
+    },
+    "installer": "release/acceptance-installer/Kaze Setup 0.1.0.exe",
+    "pyright": "passed (production and tests)"
+  },
+  "final_state": {
+    "ACCEPT-INSTANT-20261019": [
+      1,
+      "2026-10-19T03:35:58.723306+08:00"
+    ],
+    "ACCEPT-SOFT-FIXED-20261019": [
+      1,
+      "2026-10-19T03:46:30.943293+08:00"
+    ],
+    "telegram_sync_count": 1,
+    "interrupted_reply_persisted": true,
+    "default_model": "deepseek-v4-flash",
+    "voice_enabled": false,
+    "no_pending_acceptance_schedules": true,
+    "acceptance-tools-20261019.txt_cleaned": true,
+    "acceptance-bytes-20261019.txt_cleaned": true
+  },
+  "retained_evidence": "验收会话与合成附件保留以便复查；日志在忽略的 .tmp 目录，不提交用户配置、凭据或历史消息。"
+}

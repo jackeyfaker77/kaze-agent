@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { newDraftKey, rpc, type Entry, type Session } from "./api";
 import { recoverAttachments, recoverDraft } from "./recoverDraft";
+import { handleCommittedEvent } from "./committedEvent";
 
 /** A draft has an address for pet voice, but is never saved by navigation. */
 export function useConversation() {
@@ -32,13 +33,11 @@ export function useConversation() {
     alive.current = true;
     void (async () => { await rpc("health"); await selectCurrent(); await refresh(); if (alive.current) setReady(true); })().catch(fail);
     const off = window.miraDesktop.onEvent(event => {
-      if (event.payload.session_key !== key.current) return;
-      if (event.method === "chat.done" || event.method === "message.pushed") {
-        const next = event.payload.session as Session | undefined;
+      if (handleCommittedEvent(event, key.current, () => { void refresh().catch(fail); }, next => {
         if (next) { saved.current = true; setSession(next); }
         setDelta(""); setTool("");
-        void refresh().catch(fail);
-      }
+      })) return;
+      if (event.payload.session_key !== key.current) return;
       if (event.method === "chat.delta") setDelta(value => value + String(event.payload.content_delta ?? ""));
       if (event.method === "chat.tool.started") setTool(String(event.payload.tool_name ?? ""));
       if (event.method === "chat.tool.completed") setTool("");

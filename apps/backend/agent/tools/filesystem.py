@@ -432,7 +432,7 @@ class WriteFileTool(Tool):
                     return f"写入文件失败：目标路径是目录：{path}"
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.write_text(content, encoding="utf-8")
-                return f"已写入 {len(content)} 字节到 {path}"
+                return f"已写入 {file_path.stat().st_size} 字节到 {path}"
 
             return await _run_with_file_mutation_lock(file_path, _write)
         except PermissionError as e:

@@ -96,6 +96,7 @@ class ObservationModelAdapter:
             max_tokens=1200,
             tool_choice="auto",
             payload_snapshot_enabled=False,
+            require_image_input=True,
         )
         if response.tool_calls:
             raise ValueError("视觉模型返回了未授权工具调用")

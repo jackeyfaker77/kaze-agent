@@ -25,7 +25,7 @@ class CodexProvider(LLMProvider):
 
     async def chat(self, messages, tools, model, max_tokens, tool_choice="auto",
                    extra_body=None, disable_thinking=False, payload_snapshot_enabled=None,
-                   on_content_delta=None) -> LLMResponse:
+                   on_content_delta=None, require_image_input=False) -> LLMResponse:
         try:
             async with self._catalog_lock:
                 if model not in self._transports:

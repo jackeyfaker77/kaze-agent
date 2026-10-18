@@ -684,6 +684,10 @@ class SchedulerService:
                 f"[scheduler] soft AI 完成 {label!r}  耗时={elapsed:.1f}s  P90={self.tracker.lead:.1f}s"
             )
             if content:
+                # The latency lead starts inference early, never delivery. Keep
+                # this wait cancellable and outside the target's delivery lane.
+                while (remaining := (job.fire_at - self._now()).total_seconds()) > 0:
+                    await asyncio.sleep(min(remaining, 1.0))
                 receipt = await self._deliver(job, content)
                 if receipt.ok:
                     logger.info(

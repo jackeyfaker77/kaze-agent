@@ -24,7 +24,7 @@ export function Workbench({ entries }: { entries: Entry[] }) {
       if (!disposed) { setRows(result.messages); setTotal(result.total); }
     }).catch(e => { if (!disposed) setError(String(e)); }).finally(() => { if (!disposed) setLoading(false); }); }, 150);
     return () => { disposed = true; clearTimeout(timer); };
-  }, [selected, query, role, page]);
+  }, [selected, query, role, page, entries]);
   const sources = [...new Set(entries.map(e => e.key.split(":")[0]))];
   return <div className="workbench">
     <aside className="workbench-rail">
