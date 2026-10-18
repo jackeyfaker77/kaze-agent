@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import datetime
 
 from agent.persona import AKASHIC_BEHAVIOR_RULES
 from agent.prompting import (
@@ -14,6 +15,7 @@ from core.memory.engine import MemoryRetrievalApi
 from proactive_v2.config import ProactiveConfig
 from plugins.default_proactive.context import AgentTickContext
 from proactive_v2.contracts import normalize_alert, normalize_content, normalize_context
+from core.clock import Clock, clock_from_env
 from plugins.default_proactive.gateway import GatewayResult
 
 
@@ -25,11 +27,13 @@ class ProactivePromptBuilder:
         memory: MemoryProfileApi | MemoryRetrievalApi | None,
         veda_fn: Callable[[], str],
         workspace_context_fn: Callable[[], str] | None,
+        clock: Clock | None = None,
     ) -> None:
         self._cfg = cfg
         self._memory = memory
         self._veda_fn = veda_fn
         self._workspace_context_fn = workspace_context_fn
+        self._clock = clock or clock_from_env()
 
     def build_system_prompt(self, plugin_sections: list[str] | None = None) -> str:
         veda = self._veda_fn()
@@ -173,7 +177,10 @@ class ProactivePromptBuilder:
                 "proactive_content",
                 self.render_content_block(gw.content_meta, gw.content_store).strip(),
             ),
-            ("proactive_context", self.render_context_block(gw.context).strip()),
+            (
+                "proactive_context",
+                self.render_context_block(gw.context, now=self._clock.now()).strip(),
+            ),
             ("workspace_proactive_context", self.read_workspace_context_for_prompt()),
         ):
             if content:
@@ -241,18 +248,43 @@ class ProactivePromptBuilder:
             + "\n\n"
         )
 
-    def render_context_block(self, context: list[dict[str, object]]) -> str:
+    def render_context_block(
+        self, context: list[dict[str, object]], *, now: datetime | None = None
+    ) -> str:
         if not context:
             return ""
         local_tz = self._cfg.anyaction_timezone
+        now = now if now is not None else self._clock.now()
         annotated_context = [
-            normalize_context(item, local_tz=local_tz).to_prompt_item()
+            normalize_context(item, local_tz=local_tz, now=now).to_prompt_item()
             for item in context
         ]
+        # Keep the JSON valid when one provider exceeds the shared prompt budget.
+        encoded_context: list[str] = []
+        remaining = 4_000 - 2
+        omitted = 0
+        for item in annotated_context:
+            encoded = json.dumps(item, ensure_ascii=False)
+            if len(encoded) + 2 > remaining:
+                omitted += 1
+                encoded = json.dumps(
+                    {
+                        "_source": str(item.get("_source") or "")[:120],
+                        "available": False,
+                        "presence": "unknown",
+                        "unavailable_reason": "context_budget_exceeded",
+                    },
+                    ensure_ascii=False,
+                )
+            if len(encoded) + 2 <= remaining:
+                encoded_context.append(encoded)
+                remaining -= len(encoded) + 2
+        note = f"\n{omitted} 份上下文超出预算，不能据此推断用户状态。" if omitted else ""
         return (
             "【背景上下文】\n"
             "注：sleep_prob=睡眠概率，awake_prob=清醒概率（= 1 - sleep_prob）；"
             "若同时存在 `*_local` 与原始时间字段，判断早晚和相对时间时优先看 `*_local`，原始字段可能是 UTC。\n"
-            + json.dumps(annotated_context, ensure_ascii=False)[:900]
+            + "[" + ", ".join(encoded_context) + "]"
+            + note
             + "\n\n"
         )

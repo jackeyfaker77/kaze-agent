@@ -10,7 +10,7 @@ from proactive_v2.legacy_mcp_sources import _load_sources
 
 def workspace_sources(workspace: Path) -> list[RegisteredProactiveSource]:
     """读取旧声明并合并使用同一 fetch/ack 路由的通道。"""
-    grouped: dict[tuple[str, str, str, str, str], dict] = {}
+    grouped: dict[tuple[str, str, str, str, str, str], dict] = {}
 
     for source in _load_sources(workspace):
         server = source["server"]
@@ -25,6 +25,7 @@ def workspace_sources(workspace: Path) -> list[RegisteredProactiveSource]:
             ack,
             json.dumps(args, sort_keys=True),
             json.dumps(source.get("ack_args", {}), sort_keys=True),
+            str(source.get("validate_tool") or ""),
         )
         item = grouped.setdefault(
             route,
@@ -40,8 +41,9 @@ def workspace_sources(workspace: Path) -> list[RegisteredProactiveSource]:
         )
     result = []
     for route, item in grouped.items():
-        server, fetch, ack, _, _ = route
-        digest = sha256(json.dumps(route).encode()).hexdigest()[:12]
+        server, fetch, ack, _, _, validate = route
+        # Existing routes retain their identity when validation is not configured.
+        digest = sha256(json.dumps(route if validate else route[:-1]).encode()).hexdigest()[:12]
         result.append(
             RegisteredProactiveSource(
                 plugin_id="workspace",
@@ -53,6 +55,7 @@ def workspace_sources(workspace: Path) -> list[RegisteredProactiveSource]:
                     ack_tool=ack,
                     fetch_args=item["args"],
                     ack_args=dict(item["ack_args"]),
+                    validate_tool=validate,
                 ),
             )
         )

@@ -1,49 +1,52 @@
 ---
-title: Shiori 项目知识库
+title: Kaze 项目知识库
 kind: 知识库入口
 status: 当前有效
-last_verified_commit: 27af068a
+last_verified_commit: 3572ff26
 source_paths:
   - apps/backend/main.py
-  - apps/backend/bootstrap/
-  - apps/backend/core/
-  - apps/backend/agent/
-  - apps/backend/proactive_v2/
-  - apps/backend/desktop_bridge/
+  - apps/backend/bootstrap
+  - apps/backend/session
+  - apps/backend/agent
+  - apps/backend/proactive_v2
+  - apps/backend/desktop_bridge
 related:
   - map.md
   - architecture/overview.md
   - impact/change-impact-index.md
 ---
 
-# Shiori 项目知识库
+# Kaze 项目知识库
 
-这里记录 Shiori 当前已经实现的能力、模块所有权、关键数据流和修改影响。它面向维护者和 Agent，目标是先定位，再理解，再安全修改。
+这里说明 Kaze 的模块职责、执行入口、状态归属和修改影响。阅读时先定位能力，再沿流程进入 source_paths 对应的源码。
 
 ## 导航
 
-- [能力地图](map.md)：按业务能力找到 owning module。
-- [总体架构](architecture/overview.md)：理解启动、消息、Agent 和持久化主链路。
-- [改动影响索引](impact/change-impact-index.md)：从准备修改的对象反查联动模块。
+- [总体架构](architecture/overview.md)：应用装配、被动消息、主动推送与状态归属。
+- [后端运行结构](architecture/current-backend.md)：核心对象、执行入口和同步边界。
+- [架构边界与修改原则](architecture/boundaries-and-evolution.md)：依赖方向与扩展约束。
+- [能力地图](map.md)：按能力查找模块和知识页。
+- [改动影响索引](impact/change-impact-index.md)：查找需要一起修改和验证的模块。
 
-## 完整验收问题矩阵
+## 模块与流程
 
-| 能力 | 知识页 | 至少应能回答的问题 |
+| 内容 | 知识页 | 阅读重点 |
 | --- | --- | --- |
-| 角色、关系、心情、素材 | [角色领域](modules/roles.md) | 角色由谁持久化；关系和寂寞如何推进；素材如何影响提示词和图片 |
-| 会话与对话 | [会话与对话](modules/conversations-and-sessions.md) | Session 与 Conversation 的边界；消息如何投影和同步 |
-| 记忆 | [记忆系统](modules/memory.md) | 检索、注入、写入和整理在哪里；多套实现如何分工 |
-| 主动行为 | [主动行为与 Drift](modules/proactive-and-drift.md) | tick 如何触发；presence、裁定和投递如何连接 |
-| Drift | [主动行为与 Drift](modules/proactive-and-drift.md) | Drift 状态如何持久化；与普通被动回合有何区别 |
-| NovelAI 与自动 CG | [NovelAI 与自动 CG](modules/novelai-and-auto-cg.md) | 自动 CG 何时触发；冷却、去重、重试、消息回写如何工作 |
-| 渠道 | [渠道系统](modules/channels.md) | Telegram、QQ 和统一 Channel 合约如何连接消息总线 |
-| Agent、工具、插件、MCP | [Agent 生命周期与工具](modules/agent-lifecycle-and-tools.md) | 一个回合经历哪些 phase；工具怎样注册、搜索、执行和拦截 |
-| 桌面端与桥接 | [桌面端与桥接](modules/desktop-and-bridge.md) | Electron、React 和 Python 服务如何通信；状态由谁装配 |
-| Story 模拟 | [桌面端与桥接](modules/desktop-and-bridge.md) | Story 数据库、桥接命令和桌面剧情界面如何连接 |
-| 桌宠语音 | [桌宠语音交互](modules/voice.md) | ASR 如何进入现有 Loop；TTS turn、中断、声音资产和指标由谁管理 |
-| 调度与角色任务 | [调度与任务](modules/scheduling.md) | 定时任务如何创建、触发和展示；角色任务如何执行 |
-| 本地数据与迁移 | [本地工作区数据](data/local-workspace.md) | 哪些数据是权威数据；删除、迁移和备份要注意什么 |
+| 身份与配置 | [身份与工作区配置](modules/identity-and-configuration.md) | 会话标识、全局身份、模型及配置归属 |
+| 会话与消息 | [会话与消息](modules/conversations-and-sessions.md) | SessionManager、SQLite、缓存和历史更新 |
+| 推送与同步 | [输出与推送同步](modules/outbound-and-push-sync.md) | 回执、发送后提交、图片附加和桌面通知 |
+| Agent 与工具 | [Agent 生命周期与工具](modules/agent-lifecycle-and-tools.md) | 回合阶段、工具注册、插件与 MCP |
+| 记忆 | [记忆系统](modules/memory.md) | Markdown、记忆引擎、检索和写入范围 |
+| 主动与 Drift | [主动行为](modules/proactive-and-drift.md) | Default / Wake、取源、去重、Drift 和投递 |
+| 调度 | [调度任务](modules/scheduling.md) | instant / soft、目标上下文、触发和关闭 |
+| 渠道 | [渠道系统](modules/channels.md) | 输入总线、渠道合约、目标解析和发送协调 |
+| 桌面 | [桌面端与桥接](modules/desktop-and-bridge.md) | Electron、JSONL RPC、会话快照与桌宠 |
+| 语音 | [语音交互](modules/voice.md) | ASR、会话输入、TTS、播放和取消 |
+| 本地数据 | [本地工作区数据](data/local-workspace.md) | 持久化文件、数据归属和资源关闭 |
 
-## 使用原则
+- [启动与关闭](flows/startup-and-shutdown.md)
+- [被动回合](flows/passive-turn.md)
+- [模型 Provider](flows/model-provider.md)
+- [运行协调](../runtime-coordination.md)
 
-知识页是源码核验后的摘要，不是冻结的规范。遇到细节问题，先用仓库搜索缩小范围，再读取 `source_paths` 中的源码。若文档与源码冲突，以源码和实际测试为准，并立即修正文档。
+文档是源码摘要。实现调整时，同步修改对应模块页、流程页和导航，并核对 source_paths 与相关链接。

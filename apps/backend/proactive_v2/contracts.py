@@ -6,6 +6,8 @@ from datetime import datetime, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 
+from proactive_v2.context_freshness import current_context_snapshot
+
 MAX_METRICS_KEYS = 8
 MAX_METRICS_VALUE_STR_LEN = 60
 _TIME_KEY_SUFFIXES = ("_at", "_time", "_ts")
@@ -191,7 +193,10 @@ def normalize_context(
     item: dict[str, Any],
     *,
     local_tz: str | tzinfo | None = None,
+    now: datetime | None = None,
 ) -> ContextContract:
+    if now is not None:
+        item = current_context_snapshot(item, now=now)
     source = str(item.get("_source") or "").strip()
     available_raw = item.get("available")
     available = None if available_raw is None else bool(available_raw)

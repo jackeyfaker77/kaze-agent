@@ -129,6 +129,7 @@ class AgentTickFactory:
             recent_chat_fn=self._build_recent_chat_fn(),
             ack_fn=source.ack_fn,
             alert_ack_fn=source.alert_ack_fn,
+            validate_alert_fn=source.validate_alert_fn,
             max_chars=self._deps.cfg.agent_tick_web_fetch_max_chars,
         )
 

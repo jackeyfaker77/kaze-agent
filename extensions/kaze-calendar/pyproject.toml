@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kaze-calendar"
+version = "0.1.0"
+description = "ICS calendar subscriptions and local todos for Kaze"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+  "mcp==2.3.0",
+  "httpx>=0.28,<1",
+  "icalendar==7.3.0",
+  "recurring-ical-events==3.8.2",
+  "tzdata>=2025.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.9"]
+
+[project.scripts]
+kaze-calendar = "kaze_calendar.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

@@ -4,6 +4,7 @@ import asyncio
 from typing import cast
 
 from agent.plugins.specs import RegisteredProactiveSource
+from core.clock import clock_from_env
 from plugins.default_proactive.gateway import GatewayDeps
 from proactive_v2 import mcp_sources
 from proactive_v2.mcp_sources import McpGateway
@@ -82,6 +83,15 @@ class McpGatewaySource:
             source_id,
             [item_id],
         )
+
+    async def validate_alert_fn(self, events: list[dict]) -> bool:
+        for event in events:
+            status = await mcp_sources.validate_alert_async(
+                self._pool, self._sources, event, now=clock_from_env().now()
+            )
+            if status != "valid":
+                return False
+        return True
 
     def _parse_compound_key(self, compound_key: str) -> tuple[str, str] | None:
         keys = sorted(

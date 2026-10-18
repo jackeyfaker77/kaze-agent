@@ -1,50 +1,46 @@
 ---
-title: 桌宠语音交互
-kind: 领域说明
+title: 语音交互
+kind: 模块说明
 status: 当前有效
-last_verified_commit: 277053d5
+last_verified_commit: 3572ff26
 source_paths:
-  - apps/backend/agent/voice_config.py
-  - apps/desktop/src/voice/
-  - apps/desktop/renderer/src/voice/
-  - apps/backend/desktop_bridge/voice/role_tts_settings.py
-  - apps/backend/desktop_bridge/voice/tts_text.py
-  - apps/backend/desktop_bridge/voice/voice_http.py
-  - apps/backend/desktop_bridge/voice/voice_models.py
+  - apps/backend/desktop_bridge/voice/voice_handler.py
   - apps/backend/desktop_bridge/voice/voice_service.py
-  - apps/backend/desktop_bridge/voice/tts_coordinator.py
-  - apps/backend/desktop_bridge/chat_service.py
+  - apps/backend/desktop_bridge/voice/voice_assets.py
+  - apps/backend/desktop_bridge/session_service.py
+  - apps/backend/agent/voice_config.py
+  - apps/desktop/src/voice/controller.ts
+  - apps/desktop/src/voice/bridgeEvents.ts
+  - apps/desktop/src/voice/playback.ts
+  - apps/desktop/src/voice/recorder.ts
 related:
   - desktop-and-bridge.md
-  - roles.md
-  - conversations-and-sessions.md
+  - identity-and-configuration.md
+  - ../flows/passive-turn.md
 ---
 
-# 桌宠语音交互
+# 语音交互
 
-## 主链路
+语音输入与回复使用全局 voice 配置，并关联当前会话和 voice_turn_id。Electron 管理录音、热键、播放与交互状态，后端 VoiceService 负责识别、合成和声音资产接口。
 
-Electron 主进程的 `DesktopVoiceController` 为每次按住说话生成 `voice_turn_id`。录音经隐藏 renderer 转为 16 kHz 单声道 PCM/WAV，`voice.transcribe` 完成 ASR 后仍通过现有 `chat.send` 和角色 Session 进入 Agent Loop，不存在平行聊天链路。
+## 输入
 
-Python `DesktopChatService` 只为 `input_method=voice` 且角色 provider 与全局 TTS provider 一致的回合创建 `TtsTurnCoordinator`。协调器按完整句子合成，`voice.reply.started`、`voice.tts.audio` 和 `voice.tts.error` 都携带同一个 `voice_turn_id`。Electron 只接收当前 turn 的事件，播放队列按句序号排序。
+录音模块获取音频，经 voice.transcribe 调用后端。voice handler 在线程中执行识别并返回文本与指标；桌面再将文本作为当前会话的 chat.send 输入，进入普通 Agent 回合。
 
-## 中断语义
+热键与会话输入使用同一交互控制器。请求 ID、session_key 和 voice_turn_id 将识别、模型回复、播放及取消关联起来。
 
-新语音输入开始时，本地播放立即切换到新 turn：正在播放的旧句子自然结束，旧 turn 尚未播放的句子全部丢弃，新 turn 音频可以同时排队。主进程通过 `voice.turn.cancel` 精确取消旧 turn；Python 同时中断该 turn 的 Agent 任务、永久关闭协调器并向 provider 流发送线程安全取消信号。晚到的旧 delta、音频和错误事件都被忽略。
+## 回复合成
 
-## Provider 与声音资产
+DesktopBridgeService 在生成完整回复、发布 chat.done 后调用 _speak_reply。它先发布 voice.reply.started；语音和 TTS 已启用且 voice_id 可用时，调用 VoiceService 合成完整正文，再发出 sequence=0 的 voice.tts.audio 和 voice.tts.finished。
 
-全局配置决定当前可用的 ASR/TTS provider 和凭据，角色配置保存 provider、`voice_id`、显示名、语速、心情到情绪映射及 ownership。角色 provider 不匹配时不合成，也不自动 fallback。
+未启用合成时直接结束语音阶段；合成失败发出 voice.tts.error 并结束。前端按 turn 关联处理音频、播放和界面状态。
 
-`ownership=external` 表示用户手动绑定的供应商音色，Shiori 永不自动删除；`ownership=shiori_managed` 只由 Shiori 复刻结果产生。替换或显式移除 managed 音色时，表单先记录待清理资产，角色保存成功后再调用 `voice.delete`。后端仍会同时校验 ownership、provider 和 `Shiori_` ID 前缀。
+## 取消与资产
 
-## 指标与隐私
+voice.turn.cancel 处理当前语音回合相关的聊天任务和 TTS；预览合成使用独立的 voice.synthesize.cancel 请求。Electron 控制器同时停止当前录音或播放，避免已结束 turn 的事件继续驱动界面。
 
-ASR/TTS 成功和失败都使用同一组非敏感指标：`provider`、`request_id`、`elapsed_ms`、`audio_duration_ms`、`character_count`、`error_code`。ASR 指标进入用户消息元数据，TTS 指标随句子事件返回。原始录音和完整 TTS 音频不进入默认日志，也不写入会话；日志只记录上述指标和用户可读错误。
+voice assets 管理克隆声音与删除相关状态，voice handler 提供资产操作接口。全局 voice.tts.voice_id 决定回复采用的声音。
 
 ## 修改影响
 
-- 修改 turn 中断：同步检查 controller、bridge event router、playback、`DesktopChatService` 和 `TtsTurnCoordinator`。
-- 修改 provider：同步检查全局配置、角色配置读写、协调器 enabled 判定和 provider 客户端。
-- 修改声音资产：保持 external/managed 区分，并验证角色保存成功后清理、失败重试和后端删除保护。
-- 修改指标：同步检查 provider 解析、bridge payload、聊天元数据白名单和日志，禁止加入原始音频。
+检查识别完成后的会话归属、聊天取消、合成任务、音频事件和播放状态。TTS 的实际触发时点是完整文本回复之后；修改为其他粒度时，需要同步后端事件、前端排序和取消处理。

@@ -108,6 +108,16 @@ def test_delivery_key_prefers_content_url_over_event_id():
     assert build_delivery_key(ctx1) == build_delivery_key(ctx2)
 
 
+def test_delivery_key_distinguishes_content_updates_at_the_same_url():
+    first = _make_ctx(cited=["feed:article@old"])
+    first.fetched_contents = [{"ack_server": "feed", "event_id": "article@old",
+                               "url": "https://example.com/a", "content_hash": "old"}]
+    updated = _make_ctx(cited=["feed:article@new"])
+    updated.fetched_contents = [{"ack_server": "feed", "event_id": "article@new",
+                                 "url": "https://example.com/a", "content_hash": "new"}]
+    assert build_delivery_key(first) != build_delivery_key(updated)
+
+
 def test_delivery_key_falls_back_to_source_and_title_when_url_missing():
     ctx1 = _make_ctx(cited=["feed-mcp:1"])
     ctx1.fetched_contents = [

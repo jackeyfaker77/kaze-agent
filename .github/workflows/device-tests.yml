@@ -1,0 +1,33 @@
+name: Device MCP tests
+
+permissions:
+  contents: read
+
+on:
+  push:
+    paths:
+      - 'extensions/kaze-device/**'
+      - '.github/workflows/device-tests.yml'
+  pull_request:
+    paths:
+      - 'extensions/kaze-device/**'
+      - '.github/workflows/device-tests.yml'
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: extensions/kaze-device
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: extensions/kaze-device/pyproject.toml
+      - run: python -m pip install -e ".[test]"
+      - run: python -m pytest -q

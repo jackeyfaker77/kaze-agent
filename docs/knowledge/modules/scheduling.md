@@ -2,7 +2,7 @@
 title: 调度任务
 kind: 领域说明
 status: 当前有效
-last_verified_commit: 9ef475e3
+last_verified_commit: 3572ff26
 source_paths:
   - apps/backend/agent/scheduler.py
   - apps/backend/agent/scheduler_cron.py
@@ -19,9 +19,11 @@ related:
 
 `apps/backend/agent/scheduler.py` 负责计算触发时间和调度执行，`apps/backend/agent/tools/schedule.py` 将创建、查询、更新和取消能力暴露给 Agent，bootstrap 将工具注册进 ToolRegistry。桌面桥接提供任务管理 RPC，任务的目标会话保存在 `ScheduledJob.session_key`。
 
-`instant` 直接生成投递正文；`soft` 通过 `AgentLoop.process_direct(stateless=True)` 在 `scheduler:{job.id}` 内部执行，不读写会话历史。两种任务均经过共享 ChatLane 和 MessagePushTool，真实发送成功后由宿主提交到保存的目标会话，再发布桌面通知。忙状态按目标会话 key 计数，内部执行 key 用于任务登记与取消。一次性任务完成后终止；周期任务根据上次计划时间稳定计算下一次触发，避免进程延迟造成连续补发。
+`instant` 直接生成投递正文；`soft` 通过 `AgentLoop.process_direct(stateless=True)` 在 `scheduler:{job.id}` 内部执行，不读写会话历史。提示词与工具上下文仍使用保存的目标渠道、接收方和 session_key。两种任务均经过共享 ChatLane 和 MessagePushTool，真实发送成功后由宿主提交到保存的目标会话，再发布桌面通知。忙状态按目标会话 key 计数，内部执行 key 用于任务登记与取消。一次性任务完成后终止；周期任务根据上次计划时间稳定计算下一次触发，避免进程延迟造成连续补发。
 
 新建与更新任务默认固定为 `Asia/Shanghai`，不读取宿主系统时区；调用方仍可显式传入其他 IANA 时区。cron 星期字段遵循 POSIX 语义：`0` 和 `7` 都表示周日。无论安装了 APScheduler 还是走内置 fallback，都会得到相同的星期解释。
+
+成功投递的完成状态在历史提交期间保持有效，避免取消使已发送任务重复运行或丢失运行次数。关闭时 Scheduler.aclose 等待已进入的发送后历史提交，随后应用才关闭插件、事件和会话资源。
 
 ## 修改影响
 

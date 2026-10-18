@@ -5,7 +5,16 @@
       "channel": "content",
       "get_tool": "get_proactive_events",
       "ack_tool": "acknowledge_events",
-      "enabled": true
+      "enabled": true,
+      "get_args": {"limit": 100}
+    },
+    {
+      "server": "calendar",
+      "channel": "alert",
+      "get_tool": "get_proactive_events",
+      "ack_tool": "acknowledge_events",
+      "validate_tool": "validate_proactive_events",
+      "enabled": false
     },
     {
       "server": "sensor",

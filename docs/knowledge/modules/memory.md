@@ -1,43 +1,50 @@
 ---
 title: 记忆系统
-kind: 领域说明
+kind: 模块说明
 status: 当前有效
-last_verified_commit: 27af068a
+last_verified_commit: 3572ff26
 source_paths:
-  - apps/backend/core/memory/
-  - apps/backend/plugins/default_memory/
-  - apps/backend/memory2/
-  - apps/backend/agent/retrieval/
+  - apps/backend/bootstrap/memory.py
+  - apps/backend/core/memory/engine.py
+  - apps/backend/core/memory/runtime.py
+  - apps/backend/core/memory/markdown
+  - apps/backend/agent/retrieval
+  - apps/backend/plugins/default_memory
+  - apps/backend/plugins/akasha
+  - apps/backend/memory2
 related:
   - conversations-and-sessions.md
+  - identity-and-configuration.md
   - agent-lifecycle-and-tools.md
+  - ../data/local-workspace.md
 ---
 
 # 记忆系统
 
-## 分层
+会话历史按 session_key 保存，长期记忆以工作区共享。bootstrap 同时装配 Markdown 记忆层与配置选用的记忆引擎，Agent 通过统一契约查询和写入。
 
-- `apps/backend/core/memory/` 定义 `MemoryEngine`、查询、变更和运行时契约，并提供生命周期接入点。
-- `apps/backend/plugins/default_memory/` 是默认记忆插件与 engine 策略实现，负责查询、变更、管理和提示词。
-- `apps/backend/memory2/` 提供增强处理链，包括查询构造/改写、HyDE、召回、充分性判断、去重、注入规划、画像与响应后记忆化。
-- `apps/backend/agent/retrieval/` 将具体记忆召回适配到 Agent 上下文准备阶段。
+## Markdown 层
 
-## 典型数据流
+MarkdownMemoryRuntime 使用工作区的统一 MemoryStore，读取长期记忆、自我信息、近期上下文及历史。MEMORY.md、HISTORY.md、PENDING.md、SELF.md 等文件位于 `workspace/memory/`。
 
-回合前根据角色、会话和当前输入构建 `MemoryQuery`，召回结果经过过滤、重排或注入规划进入上下文。回合后由后台 worker 判断是否写入、合并或 supersede 旧记忆。post-response 与 consolidation 两条隐式长期记忆提取链路共用当前角色的 active `profile / preference / procedure` 作为去重上下文；每轮提取受 worker token 预算约束。显式的 `memorize`、`forget_memory`、`recall_memory` 工具复用同一记忆契约。
+Markdown 层在 build_memory_runtime 中始终构建。它的 maintenance / consolidation 负责追加、整理及后台任务，共享写锁保护工作区文档更新。会话元数据不会自动将这些文件切成不同存储。
 
-`memorize` 返回结构化 JSON；post-response worker 优先解析该结构获取本轮受保护的 `item_id`，同时保留旧文本结果的读取兼容。角色删除通过 `MemoryStore2.invalidate_role_memories()` 失效该角色的结构化记忆，不影响其他角色。
+## 记忆引擎
+
+memory.enabled 控制引擎启用，memory.engine 选择实现，默认名为 default：
+
+- default_memory 使用 memory2 提供的存储、检索和增强处理能力。
+- akasha 提供图与激活相关检索、消息索引及诊断。
+- 未启用引擎时使用 DisabledMemoryEngine，Markdown 层仍提供共享文档上下文。
+
+MemoryEngine 的查询、结果和写入契约位于 `core/memory/engine.py`，MemoryRuntime 将引擎与 Markdown 运行时组合。具体数据库位置和增强参数由对应插件配置决定。
+
+## 回合中的记忆
+
+`agent/retrieval/` 将记忆查询适配为回合检索结果，BeforeTurn 准备上下文，推理阶段消费检索内容。回合后的写入与整理由相应生命周期和当前引擎的插件处理。
+
+主动与 Drift 复用宿主记忆服务。消息向量缓存可写入 sessions.db，供主动兴趣原型等功能复用；向量缓存与完整会话历史具有不同的数据用途。
 
 ## 修改影响
 
-- 修改记忆记录 schema：检查 store、向量索引、时间索引、迁移、去重和管理工具。
-- 修改召回评分：检查注入阈值、HyDE 合并、上下文 token 预算和评测；不要无意重写原始 score。
-- 修改角色/群聊隔离：检查查询过滤、权限策略、会话键和响应后写入。
-- 修改生命周期接入：检查 `BeforeTurn` 上下文准备和响应后的异步整理，不要阻塞消息投递。
-
-## 不变量
-
-- 角色和会话的记忆域必须显式过滤，不能依赖提示词约束实现隔离。
-- 召回结果与持久化记录分离；派生分数不应破坏原始证据。
-- 后台整理失败必须留下可查询的明确原因。
-- post-response 处理失败必须向生命周期边界冒泡，不能静默跳过角色记忆错误。
+切换引擎或修改 schema 时核对插件选择、检索注入、消息索引、写入、后台整理和关闭。改变共享范围时，应同步检查身份、Markdown 文档、语义检索和主动上下文；会话消息隔离本身不会改变全局记忆的范围。

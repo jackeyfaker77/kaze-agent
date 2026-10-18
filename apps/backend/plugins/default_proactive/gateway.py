@@ -104,7 +104,7 @@ class DataGateway:
         # 1. 对 content 先保留轻量 meta，再提前并行抓正文。
         #    后续 agent loop 默认只看 meta，需要时再 get_content 读取缓存正文。
         fetch_tasks = [
-            asyncio.create_task(self._fetch_one_url(e.get("url", ""))) for e in events
+            asyncio.create_task(self._fetch_body(e)) for e in events
         ]
         fetch_results = await asyncio.gather(*fetch_tasks)
 
@@ -118,9 +118,10 @@ class DataGateway:
 
             content_meta.append(
                 {
+                    **{key: value for key, value in event.items() if key not in {"body", "content"}},
                     "id": compound_key,
                     "title": event.get("title") or "",
-                    "source": event.get("source") or "",
+                    "source": event.get("source") or event.get("source_name") or "",
                     "url": event.get("url") or "",
                     "published_at": event.get("published_at") or "",
                 }
@@ -133,6 +134,18 @@ class DataGateway:
                 content_store[compound_key] = str(result)
 
         return content_meta, content_store
+
+    async def _fetch_body(self, event: dict) -> str:
+        cached = event.get("body")
+        if isinstance(cached, str) and cached.strip():
+            return cached[: self._max_chars]
+        content = event.get("content")
+        if event.get("content_complete") and isinstance(content, str) and content.strip():
+            return content[: self._max_chars]
+        fetched = await self._fetch_one_url(event.get("url", ""))
+        if fetched:
+            return fetched
+        return content[: self._max_chars] if isinstance(content, str) else ""
 
     async def _fetch_one_url(self, url: str) -> str:
         """抓取单个 URL，保留业务失败降级并拒绝损坏的工具协议。"""

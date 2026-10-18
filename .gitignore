@@ -45,6 +45,10 @@ data/
 **/.kv.json
 plugins/**/.data/
 /data
+# 知识库中的数据说明
+!/docs/knowledge/data/
+/docs/knowledge/data/*
+!/docs/knowledge/data/*.md
 /memory/
 /roles
 /release/

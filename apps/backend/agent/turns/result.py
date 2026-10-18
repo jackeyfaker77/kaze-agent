@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Literal, Protocol, runtime_checkable
 
 
 @dataclass
@@ -37,3 +37,5 @@ class TurnResult:
     success_side_effects: list[Any] = field(default_factory=list)
     # 失败副作用：仅在 outbound 发送失败后执行。
     failure_side_effects: list[Any] = field(default_factory=list)
+    # Mutable reminder evidence is rechecked after waiting for the delivery lane.
+    delivery_guard: Callable[[], Awaitable[bool]] | None = None

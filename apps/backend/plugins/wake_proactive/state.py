@@ -14,6 +14,7 @@ from plugins.wake_proactive.context_drive import (
     evaluate_context,
 )
 from plugins.wake_proactive.hazard import HazardResult
+from proactive_v2.context_freshness import current_context_snapshot
 
 
 class WakeStateStore:
@@ -643,6 +644,7 @@ class WakeStateStore:
     ) -> list[ContextDriveResult]:
         results: list[ContextDriveResult] = []
         for snapshot in snapshots:
+            snapshot = current_context_snapshot(snapshot, now=now)
             source_id = str(
                 snapshot.get("_source") or snapshot.get("source_id") or ""
             ).strip()
