@@ -1,49 +1,54 @@
 ---
-title: Agent 生命周期、工具、插件与 MCP
-kind: 领域说明
+title: Agent 生命周期与工具
+kind: 模块说明
 status: 当前有效
-last_verified_commit: dd424e65
+last_verified_commit: 3572ff26
 source_paths:
-  - apps/backend/agent/core/
-  - apps/backend/agent/turns/
-  - apps/backend/agent/lifecycle/
-  - apps/backend/agent/tools/
-  - apps/backend/agent/screen_observation/
-  - apps/backend/agent/plugins/
-  - apps/backend/agent/mcp/
+  - apps/backend/agent/looping/core
+  - apps/backend/agent/core/passive_turn
+  - apps/backend/agent/lifecycle
+  - apps/backend/agent/tools/registry.py
+  - apps/backend/agent/tool_hooks/executor.py
+  - apps/backend/agent/plugins/manager.py
+  - apps/backend/agent/mcp/registry.py
+  - apps/backend/bootstrap/toolsets
+  - apps/backend/bootstrap/tools.py
+  - apps/backend/agent/screen_observation/service.py
+  - apps/backend/plugins/observe/plugin.py
 related:
+  - ../flows/passive-turn.md
+  - ../flows/model-provider.md
   - memory.md
   - proactive-and-drift.md
-  - architecture/overview.md
+  - ../architecture/overview.md
 ---
 
-# Agent 生命周期、工具、插件与 MCP
+# Agent 生命周期与工具
 
-## 回合生命周期
+AgentLoop 管理回合任务和运行状态；被动管线负责上下文、推理及持久化。工具、插件与 MCP 在装配时进入共享运行时，再按当前回合配置决定可见能力。
 
-被动回合由 `apps/backend/agent/core/passive_turn/` 组织，`apps/backend/agent/turns/` 负责回合协调和输出。生命周期模块提供 `BeforeTurn`、`BeforeReasoning`、`AfterReasoning`、`AfterTurn`、prompt render 等 phase，使记忆、插件、自动 CG 和观测逻辑在明确边界接入。
+## 生命周期
 
-## 工具体系
+主要阶段为 BeforeTurn → BeforeReasoning → 模型与工具循环 → AfterReasoning → AfterTurn。prompt_render 负责提示词，before_step / after_step 围绕每次模型与工具步骤执行。生命周期上下文携带当前会话、结果、媒体和工具链等信息。
 
-`ToolRegistry` 保存工具和索引视图，搜索后端支持按需发现工具。ToolExecutor 执行调用，ToolHook 在执行前后接入插件逻辑。文件、Shell、消息、记忆、调度、图片、网页和 subagent 等能力都是具体工具实现。
+bootstrap 将进度接到 EventBus 与活动回合快照，Bridge 再转为流式正文和工具事件。修改 hook 时需核对阶段顺序、异常传播、取消和后续持久化是否仍能完成。
 
-工具搜索的目的是控制可见工具规模；搜索结果进入当前回合，不应永久污染全局 registry。后台 Shell 任务由独立 runtime 管理注册、轮询和停止。
+## 工具与技能
 
-`observe_screen` 是所有角色默认拥有的只读工具，在核心 runtime 注册并可由桌面、Telegram、QQ 等渠道调用。它只读取当前主屏幕并返回经过过滤的摘要，不执行桌面动作；捕获宿主和视觉模型不可用时，工具仍可发现，但执行会返回明确错误。
+ToolRegistry 汇集本地工具及 MCP 工具；工具目录、搜索、参数 schema 与执行设施共同控制模型能发现和调用的能力。`bootstrap/toolsets/` 创建工具并注入工作区、会话、记忆、Scheduler、渠道或共享 HTTP 服务。
+
+文件、Shell、网络、记忆、消息推送、调度和 spawn 等工具在各自实现中处理参数与结果。技能由 skills 模块加载并加入回合上下文。spawn 的后台任务由 `agent/background/` 管理，完成事件可通过输入总线返回。
 
 ## 插件与 MCP
 
-`apps/backend/agent/plugins/` 管理插件注册、配置、生命周期和装饰器。`apps/backend/agent/mcp/registry.py` 与 `client.py` 管理 MCP server 配置和连接池，并把远端工具同步到 ToolRegistry。插件工具 hook 会适配到统一 ToolExecutor 接口。
+PluginManager 加载配置启用的插件，收集生命周期模块、工具、门控和主动能力声明。MCP Registry 管理连接并将工具接入同一目录。新增能力需同时确认配置启用、工具可见和实际入口调用。
 
-## 修改影响
+主动执行由 ProactiveKernel 使用插件提供的 lifecycle、runtime / module factory 和能力快照；普通被动回合沿 Agent 生命周期运行。
 
-- 修改 phase 上下文：检查所有插件 handler、记忆生命周期、自动 CG 和观测插件。
-- 修改 Tool/ToolMeta：检查 registry、搜索索引、MCP 同步、提示词渲染和调用结果事件。
-- 修改执行器：检查 hook 顺序、错误冒泡、后台任务和工具事件日志。
-- 修改 MCP 生命周期：检查连接重建、工具卸载、名称冲突和配置持久化。
+## 屏幕观察与桌宠动作
 
-## 不变量
+屏幕观察由 `agent/screen_observation/` 提供服务与记忆适配，`infra/screen_capture.py` 处理截图。`bootstrap/tools.py` 创建观察服务并注册 observe_screen 工具，桌面 observation RPC 也调用相应服务。
 
-- phase 的 `requires`/`produces` 契约在启动时校验。
-- 工具调用异常应进入回合错误路径，不能由业务层静默吞掉。
-- 插件卸载或 MCP 断开后，相关工具不能残留在 registry。
+observe 插件订阅回合提交、检索与记忆写入事件，记录运行诊断和错误；屏幕截图与观察服务由上述独立模块提供。
+
+desktop_pet 插件提供 pet_action，发布动作事件给桌面显示。具体能力受配置、插件启用和当前工具上下文约束。

@@ -66,14 +66,16 @@ def _build_delivery_refs(ctx: AgentTickContext) -> list[str]:
         if meta is None:
             refs.append(f"id:{key}")
             continue
+        revision = str(meta.get("content_hash") or "").strip()
+        suffix = f"|revision:{revision}" if revision else ""
         url = _normalize_delivery_url(str(meta.get("url") or ""))
         if url:
-            refs.append(f"url:{url}")
+            refs.append(f"url:{url}{suffix}")
             continue
         source = str(meta.get("source") or "").strip().lower()
         title = str(meta.get("title") or "").strip().lower()
         if title:
-            refs.append(f"title:{source}|{title}")
+            refs.append(f"title:{source}|{title}{suffix}")
             continue
         refs.append(f"id:{key}")
     return sorted(set(refs))
@@ -196,6 +198,7 @@ class ProactiveResolver:
         recent_proactive_fn: Callable[[], list[RecentProactiveMessage]] | None,
         ack_fn: Any,
         alert_ack_fn: Any,
+        validate_alert_fn: Any = None,
     ) -> None:
         self._cfg = cfg
         self._session_key = session_key
@@ -204,6 +207,7 @@ class ProactiveResolver:
         self._recent_proactive_fn = recent_proactive_fn
         self._ack_fn = ack_fn
         self._alert_ack_fn = alert_ack_fn
+        self._validate_alert_fn = validate_alert_fn
 
     async def resolve(self, ctx: AgentTickContext) -> ResolveResult:
         if ctx.terminal_action != "reply":
@@ -231,7 +235,22 @@ class ProactiveResolver:
             if is_dup:
                 return self._build_message_dedupe_result(ctx, reason)
 
+        if not await self._validate_alerts(ctx):
+            ctx.terminal_action = "skip"
+            ctx.skip_reason = "other"
+            ctx.skip_note = "source_event_invalid_or_unavailable"
+            return self._build_skip_result(ctx)
         return self._build_send_result(ctx, delivery_key)
+
+    async def _validate_alerts(self, ctx: AgentTickContext) -> bool:
+        if self._validate_alert_fn is None or not ctx.fetched_alerts:
+            return True
+        cited = set(ctx.cited_item_ids)
+        selected = [
+            event for event in ctx.fetched_alerts
+            if f"{event.get('ack_server', '')}:{event.get('event_id') or event.get('id', '')}" in cited
+        ]
+        return await self._validate_alert_fn(selected) if selected else True
 
     def _build_skip_result(self, ctx: AgentTickContext) -> ResolveResult:
         logger.info(
@@ -397,6 +416,7 @@ class ProactiveResolver:
                     content=ctx.final_message,
                 ),
                 evidence=list(ctx.cited_item_ids),
+                delivery_guard=lambda: self._validate_alerts(ctx),
                 trace=TurnTrace(
                     source="proactive",
                     extra={

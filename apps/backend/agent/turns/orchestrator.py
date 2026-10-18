@@ -72,6 +72,8 @@ class TurnOrchestrator:
             else nullcontext()
         )
         async with scope:
+            if result.delivery_guard is not None and not await result.delivery_guard():
+                return False
             try:
                 sent = await self._dispatch_outbound(
                     channel=channel,

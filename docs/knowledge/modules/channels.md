@@ -1,37 +1,47 @@
 ---
 title: 渠道系统
-kind: 领域说明
+kind: 模块说明
 status: 当前有效
-last_verified_commit: 27af068a
+last_verified_commit: 3572ff26
 source_paths:
-  - apps/backend/infra/channels/
-  - apps/backend/core/channels/hub.py
-  - apps/backend/plugins/qqbot/
   - apps/backend/bootstrap/channels.py
+  - apps/backend/bootstrap/channel_host.py
+  - apps/backend/core/channels/hub.py
+  - apps/backend/infra/channels/contract.py
+  - apps/backend/infra/channels/telegram_channel
+  - apps/backend/infra/channels/qq_channel
+  - apps/backend/plugins/qqbot
+  - apps/backend/core/common/channel_identifiers.py
+  - apps/backend/bus/queue.py
 related:
+  - ../flows/passive-turn.md
+  - outbound-and-push-sync.md
   - conversations-and-sessions.md
-  - desktop-and-bridge.md
 ---
 
 # 渠道系统
 
-## 统一边界
+渠道适配器把平台输入转换为 InboundMessage，并把总线输出或主动推送转换成平台调用。bootstrap 与 ChannelHost 根据配置启动、注册和关闭渠道。
 
-`apps/backend/infra/channels/contract.py` 定义 Channel 合约与上下文，`apps/backend/core/channels/hub.py` 汇总渠道，bootstrap 负责按配置启动。渠道适配器把外部消息转换为统一入站事件，并把统一出站消息渲染为平台格式。
+## 合约与依赖
 
-Telegram 实现在 `apps/backend/infra/channels/telegram_channel/`，拆分 lifecycle、inbound、outbound、media、streaming、commands 等职责。NcatBot QQ 位于 `apps/backend/infra/channels/qq_channel/`：lifecycle 只装配 SDK 与订阅，inbound、outbound、trace、loop bridge 和兼容 helper 各自拥有单一边界。官方 QQBot 位于 `apps/backend/plugins/qqbot/`：`channel.py` 只保留组合与启停，Gateway、C2C 入站、HTTP/媒体出站和 live stream 分别由对应 mixin 负责。两套适配器共享 Channel 合约，但不隐藏协议差异。
+`infra/channels/contract.py` 定义 Channel 的 start / stop 合约。ChannelContext 注入消息总线、会话、事件、推送工具、附件存储、共享 HTTP、中断控制和 ChannelHub。
 
-## 标识与投递
+平台适配位于 Telegram、QQ 模块及 qqbot 插件。输入权限由配置和工作区 channels.json 中的发送者白名单控制。附件通过渠道公共存储提供给回合。
 
-`session_key.py`、`reply_context.py` 和公共 channel identifier helper 负责稳定定位账号、聊天、线程与回复上下文。群聊过滤和成员隔离必须在入站边界明确处理。typing、流式编辑等辅助动作允许独立失败，但最终消息投递和权威会话写入必须可观测。
+## 消息流
 
-外部渠道的角色绑定属于一对一关系：每个渠道会话必须且只能配置一个联系人 ID。入站路由只接受该 ID，或与其匹配的渠道别名；缺失或包含多个联系人的旧配置一律拒绝，避免扩大既有角色可响应的范围。桌面端绑定是应用内会话，不配置外部联系人。
+1. 渠道收到平台消息，解析接收方、发送者、正文和附件。
+2. InboundMessage 通过 MessageBus 进入 AgentLoop.run，会话默认按 channel / chat_id 关联。
+3. Agent 保存回合历史并发布 OutboundMessage。
+4. 总线输出分发器调用相应渠道发送；后台推送使用 MessagePushTool 取得发送回执。
 
-## 修改影响
+渠道 AgentLoop.run 当前按队列逐项等待执行；桌面通过 Bridge 直接进入 process_direct。判断并行行为时，需要分别检查这两个入口。
 
-- 修改 Channel 合约：检查所有渠道实现、bootstrap host、消息总线和测试替身。
-- 修改聊天标识：检查角色绑定、Session/Conversation 键、群聊记忆域和推送目标。
-- 修改角色渠道绑定：检查配置校验、入站身份验证、旧配置迁移和角色编辑界面的联系人字段。
-- 修改附件模型：检查 Telegram 媒体、QQ 适配、桌面桥接、自动 CG 和历史消息展示。
-- 修改 QQ 渠道：NcatBot 需同步检查主 loop/bot loop 桥接、群聊过滤和 CQ 媒体；QQBot 需同步检查 Gateway intent、token/REST、C2C message id 和 live stream 状态。
-- 新增渠道：复用统一合约、会话解析和输出端口，不复制 Agent 回合逻辑。
+## 目标解析与协调
+
+渠道名和接收方通过 channel_identifiers 与渠道 resolve_target 归一化。ChatLane 用这一结果协调被动交互与后台推送，确保输入和发送指向同一个目标 lane。
+
+MessagePushTool 依赖渠道注册结果。新增渠道时需接通普通输出、主动 / 调度发送、目标解析和回执处理，并验证成功后的历史与桌面通知。
+
+渠道负责平台适配。会话消息由 SessionManager 保存，身份、长期记忆与全局配置由各自工作区服务提供。

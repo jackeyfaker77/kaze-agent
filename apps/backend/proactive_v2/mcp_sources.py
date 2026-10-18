@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from agent.plugins.specs import RegisteredProactiveSource, proactive_source_key
 from agent.tools.base import ToolResult
@@ -128,7 +129,10 @@ async def fetch_source_strict_async(
                 break
     if "context" in spec.channels and isinstance(data, dict):
         item = dict(data)
-        item.setdefault("_source", key)
+        if source.plugin_id == "workspace":
+            item["_source"] = key
+        else:
+            item.setdefault("_source", key)
         result["context"].append(item)
         return result
     if not isinstance(data, list):
@@ -206,3 +210,47 @@ async def acknowledge_async(
         result.get("ok") is False or result.get("success") is False
     ):
         raise RuntimeError(f"主动源 ACK 未成功: {source_id}: {result}")
+
+
+async def validate_alert_async(
+    pool: McpGateway,
+    sources: list[RegisteredProactiveSource],
+    event: dict[str, Any],
+    *,
+    now: datetime,
+) -> Literal["valid", "invalid", "unavailable"]:
+    """Recheck mutable reminders without consuming them; transient failure stays retryable."""
+    expires_at = event.get("expires_at")
+    if expires_at is not None:
+        try:
+            if datetime.fromisoformat(str(expires_at)) <= now:
+                return "invalid"
+        except (ValueError, TypeError):
+            return "unavailable"
+    source_id = str(event.get("_reservoir_ack_source_id") or event.get("ack_server") or "")
+    source = next((item for item in sources if source_key(item) == source_id), None)
+    # Persisted alerts cannot outlive their registered source/route. Legacy
+    # sources that remain registered may still omit the optional validator.
+    if source is None:
+        return "invalid"
+    if not source.spec.validate_tool:
+        return "valid"
+    event_id = str(event.get("_reservoir_source_event_id") or event.get("event_id") or event.get("id") or "")
+    try:
+        result = await pool.call(
+            source.spec.server, source.spec.validate_tool, {"event_ids": [event_id]}
+        )
+        if not isinstance(result, dict):
+            raise ValueError("validation result must be an object")
+        valid = result.get("valid_event_ids")
+        unavailable = result.get("unavailable_event_ids", [])
+        if not isinstance(valid, list) or not isinstance(unavailable, list):
+            raise ValueError("validation result must contain event ID lists")
+        if any(not isinstance(key, str) for key in [*valid, *unavailable]):
+            raise ValueError("validation event IDs must be strings")
+        if event_id in unavailable:
+            return "unavailable"
+        return "valid" if event_id in valid else "invalid"
+    except Exception as exc:
+        logger.warning("[proactive.source] validation unavailable %s: %s", source_id, exc)
+        return "unavailable"

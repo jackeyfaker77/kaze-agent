@@ -77,3 +77,34 @@ async def test_gateway_rejects_corrupt_web_fetch_payload(payload: str) -> None:
 
     with pytest.raises(RuntimeError, match="web_fetch 返回值"):
         await gateway.run()
+
+
+@pytest.mark.asyncio
+async def test_gateway_uses_cached_source_body_and_preserves_revision() -> None:
+    web_fetch = AsyncMock()
+    gateway = DataGateway(
+        feed_fn=AsyncMock(return_value=[{
+            "event_id": "article@revision", "ack_server": "workspace:feed",
+            "url": "https://example.com", "source_name": "订阅来源",
+            "body": "缓存全文" * 100, "content_hash": "revision",
+        }]), web_fetch_tool=web_fetch, max_chars=24,
+    )
+    result = await gateway.run()
+    assert result.content_store == {"workspace:feed:article@revision": ("缓存全文" * 100)[:24]}
+    assert result.content_meta[0]["content_hash"] == "revision"
+    assert result.content_meta[0]["source"] == "订阅来源"
+    assert "body" not in result.content_meta[0]
+    web_fetch.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_gateway_falls_back_to_source_summary_on_fetch_error() -> None:
+    web_fetch = AsyncMock()
+    web_fetch.execute.return_value = json.dumps({"error": "offline"})
+    gateway = DataGateway(
+        feed_fn=AsyncMock(return_value=[{
+            "event_id": "article", "ack_server": "feed", "url": "https://example.com",
+            "content": "摘要仍可用",
+        }]), web_fetch_tool=web_fetch,
+    )
+    assert (await gateway.run()).content_store == {"feed:article": "摘要仍可用"}

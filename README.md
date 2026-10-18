@@ -23,27 +23,30 @@ Kaze 的每段对话使用独立的 `session_key`，消息记录分别保存，�
 
 ```mermaid
 flowchart LR
-  UI[React 会话界面 / 桌宠 / 语音] --> Electron[Electron 主进程]
-  Electron -->|JSONL stdio| Bridge[DesktopBridgeService]
-  Channels[Telegram / QQ / 插件频道] --> Agent[AgentLoop]
-  Bridge --> Agent
-  Agent --> Sessions[SessionManager / sessions.db]
-  Agent --> Tools[工具 / MCP / 插件]
-  Agent --> Memory[全局 workspace/memory]
-  Tasks[Cron 定时任务] --> Agent
-  Proactive[Default / Wake 主动 Kernel] -->|成功投递后写入| Sessions
+  UI["React 会话界面 / 桌宠 / 语音"] --> Electron["Electron 主进程"]
+  Electron -->|JSONL stdio| Bridge["DesktopBridgeService"]
+  Channels["Telegram / QQ / 插件频道"] --> Bus["MessageBus 输入队列"]
+  Bus --> Agent["AgentLoop"]
+  Bridge -->|process_direct| Agent
+  Agent --> Sessions["SessionManager / sessions.db"]
+  Agent --> Tools["工具 / MCP / 插件"]
+  Agent --> Memory["工作区共享记忆"]
+  Tasks["Scheduler"] -->|soft 无状态执行| Agent
+  Tasks --> Push["MessagePushTool / ChatLane"]
+  Proactive["Default / Wake 主动 Kernel"] --> Push
   Proactive --> Tools
   Proactive --> Memory
+  Push -->|成功投递后提交历史| Sessions
 ```
 
 - 会话直接使用 `session_key`，桌面 RPC 也接受 `chat_id`。新桌面会话默认生成 `desktop:<uuid>`；外部频道使用 `<channel>:<chat_id>`。会话间消息记录独立，长期记忆共享。
-- 系统采用通用 Agent 会话机制，会话状态与长期记忆解耦管理。
+- 渠道输入由总线逐项消费，桌面 chat.send 直接调用 AgentLoop。会话锁保护回合顺序，写锁保护历史更新；ChatLane 按渠道目标协调被动交互和后台推送，详见 [运行协调](docs/runtime-coordination.md)。
 - `workspace/memory/` 存放 Markdown 长期记忆、历史、待整理内容及近期上下文。可选语义记忆插件使用全局索引。
 - 桌宠包统一放在 `workspace/pets/`。桌宠选择属于应用，可在不同会话中使用；支持导入、切换、显示、隐藏、拖动、动画和回复气泡。
 - 语音使用全局 `[voice.tts].voice_id`，热键输入发送到当前会话。模型目录的第一个注册项为全局主模型。
 - 定时任务按 `session_key` 归属。Default／Wake 主动管线每轮读取工作区 `PROACTIVE_CONTEXT.md`，可选 `HEARTBEAT.md` 作为附加任务规则。主动检查默认关闭，设置中的“高级”可配置策略、会话和外部频道目标，详见 [主动推送指南](docs/_handbook/proactive-guide.md)。
 
-核心入口：`apps/backend/bootstrap/tools.py`；会话桥接：`apps/backend/desktop_bridge/session_service.py`；前端入口：`apps/desktop/renderer/src/SessionApp.tsx`。
+核心入口：`apps/backend/bootstrap/tools.py`；会话桥接：`apps/backend/desktop_bridge/session_service.py`；前端入口：`apps/desktop/renderer/src/SessionApp.tsx`。模块职责和数据流见 [总体架构](docs/knowledge/architecture/overview.md) 与 [项目知识库](docs/knowledge/index.md)。
 
 [桌面主链路交互架构图](docs/kaze-system-architecture.html) 提供路径演示、主题切换和导出，源码引用固定在 `53e5b24` 快照；当前主动管线以以上架构和主动推送指南为准。图源为 [kaze-system.archify.json](docs/kaze-system.archify.json)。
 

@@ -1,0 +1,11 @@
+{
+  "database_path": "agenda.sqlite3",
+  "timezone": "Asia/Shanghai",
+  "poll_interval_seconds": 300,
+  "calendar_cache_ttl_seconds": 1800,
+  "request_timeout_seconds": 15,
+  "default_reminder_minutes": 15,
+  "calendar_late_minutes": 15,
+  "todo_late_hours": 24,
+  "all_day_reminder_hour": 9
+}

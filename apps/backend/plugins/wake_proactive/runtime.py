@@ -43,6 +43,7 @@ from plugins.wake_proactive.state import WakeStateStore
 from plugins.wake_proactive.tools import TOOL_SCHEMAS, ToolDeps, execute
 from proactive_v2 import mcp_sources
 from proactive_v2.frame import ProactiveFrame
+from proactive_v2.context_freshness import current_context_snapshot
 from proactive_v2.runtime_scope import ProactiveRuntimeScope
 from session.embedding_store import MessageEmbeddingStore
 
@@ -172,6 +173,10 @@ class WakeRuntime:
         # 2. Alert 不依赖内容向量；普通轮次再刷新内容兴趣
         if state.alerts:
             return
+        await self._prepare_content_interest(state)
+
+    async def _prepare_content_interest(self, state: WakeRunState) -> None:
+        """Refresh content interests before evaluating this tick's new items."""
         if self._scope.interaction_embeddings_fn is not None:
             await self._scope.interaction_embeddings_fn(state.ctx.now_utc)
         await self._cache_event_embeddings()
@@ -213,7 +218,7 @@ class WakeRuntime:
             state.ctx.now_utc,
         )
         state.context_results = self._state.ingest_context(
-            channels["context"], state.ctx.now_utc
+            channels["context"], self._clock.now()
         )
         state.context_event = next(
             (
@@ -255,11 +260,19 @@ class WakeRuntime:
 
     async def decide_content(self, state: WakeRunState) -> bool:
         if state.alerts:
-            await self._decide_event(state, "alert", state.alerts[0])
-            state.next_interval_seconds = (
-                1 if len(state.alerts) > 1 else self._tick_interval_seconds
-            )
-            return True
+            for index, event in enumerate(state.alerts):
+                if not await self._validate_alert(state, event):
+                    continue
+                await self._decide_event(state, "alert", event, prevalidated=True)
+                state.next_interval_seconds = (
+                    1 if index < len(state.alerts) - 1 else self._tick_interval_seconds
+                )
+                return True
+            # Unverifiable calendar alerts must not block other source channels.
+            state.ctx.terminal_action = None
+            # Ingest deferred this work for alert priority. Keep the new-item
+            # IDs from this tick so semantic matches receive their first chance.
+            await self._prepare_content_interest(state)
         if state.context_reevaluate and state.context_event is not None:
             await self._decide_event(state, "context", state.context_event)
             state.next_interval_seconds = self._tick_interval_seconds
@@ -355,7 +368,7 @@ class WakeRuntime:
                 ctx.session_key, ctx.now_utc
             ),
             recent_proactive_messages=self._read_recent_proactive_messages(ctx.now_utc),
-            current_context=self._current_context_text(ctx.now_utc),
+            current_context=self._current_context_text(self._clock.now()),
         )
         candidates = [
             {
@@ -390,14 +403,14 @@ class WakeRuntime:
     async def _run_content_tools(self, ctx: WakeContext) -> None:
         """依次完成标题初筛、候选调查和最终内容决策。"""
 
-        # 1. 固定本轮上下文，避免两个 LLM 阶段读取到不同快照
+        # 1. 固定本轮规则和对话快照；短期设备上下文在各阶段使用前检查有效期。
         memory_text = self._read_memory()
         proactive_context = str(self._scope.workspace_context_fn() or "")
         recent_passive_conversation = self._read_recent_passive_conversation(
             ctx.session_key, ctx.now_utc
         )
         recent_proactive_messages = self._read_recent_proactive_messages(ctx.now_utc)
-        current_context = self._current_context_text(ctx.now_utc)
+        current_context = self._current_context_text(self._clock.now())
         base_messages = build_messages(
             ctx=ctx,
             memory_text=memory_text,
@@ -421,7 +434,7 @@ class WakeRuntime:
             proactive_context=proactive_context,
             recent_passive_conversation=recent_passive_conversation,
             recent_proactive_messages=recent_proactive_messages,
-            current_context=current_context,
+            current_context=self._current_context_text(self._clock.now()),
             content_phase="final",
         )
 
@@ -658,8 +671,18 @@ class WakeRuntime:
         state: WakeRunState,
         kind: Literal["alert", "context"],
         event: dict[str, Any],
+        *,
+        prevalidated: bool = False,
     ) -> None:
         """让 LLM 独立处理一条 alert 或 context，并提交发送结果。"""
+
+        if kind == "context":
+            event = current_context_snapshot(event, now=self._clock.now())
+            if event.get("available") is False:
+                state.ctx.terminal_action = "skip"
+                return
+        elif not prevalidated and not await self._validate_alert(state, event):
+            return
 
         # 1. 用统一 prompt 渲染单条事件并在调用前落审计
         messages = self._build_event_messages(state, kind, event)
@@ -680,6 +703,8 @@ class WakeRuntime:
             "send_event" if kind == "alert" else None,
         )
         decision = execute_event_tool(call.name, call.arguments)
+        if kind == "alert" and not await self._validate_alert(state, event):
+            return
         await self._commit_event_decision(state, kind, event, item_id, decision)
         logger.info(
             "[wake.event] llm done kind=%s event_id=%s decision=%s message=%r",
@@ -688,6 +713,19 @@ class WakeRuntime:
             decision.decision,
             decision.message[:160],
         )
+
+    async def _validate_alert(self, state: WakeRunState, event: dict[str, Any]) -> bool:
+        status = await mcp_sources.validate_alert_async(
+            self._scope.mcp_gateway, self._scope.proactive_sources,
+            event, now=self._clock.now(),
+        )
+        if status == "valid":
+            return True
+        if status == "invalid":
+            item_id = str(event.get("item_id") or event.get("id") or "")
+            self._state.expire([item_id], self._clock.now())
+        state.ctx.terminal_action = "skip"
+        return False
 
     def _build_event_messages(
         self,
@@ -705,7 +743,7 @@ class WakeRuntime:
             recent_proactive_messages=self._read_recent_proactive_messages(
                 state.ctx.now_utc
             ),
-            current_context=self._current_context_text(state.ctx.now_utc),
+            current_context=self._current_context_text(self._clock.now()),
             mode=kind,
             event=event,
         )
@@ -767,6 +805,8 @@ class WakeRuntime:
             ),
             side_effects=effects if decision.decision == "skip" else [],
             success_side_effects=effects if decision.decision == "reply" else [],
+            delivery_guard=(lambda: self._validate_alert(state, event))
+            if kind == "alert" else None,
         )
         await self._require_orchestrator().handle_proactive_turn(
             result=result,
@@ -825,7 +865,7 @@ class WakeRuntime:
             session_key=state.ctx.session_key,
         )
         drift_ctx.mark_context_prefetched(
-            [dict(context.raw) for context in self._active_contexts(state.ctx.now_utc)]
+            [dict(context.raw) for context in self._active_contexts(self._clock.now())]
         )
         entered = await self._drift_pipeline.run(drift_ctx, self._drift_llm_fn)
         if not entered:
@@ -969,11 +1009,14 @@ class WakeRuntime:
         return [
             context
             for context in self._state.list_contexts()
-            if (context.expires_at is not None and context.expires_at >= now)
-            or (
-                context.expires_at is None
-                and context.observed_at is not None
-                and 0 <= (now - context.observed_at).total_seconds() <= 30 * 60
+            if context.raw.get("available") is not False
+            and (
+                (context.expires_at is not None and context.expires_at > now)
+                or (
+                    context.expires_at is None
+                    and context.observed_at is not None
+                    and 0 <= (now - context.observed_at).total_seconds() <= 30 * 60
+                )
             )
         ]
 

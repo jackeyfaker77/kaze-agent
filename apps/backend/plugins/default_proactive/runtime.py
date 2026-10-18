@@ -198,6 +198,7 @@ class ProactiveFlowRuntime:
             recent_proactive_fn=self._recent_proactive_fn,
             ack_fn=self._tool_deps.ack_fn,
             alert_ack_fn=self._tool_deps.alert_ack_fn,
+            validate_alert_fn=self._tool_deps.validate_alert_fn,
         )
         self._judge = ProactiveJudge(
             cfg=self._cfg,
@@ -523,6 +524,7 @@ class ProactiveFlowRuntime:
                 event_id = str(meta["id"])
             fetched_contents.append(
                 {
+                    **meta,
                     "id": event_id,
                     "event_id": event_id,
                     "ack_server": source_id,

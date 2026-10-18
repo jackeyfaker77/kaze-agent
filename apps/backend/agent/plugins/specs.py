@@ -53,6 +53,7 @@ class ProactiveSourceSpec:
     fetch_page_size: int = 0
     fetch_args: dict[str, object] = field(default_factory=dict)
     ack_args: dict[str, object] = field(default_factory=dict)
+    validate_tool: str = ""
 
 
 @dataclass(frozen=True)

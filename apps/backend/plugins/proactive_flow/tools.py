@@ -45,6 +45,7 @@ class ToolDeps:
     ack_fn: Any = None  # async (compound_key: str, feedback: str) -> None
     alert_ack_fn: Any = None  # async (compound_key: str) -> None
     max_chars: int = 8_000
+    validate_alert_fn: Any = None  # async (events: list[dict]) -> bool
 
 
 # ── 工具 Schema ──────────────────────────────────────────────────────────

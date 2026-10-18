@@ -1,0 +1,7 @@
+{
+  "idle_threshold_seconds": 300,
+  "snapshot_ttl_seconds": 30,
+  "foreground_enabled": true,
+  "include_window_title": false,
+  "game_processes": []
+}

@@ -112,6 +112,8 @@ def _load_sources(workspace: Path) -> list[dict]:
         for name in ("get_args", "ack_args", "poll_args"):
             if not isinstance(source.get(name, {}), dict):
                 raise ValueError(f"主动源 {name} 必须是对象")
+        if not isinstance(source.get("validate_tool", ""), str):
+            raise ValueError("主动源 validate_tool 必须是字符串")
         result.append(
             {**source, "server": str(source["server"]).strip(), "channel": channel}
         )

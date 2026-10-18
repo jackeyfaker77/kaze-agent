@@ -227,6 +227,203 @@ def _scope(
     )
 
 
+@pytest.mark.parametrize("route_changed", [False, True])
+async def test_removed_source_alert_is_retired_after_restart(tmp_path, route_changed):
+    now = datetime(2026, 10, 16, 9, tzinfo=UTC)
+    path = tmp_path / "wake.db"
+    store = WakeStateStore(path)
+    store.ingest(
+        "alert",
+        [
+            {
+                "event_id": "task@v1",
+                "ack_server": "workspace:old-route",
+                "title": "旧提醒",
+                "expires_at": (now + timedelta(hours=1)).isoformat(),
+            }
+        ],
+        now,
+    )
+    store.close()
+    gateway = SimpleNamespace(call=AsyncMock(return_value=[]))
+    provider = SimpleNamespace(chat=AsyncMock())
+    orchestrator = FakeOrchestrator()
+    scope = _scope(tmp_path, gateway, provider, orchestrator, _source("alert"))
+    if not route_changed:
+        scope.proactive_sources = []
+    runtime = WakeRuntime(
+        scope, state_store=WakeStateStore(path), clock=FixedClock(now)
+    )
+    try:
+        state = runtime.begin(new_proactive_frame("telegram:1"))
+        await runtime.ingest(state)
+        assert len(state.alerts) == 1
+        assert not await runtime.decide_content(state)
+        assert runtime._state.unread("alert") == []
+        assert runtime._state.pending_acknowledgements() == {}
+        assert orchestrator.results == []
+        provider.chat.assert_not_awaited()
+        assert all(call.args[1] == "fetch" for call in gateway.call.await_args_list)
+    finally:
+        runtime.close()
+    reopened = WakeStateStore(path)
+    try:
+        assert reopened.unread("alert") == []
+        assert reopened.pending_acknowledgements() == {}
+    finally:
+        reopened.close()
+
+
+async def test_removing_source_before_delivery_rejects_cached_reply(tmp_path):
+    now = datetime(2026, 10, 16, 9, tzinfo=UTC)
+    gateway = FakeGateway([{"kind": "alert", "event_id": "task@v1", "title": "提醒"}])
+    provider = SimpleNamespace(
+        chat=AsyncMock(
+            return_value=LLMResponse(
+                content=None,
+                tool_calls=[ToolCall("send", "send_event", {"message": "提醒"})],
+            )
+        )
+    )
+    # Capture the pending result without dispatching it or running success effects.
+    orchestrator = FailingOrchestrator()
+    scope = _scope(tmp_path, gateway, provider, orchestrator, _source("alert"))
+    runtime = WakeRuntime(
+        scope, state_store=WakeStateStore(tmp_path / "wake.db"), clock=FixedClock(now)
+    )
+    try:
+        state = runtime.begin(new_proactive_frame("telegram:1"))
+        await runtime.ingest(state)
+        assert await runtime.decide_content(state)
+        result = orchestrator.results[0]
+        assert result.decision == "reply"
+        assert result.delivery_guard is not None
+        scope.proactive_sources = []
+        assert not await result.delivery_guard()
+        assert runtime._state.unread("alert") == []
+        assert runtime._state.pending_acknowledgements() == {}
+        assert gateway.acks == []
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("validation", ["invalid", "unavailable", "valid"])
+async def test_alert_fallback_evaluates_new_feed_with_semantic_interest(
+    tmp_path,
+    monkeypatch,
+    validation,
+):
+    now = datetime(2026, 10, 16, 9, tzinfo=UTC)
+    events = [
+        {"kind": "alert", "event_id": "task@v1", "title": "提醒"},
+        {
+            "kind": "content",
+            "event_id": "article@new",
+            "title": "匹配用户兴趣的文章",
+            "published_at": now.isoformat(),
+            "content": "semantic match",
+        },
+    ]
+    source = RegisteredProactiveSource(
+        "fixture",
+        ProactiveSourceSpec(
+            id="mixed",
+            channels=("alert", "content"),
+            server="fixture",
+            fetch_tool="fetch",
+            ack_tool="ack",
+            validate_tool="validate",
+        ),
+    )
+    gateway = FakeGateway(events)
+    provider = SimpleNamespace(
+        chat=AsyncMock(
+            side_effect=[
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            "screen",
+                            "scratchpad",
+                            {
+                                "items": [
+                                    {
+                                        "item_id": "candidate_1",
+                                        "initial_interest": "likely_interesting",
+                                    }
+                                ],
+                            },
+                        )
+                    ],
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            "share",
+                            "share_content",
+                            {
+                                "opening": "新内容",
+                                "items": [
+                                    {
+                                        "item_id": "candidate_1",
+                                        "summary": "文章摘要",
+                                        "why_it_matters": "符合兴趣",
+                                    }
+                                ],
+                            },
+                        )
+                    ],
+                ),
+            ]
+        )
+    )
+    orchestrator = FakeOrchestrator()
+    scope = _scope(tmp_path, gateway, provider, orchestrator, source)
+    scope.memory.embedding_api.embed_batch = AsyncMock(return_value=[[1.0, 0.0]])
+    interaction_embeddings = AsyncMock()
+    scope.interaction_embeddings_fn = interaction_embeddings
+    monkeypatch.setattr(
+        "plugins.wake_proactive.runtime.mcp_sources.validate_alert_async",
+        AsyncMock(return_value=validation),
+    )
+    runtime = WakeRuntime(
+        scope, state_store=WakeStateStore(tmp_path / "wake.db"), clock=FixedClock(now)
+    )
+    monkeypatch.setattr(runtime, "_load_turn_prototypes", lambda _: [[1.0, 0.0]])
+    try:
+        if validation == "valid":
+            decide_alert = AsyncMock()
+            monkeypatch.setattr(runtime, "_decide_event", decide_alert)
+        state = runtime.begin(new_proactive_frame("telegram:1"))
+        await runtime.ingest(state)
+        scope.memory.embedding_api.embed_batch.assert_not_awaited()
+        assert len(state.new_content_ids or []) == 1
+        assert await runtime.decide_content(state)
+        if validation == "valid":
+            decide_alert.assert_awaited_once()
+            scope.memory.embedding_api.embed_batch.assert_not_awaited()
+            interaction_embeddings.assert_not_awaited()
+            provider.chat.assert_not_awaited()
+            return
+        interaction_embeddings.assert_awaited_once_with(now)
+        scope.memory.embedding_api.embed_batch.assert_awaited_once()
+        assert state.contents[0]["_wake_interest_score"] == pytest.approx(0.999)
+        assert state.hazard_result is not None and state.hazard_result.should_wake
+        assert orchestrator.results[0].decision == "reply"
+        assert orchestrator.results[0].evidence == ["fixture:mixed:article@new"]
+        assert runtime._state.unread("content") == []
+        assert len(runtime._state.unread("alert")) == (validation == "unavailable")
+        assert gateway.acks == [{"event_ids": ["article@new"]}]
+        second = runtime.begin(new_proactive_frame("telegram:1"))
+        await runtime.ingest(second)
+        assert not await runtime.decide_content(second)
+        assert second.hazard_result is None
+        assert len(orchestrator.results) == 1
+    finally:
+        runtime.close()
+
+
 @pytest.mark.asyncio
 async def test_content_vertical_slice_filters_investigates_and_shares(
     tmp_path,

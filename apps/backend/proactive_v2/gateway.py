@@ -112,7 +112,7 @@ class DataGateway:
         # 1. 对 content 先保留轻量 meta，再提前并行抓正文。
         #    后续 agent loop 默认只看 meta，需要时再 get_content 读取缓存正文。
         fetch_tasks = [
-            asyncio.create_task(self._fetch_one_url(e.get("url", ""))) for e in events
+            asyncio.create_task(self._fetch_body(e)) for e in events
         ]
         fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
@@ -147,6 +147,15 @@ class DataGateway:
                 content_store[compound_key] = str(result)
 
         return content_meta, content_store
+
+    async def _fetch_body(self, event: dict) -> str:
+        cached = event.get("body")
+        if isinstance(cached, str) and cached.strip():
+            return cached[: self._max_chars]
+        content = event.get("content")
+        if event.get("content_complete") and isinstance(content, str) and content.strip():
+            return content[: self._max_chars]
+        return await self._fetch_one_url(event.get("url", ""))
 
     async def _fetch_one_url(self, url: str) -> str:
         """抓取单个 URL，返回截断后正文，失败返回空字符串。"""

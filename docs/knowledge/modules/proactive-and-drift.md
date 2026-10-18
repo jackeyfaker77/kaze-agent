@@ -2,6 +2,7 @@
 title: 主动行为
 kind: 领域说明
 status: 当前有效
+last_verified_commit: 3572ff26
 source_paths:
   - apps/backend/bootstrap/proactive.py
   - apps/backend/proactive_v2/loop.py
@@ -24,7 +25,7 @@ related:
 
 # 主动行为
 
-生产调用链为 AppRuntime.start → prepare_proactive_loop → run_proactive → KazeProactiveLoop → ProactiveKernel。插件声明的 lifecycle、runtime factory 与 module factory 构成执行图；同一轮和运行中 Kernel 持有能力快照 lease。普通 Agent 的 process_direct、NO_REPLY / USED 文本协议不再参与主动回合。
+生产调用链为 AppRuntime.start → prepare_proactive_loop → run_proactive → KazeProactiveLoop → ProactiveKernel。插件声明的 lifecycle、runtime factory 与 module factory 构成执行图；同一轮和运行中 Kernel 持有能力快照 lease。候选处理、结束决策与投递使用专用主动执行图。
 
 ## 生命周期
 
@@ -36,7 +37,9 @@ Context 的可信状态变化受全局节流，触发重新评估或单条场景
 
 ## 宿主适配
 
-Kaze 保留会话和真实渠道服务、已有插件门控与共享 MCP；新增插件能力声明只服务于主动链路。工作区 JSON 源编译为同一源目录，没有固定 Feed 名称依赖。PROACTIVE_CONTEXT.md 每轮实际加载，可选 HEARTBEAT.md 作为附加规则。
+主动宿主复用会话、渠道、插件门控与共享 MCP；插件能力声明由主动执行图消费。工作区 JSON 源编译为同一源目录，没有固定 Feed 名称依赖。PROACTIVE_CONTEXT.md 每轮实际加载，可选 HEARTBEAT.md 作为附加规则。
+
+可变提醒源可声明 `validate_tool`。Default 和 Wake 在决策过程中核对精确版本，并在进入发送协调区后再次检查；已取消、改期、完成或过期的提醒停止投递，暂时不可核实的提醒保留重试。ICS 日历和本地待办通过该协议提供 `alert`，见 [日历和待办](../../integrations/calendar.md)。
 
 身份读取 memory/VEDA.md 或 SOUL.md；互动向量复用现有记忆引擎的 embedding 客户端，补齐 canonical 消息缓存。完整被动回合参与原型，未回复、未来及主动消息排除。
 
@@ -50,6 +53,6 @@ Kaze 保留会话和真实渠道服务、已有插件门控与共享 MCP；新�
 - drift/drift.db：Drift 活动运行和探索状态。
 - sessions.db：成功主动助手消息及可复用消息向量。
 
-模型决策记录与渠道成功历史各有含义，不能用 reply 决策代替送达证明。旧简化入口的 policy、源连接池和 JSON 去重模块只保留兼容接口，没有生产调用。
+模型决策记录与渠道成功历史分别表示裁决和投递，reply 决策本身不能证明渠道送达。
 
-配置、行为边界和回归点详见 [主动推送指南](../../_handbook/proactive-guide.md)，迁入范围与宿主差异见 [源码来源](../../third-party/akashic-proactive.md)。
+配置、行为边界和回归点详见 [主动推送指南](../../_handbook/proactive-guide.md)；执行与发送协调见 [运行协调说明](../../runtime-coordination.md)。
