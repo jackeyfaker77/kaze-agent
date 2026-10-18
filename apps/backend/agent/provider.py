@@ -211,7 +211,10 @@ class LLMProvider:
         normalized_base_url = _normalize_openai_base_url(base_url)
         # Keep retry ownership here so every provider obeys the same retry budget.
         self._client = AsyncOpenAI(
-            api_key=api_key,
+            # Keyless local endpoints are valid configurations. A non-secret
+            # placeholder also keeps unrelated desktop services available while
+            # cloud credentials are being configured; the server validates auth.
+            api_key=api_key or "kaze-key-not-configured",
             base_url=normalized_base_url,
             max_retries=0,
         )
@@ -246,6 +249,7 @@ class LLMProvider:
         disable_thinking: bool = False,
         payload_snapshot_enabled: bool | None = None,
         on_content_delta: Callable[[StreamDelta], Awaitable[None]] | None = None,
+        require_image_input: bool = False,
     ) -> LLMResponse:
         strategy = _select_provider_strategy(
             provider_name=self._provider_name,
@@ -254,6 +258,13 @@ class LLMProvider:
         )
         full_messages = _merge_leading_system_messages(messages)
         full_messages = strategy.normalize_messages(full_messages)
+        if require_image_input and not any(
+            isinstance(block, dict) and block.get("type") == "image_url"
+            for message in full_messages
+            if isinstance(message.get("content"), list)
+            for block in message["content"]
+        ):
+            raise ValueError("当前模型连接不支持图片输入，无法观察屏幕；请切换支持图片的模型")
         kwargs: dict = dict(model=model, max_tokens=max_tokens, messages=full_messages)
         if tools:
             kwargs["tools"] = tools

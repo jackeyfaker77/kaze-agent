@@ -61,6 +61,7 @@ async def test_analyze_uses_bounded_context_and_disables_payload_snapshots() -> 
     assert "近期已说过=这个问题快解决了" in user_text
     assert call["tools"] == []
     assert call["payload_snapshot_enabled"] is False
+    assert call["require_image_input"] is True
     assert "disable_thinking" not in call
 
 

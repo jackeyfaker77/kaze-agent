@@ -158,6 +158,25 @@ async def test_other_channels_keep_their_error_reply(desktop):
     assert await runtime.loop.process_direct("你好", session_key="cli:failure") == "处理消息时出错，请稍后再试。"
 
 
+@pytest.mark.asyncio
+async def test_external_channel_commit_refreshes_desktop_without_switching_session(desktop):
+    runtime, bridge = desktop
+    events = []
+    bridge.add_event_listener(events.append)
+    await bridge.handle({"method": "session.draft", "payload": {"session_key": "desktop:editing"}})
+
+    async def chat(**kwargs):
+        return LLMResponse(content="external reply")
+
+    runtime.provider.chat = chat
+    await runtime.loop.process_direct("external input", channel="telegram", chat_id="42", session_key="telegram:42")
+    pushed = [e for e in events if e["method"] == "message.pushed"]
+    assert len(pushed) == 1
+    assert pushed[0]["payload"]["session_key"] == "telegram:42"
+    assert [m["content"] for m in pushed[0]["payload"]["session"]["messages"]] == ["external input", "external reply"]
+    assert bridge.active_session_key == "desktop:editing"
+
+
 def test_config_template_does_not_register_an_unrequested_vision_model():
     import tomllib
     from pathlib import Path

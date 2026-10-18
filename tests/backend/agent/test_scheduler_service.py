@@ -156,6 +156,65 @@ async def test_soft_records_latency(tmp_path, mock_push, mock_loop, fixed_now):
     assert len(tracker._samples) == 1
 
 
+async def test_soft_prepares_early_but_delivers_only_at_fire_at(tmp_path, mock_push, mock_loop):
+    prepared = asyncio.Event()
+    delivered_at = []
+
+    async def generate(**kwargs):
+        prepared.set()
+        return "prepared reminder"
+
+    async def send(**kwargs):
+        delivered_at.append(datetime.now(timezone.utc))
+        return DeliveryReceipt(True, "desktop", "test", "sent")
+
+    mock_loop.process_direct.side_effect = generate
+    mock_push.send.side_effect = send
+    svc = SchedulerService(tmp_path / "jobs.json", mock_push, mock_loop)
+    job = make_job(tier="soft", fire_at=datetime.now(timezone.utc) + timedelta(seconds=0.3))
+    svc.add_job(job)
+    await svc._tick()
+    try:
+        await asyncio.wait_for(prepared.wait(), 2)
+        mock_push.send.assert_not_called()
+        await asyncio.wait_for(svc._active_tasks[job.id], 2)
+        assert len(delivered_at) == 1
+        assert delivered_at[0] >= job.fire_at
+        assert job.run_count == 1
+        assert job.id not in svc._jobs
+    finally:
+        await svc.aclose()
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+async def test_prepared_soft_job_can_be_cancelled_before_delivery(tmp_path, mock_push, mock_loop, shutdown):
+    prepared = asyncio.Event()
+
+    async def generate(**kwargs):
+        prepared.set()
+        return "must not be delivered"
+
+    mock_loop.process_direct.side_effect = generate
+    svc = SchedulerService(tmp_path / "jobs.json", mock_push, mock_loop)
+    job = make_job(tier="soft", fire_at=datetime.now(timezone.utc) + timedelta(seconds=10))
+    svc.add_job(job)
+    await svc._tick()
+    try:
+        await asyncio.wait_for(prepared.wait(), 2)
+        mock_push.send.assert_not_called()
+        if shutdown:
+            await svc.aclose()
+        else:
+            assert svc.cancel_job(job.id)
+            await svc.aclose()
+        mock_push.send.assert_not_called()
+        assert job.run_count == 0
+        assert (job.id in svc._jobs) is shutdown
+        assert bool(svc.store.load()) is shutdown
+    finally:
+        await svc.aclose()
+
+
 @pytest.mark.parametrize("started_before_stop", [False, True])
 async def test_stop_cancels_inflight_job_tasks(
     tmp_path, mock_push, mock_loop, fixed_now, started_before_stop
@@ -370,6 +429,10 @@ async def test_every_soft_cron_pretrigger_advances_past_current_boundary(
         _now_fn=lambda: now_ref["value"],
     )
     fire_at = datetime(2025, 6, 1, 8, 0, 0, tzinfo=timezone.utc)
+    async def finish_at_boundary(**kwargs):
+        now_ref["value"] = fire_at
+        return "AI response"
+    mock_loop.process_direct.side_effect = finish_at_boundary
     job = make_job(
         trigger="every",
         tier="soft",

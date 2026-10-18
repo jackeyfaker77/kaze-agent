@@ -206,6 +206,9 @@ async def test_filesystem_tools_cover_core_paths(
     result = await writer.execute("b.txt", "hello")
     assert "已写入" in result
 
+    result = await writer.execute("unicode.txt", "中文\n验收")
+    assert f"已写入 {len((base / 'unicode.txt').read_bytes())} 字节" in result
+
     editor = EditFileTool(base)
     assert "未找到 old_text" in await editor.execute("b.txt", "x", "y")
     result = await editor.execute("b.txt", "hello", "world")
