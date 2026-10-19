@@ -275,19 +275,29 @@ export class DesktopVoiceController {
           asr_metrics: asrMetrics ?? undefined,
         },
       });
-      if (!this.isCurrentOperation(generation) || this.currentState.kind !== "sending") return;
+      if (!this.isCurrentOperation(generation)) return;
       if (chat.error) {
-        this.apply({ type: "chat_failed", message: chat.error.message });
+        this.failChat(chat.error.message);
         return;
       }
-      this.apply({ type: "chat_accepted" });
+      if (this.currentState.kind === "sending") this.apply({ type: "chat_accepted" });
     } catch (error: unknown) {
       if (!this.isCurrentOperation(generation)) return;
       if (this.state.kind === "transcribing") {
         this.apply({ type: "asr_failed", message: errorMessage(error, "语音识别失败，请重试") });
-      } else if (this.state.kind === "sending") {
-        this.apply({ type: "chat_failed", message: errorMessage(error, "消息发送失败") });
+      } else {
+        this.failChat(errorMessage(error, "消息发送失败"));
       }
+    }
+  }
+
+  private failChat(message: string): void {
+    if (this.state.kind === "sending") {
+      this.apply({ type: "chat_failed", message });
+    } else if (this.activeTurnId) {
+      // Reply events may already have started playback when the RPC fails.
+      this.cancel();
+      this.options.publishState({ status: "error", message });
     }
   }
 

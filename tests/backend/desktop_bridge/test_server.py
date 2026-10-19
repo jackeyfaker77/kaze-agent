@@ -113,12 +113,13 @@ async def test_health_response_is_not_blocked_by_slow_mutation(tmp_path: Path) -
     health_written = asyncio.Event()
     writes: list[dict[str, object]] = []
 
-    async def _handle(request, emit_event):
+    async def _handle(request, emit_event, chat_admission):
         del emit_event
         method = str(request["method"])
         if method == "chat.send":
-            mutation_started.set()
-            await release_mutation.wait()
+            async with chat_admission():
+                mutation_started.set()
+                await release_mutation.wait()
         return BridgeResponse(
             id=str(request["id"]),
             type="response",
@@ -190,8 +191,8 @@ async def test_server_eof_cancels_and_awaits_in_flight_request(tmp_path: Path) -
     async def _read() -> str | None:
         return next(lines)
 
-    async def _handle(request, emit_event):
-        del request, emit_event
+    async def _handle(request, emit_event, chat_admission):
+        del request, emit_event, chat_admission
         try:
             await asyncio.Event().wait()
         finally:

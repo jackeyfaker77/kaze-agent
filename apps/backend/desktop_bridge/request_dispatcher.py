@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
 logger = logging.getLogger("desktop.bridge.dispatcher")
@@ -59,13 +60,14 @@ class BridgeRequestDispatcher:
         self._tasks.clear()
 
     async def _run(self, method: str, operation: RequestOperation) -> None:
-        if method in {"chat.cancel", "voice.turn.cancel", "voice.synthesize.cancel"}:
+        # chat.send registers its cancellation handle before acquiring integration_slot
+        # inside the service. Waiting here would make queued requests uncancellable.
+        if method in {"chat.send", "chat.cancel", "voice.turn.cancel", "voice.synthesize.cancel"}:
             await operation()
             return
         if method in _INTEGRATION_METHODS:
-            async with self._integration_semaphore:
-                async with self._semaphore:
-                    await operation()
+            async with self.integration_slot():
+                await operation()
             return
         if method in _READ_ONLY_METHODS:
             async with self._semaphore:
@@ -74,6 +76,13 @@ class BridgeRequestDispatcher:
         async with self._mutation_lock:
             async with self._semaphore:
                 await operation()
+
+    @asynccontextmanager
+    async def integration_slot(self) -> AsyncIterator[None]:
+        """Shares execution limits with registered, cancellable chat requests."""
+        async with self._integration_semaphore:
+            async with self._semaphore:
+                yield
 
     def _on_task_done(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)

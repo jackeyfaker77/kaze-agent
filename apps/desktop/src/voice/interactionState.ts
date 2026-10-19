@@ -109,6 +109,13 @@ export function transitionVoiceInteraction(
       }
       return state;
     case "sending":
+      // Backend reply/TTS events can precede the chat.send RPC response.
+      if (event.type === "reply_started") {
+        return event.hasVoice ? { kind: "speaking_prepare" } : { kind: "idle" };
+      }
+      if (event.type === "reply_finished") {
+        return { kind: "idle" };
+      }
       if (event.type === "chat_accepted") {
         return { kind: "waiting_reply" };
       }

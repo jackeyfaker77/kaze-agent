@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BridgeResponse, VoiceStatePayload } from "../bridge/shared.js";
 import { DesktopVoiceController, type VoiceRecorder } from "./controller.js";
+import { createVoicePlaybackCallbacks, handleVoiceBridgeEvent } from "./bridgeEvents.js";
+import { BrowserVoicePlayback } from "./playback.js";
 
 class FakeRecorder implements VoiceRecorder {
   readonly calls: string[] = [];
@@ -376,3 +378,110 @@ test("waits for queued playback to drain before reporting a terminal TTS failure
   assert.deepEqual(controller.currentState, { kind: "idle" });
   assert.deepEqual(events.at(-1), { status: "error", message: "合成服务不可用" });
 });
+
+for (const hasVoice of [false, true]) {
+  test(`reply events before chat.send response settle the voice turn (TTS=${hasVoice})`, async () => {
+    const pending = deferred<BridgeResponse>();
+    const { controller, events } = createController({
+      invoke: async ({ method }) => method === "voice.transcribe"
+        ? response({ text: "hello" }) : pending.promise,
+    });
+    assert.equal(controller.startPress("hotkey"), true);
+    controller.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(controller.currentState, { kind: "sending" });
+    controller.replyStarted(hasVoice);
+    if (hasVoice) {
+      controller.sentenceReady("sentence-1");
+      assert.deepEqual(controller.currentState, { kind: "speaking", sentenceId: "sentence-1" });
+      controller.sentencePlaybackFinished("sentence-1");
+    }
+    controller.replyFinished();
+    assert.deepEqual(controller.currentState, { kind: "idle" });
+    pending.resolve(response());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(controller.currentState, { kind: "idle" });
+    assert.equal(controller.currentTurnId, null);
+    assert.equal(events.at(-1)?.status, "idle");
+    assert.equal(controller.startPress("hotkey"), true);
+    controller.dispose();
+  });
+}
+
+for (const ttsFailure of [false, true]) {
+  test(`bridge events drain real playback before RPC completion (TTS failure=${ttsFailure})`, async () => {
+    const pending = deferred<BridgeResponse>();
+    const { controller, events } = createController({
+      invoke: async ({ method }) => method === "voice.transcribe"
+        ? response({ text: "hello" }) : pending.promise,
+    });
+    const playback = new BrowserVoicePlayback(() => {
+      throw new Error("text-only reply must not open an audio window");
+    }, createVoicePlaybackCallbacks(controller));
+    controller.startPress("hotkey");
+    controller.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    playback.beginTurn("voice-turn-1");
+    const emit = (method: string, extra: Record<string, unknown> = {}) => handleVoiceBridgeEvent({
+      id: "voice-rpc", type: "event", method,
+      payload: { voice_turn_id: "voice-turn-1", ...extra },
+    }, controller, playback);
+    // DesktopBridgeServer emits these before the response to chat.send.
+    assert.equal(emit("chat.done"), false);
+    emit("voice.reply.started", { has_voice: ttsFailure });
+    if (ttsFailure) emit("voice.tts.error", { message: "TTS unavailable" });
+    emit("voice.tts.finished");
+    assert.equal(controller.currentTurnId, null);
+    assert.deepEqual(controller.currentState, { kind: "idle" });
+    pending.resolve(response());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(controller.currentState, { kind: "idle" });
+    assert.equal(events.at(-1)?.status, ttsFailure ? "error" : "idle");
+    if (ttsFailure) assert.equal(events.at(-1)?.message, "TTS unavailable");
+    assert.equal(controller.startPress("hotkey"), true);
+    controller.dispose();
+    playback.dispose();
+  });
+}
+
+test("a late chat acknowledgement does not replace active sentence playback", async () => {
+  const pending = deferred<BridgeResponse>();
+  const { controller } = createController({
+    invoke: async ({ method }) => method === "voice.transcribe"
+      ? response({ text: "hello" }) : pending.promise,
+  });
+  controller.startPress("hotkey");
+  controller.release();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  controller.replyStarted(true);
+  controller.sentenceReady("sentence");
+  pending.resolve(response());
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(controller.currentState, { kind: "speaking", sentenceId: "sentence" });
+  controller.sentencePlaybackFinished("sentence");
+  controller.replyFinished();
+  assert.deepEqual(controller.currentState, { kind: "idle" });
+  controller.dispose();
+});
+
+for (const rejects of [false, true]) {
+  test(`RPC failure after early reply events retires the voice turn (rejects=${rejects})`, async () => {
+    const pending = deferred<BridgeResponse>();
+    const { controller, events } = createController({
+      invoke: async ({ method }) => method === "voice.transcribe"
+        ? response({ text: "hello" }) : pending.promise,
+    });
+    controller.startPress("hotkey");
+    controller.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    controller.replyStarted(true);
+    if (rejects) pending.reject(new Error("bridge disconnected"));
+    else pending.resolve({ ...response(), error: { code: "bridge_exit", message: "bridge disconnected" } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(controller.currentState, { kind: "idle" });
+    assert.equal(controller.currentTurnId, null);
+    assert.deepEqual(events.at(-1), { status: "error", message: "bridge disconnected" });
+    assert.equal(controller.startPress("hotkey"), true);
+    controller.dispose();
+  });
+}

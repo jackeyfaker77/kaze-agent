@@ -87,8 +87,9 @@ async def test_chat_submission_uses_the_bounded_integration_lane() -> None:
     role_update_completed = asyncio.Event()
 
     async def _generate_story() -> None:
-        run_started.set()
-        await release_run.wait()
+        async with dispatcher.integration_slot():
+            run_started.set()
+            await release_run.wait()
 
     async def _update_role() -> None:
         role_update_completed.set()
@@ -144,3 +145,33 @@ async def test_read_only_requests_respect_concurrency_bound() -> None:
     assert peak == 2
     release.set()
     await dispatcher.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_concurrency,integration_concurrency", [(1, 2), (2, 1)])
+async def test_registered_chat_shares_execution_limits_with_integrations(max_concurrency, integration_concurrency):
+    dispatcher = BridgeRequestDispatcher(max_concurrency=max_concurrency, integration_concurrency=integration_concurrency)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    registered = asyncio.Event()
+    executed = asyncio.Event()
+
+    async def integration():
+        started.set()
+        await release.wait()
+
+    async def chat():
+        registered.set()
+        async with dispatcher.integration_slot():
+            executed.set()
+
+    dispatcher.submit({"method": "voice.synthesize"}, integration)
+    await asyncio.wait_for(started.wait(), 1)
+    dispatcher.submit({"method": "chat.send"}, chat)
+    try:
+        await asyncio.wait_for(registered.wait(), 1)
+        assert not executed.is_set()
+    finally:
+        release.set()
+        await dispatcher.aclose()
+    assert executed.is_set()

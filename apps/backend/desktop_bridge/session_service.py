@@ -7,6 +7,8 @@ import inspect
 import json
 import threading
 from dataclasses import asdict
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, nullcontext
 from uuid import uuid4
 
 from agent.looping.interrupt import TurnInterruptState
@@ -130,10 +132,8 @@ class DesktopBridgeService:
             task.cancel()
         return True
 
-    async def _persist_interrupted_turn(self, key, request_id, media, previous_message_ids):
+    async def _persist_interrupted_turn(self, key, request_id, content, media, metadata, previous_message_ids):
         state = self._chat_interrupts.get(key)
-        if state is None:
-            return
         session = self.sessions.get_or_create(key)
         turn_messages = [
             message for message in session.messages
@@ -144,38 +144,37 @@ class DesktopBridgeService:
             # Reasoning may have finished just before cancellation, including while
             # its append waited for the write lock. Keep that complete reply once.
             await self.sessions.append_messages(session, turn_messages)
-        elif state.partial_reply or state.partial_thinking or state.tool_chain_partial:
-            metadata = {**state.original_metadata, "source": "desktop"}
+        else:
+            metadata = {**metadata, "source": "desktop"}
             if not turn_messages:
-                session.add_message("user", state.original_user_message, media=media, metadata=metadata)
+                session.add_message("user", content, media=media, metadata=metadata)
                 turn_messages.append(session.messages[-1])
-            session.add_message(
-                "assistant", state.partial_reply,
-                reasoning_content=state.partial_thinking,
-                tools_used=list(state.tools_used) or None,
-                tool_chain=list(state.tool_chain_partial) or None,
-                metadata={**metadata, "interrupted_reply": True},
-            )
-            turn_messages.append(session.messages[-1])
-            session.metadata[INTERRUPTED_TURN_METADATA_KEY] = {
-                "request_id": request_id, "interrupted_by": state.interrupted_by,
-            }
+            if state is not None and (state.partial_reply or state.partial_thinking or state.tool_chain_partial):
+                session.add_message(
+                    "assistant", state.partial_reply,
+                    reasoning_content=state.partial_thinking,
+                    tools_used=list(state.tools_used) or None,
+                    tool_chain=list(state.tool_chain_partial) or None,
+                    metadata={**metadata, "interrupted_reply": True},
+                )
+                turn_messages.append(session.messages[-1])
+                session.metadata[INTERRUPTED_TURN_METADATA_KEY] = {
+                    "request_id": request_id, "interrupted_by": state.interrupted_by,
+                }
             await self.sessions.append_messages(session, turn_messages)
-        self.runtime.loop.discard_interrupt_state(key, state)
+        if state is not None:
+            self.runtime.loop.discard_interrupt_state(key, state)
 
     def _cancel_voice_turn(self, turn_id):
         key = self._voice_turns.get(turn_id)
-        task = self._chat_tasks.get(key) if key else None
         cancel = self._tts_cancels.get(turn_id)
         if cancel:
             cancel.set()
-        if task:
-            task.cancel()
-        return task is not None
+        return self._cancel_chat(key) if key else False
 
     # [消息链路 6/6] Python 业务 RPC 入口，由 server.py::DesktopBridgeServer 调用：
     # 解析 method + payload，路由到会话、记忆或 AgentLoop，并包装统一响应。
-    async def handle(self, request, *, emit_event=None):
+    async def handle(self, request, *, emit_event=None, chat_admission: Callable[[], AbstractAsyncContextManager[None]] = nullcontext):
         request_id = str(request.get("id") or uuid4())
         # Electron 传入的请求统一由 method 和 payload 描述。
         method = str(request.get("method") or "")
@@ -184,7 +183,7 @@ class DesktopBridgeService:
             if not isinstance(payload, dict):
                 raise ValueError("payload 必须是对象")
             # chat.send、session.get、memory.get 等请求共用同一个路由入口。
-            result = await self._dispatch(method, payload, request_id)
+            result = await self._dispatch(method, payload, request_id, chat_admission=chat_admission)
             if method in {"session.get", "session.create", "session.draft"}:
                 await self.publish_event({"id": request_id, "type": "event", "method": "session.selected", "payload": {"session_key": self.active_session_key}})
             return BridgeResponse(id=request_id, type="response", method=method, payload=result)
@@ -194,7 +193,7 @@ class DesktopBridgeService:
             return BridgeResponse(id=request_id, type="response", method=method,
                                   error=BridgeError(code="request_failed", message=str(exc)))
 
-    async def _dispatch(self, method, payload, request_id):
+    async def _dispatch(self, method, payload, request_id, *, chat_admission: Callable[[], AbstractAsyncContextManager[None]] = nullcontext):
         if method.startswith("codex."):
             return await self.codex.handle(method, payload)
         if method == "health":
@@ -296,27 +295,32 @@ class DesktopBridgeService:
             voice_turn = str(payload.get("voice_turn_id") or "")
             if voice_turn:
                 self._voice_turns[voice_turn] = key
-            async with self.runtime.bus.chat_lane.passive_turn("desktop", key):
+            metadata = {"request_id": request_id, "input_method": payload.get("input_method", "text")}
+            async with AsyncExitStack() as turn_context:
                 try:
-                    # 把桌面消息交给 AgentLoop；stream_events=True 会持续发布增量与工具事件。
-                    reply = await self.runtime.loop.process_direct(
-                        content=content, session_key=key, channel="desktop", chat_id=key,
-                        stream_events=True, media=media,
-                        raise_on_error=True,
-                        metadata={"request_id": request_id, "input_method": payload.get("input_method", "text")},
-                    )
-                    interrupted = self._chat_interrupts.get(key)
-                    if interrupted is not None:
-                        # A provider may finish normally while handling cancellation.
-                        self.runtime.loop.discard_interrupt_state(key, interrupted)
-                    result = {"session_key": key, "reply": reply, "session": self._snapshot(key)}
-                    # 推理结束后发布完整 Session，Renderer 据此收敛 optimistic update 与流式状态。
-                    await self.publish_event({"id": request_id, "type": "event", "method": "chat.done", "payload": result})
-                    if voice_turn:
-                        await self._speak_reply(key, voice_turn, request_id, reply)
-                    return result
+                    # Keep passive priority through cancellation persistence, including
+                    # requests still waiting for an integration execution slot.
+                    await turn_context.enter_async_context(self.runtime.bus.chat_lane.passive_turn("desktop", key))
+                    async with chat_admission():
+                        # 把桌面消息交给 AgentLoop；stream_events=True 会持续发布增量与工具事件。
+                        reply = await self.runtime.loop.process_direct(
+                            content=content, session_key=key, channel="desktop", chat_id=key,
+                            stream_events=True, media=media,
+                            raise_on_error=True,
+                            metadata=metadata,
+                        )
+                        interrupted = self._chat_interrupts.get(key)
+                        if interrupted is not None:
+                            # A provider may finish normally while handling cancellation.
+                            self.runtime.loop.discard_interrupt_state(key, interrupted)
+                        result = {"session_key": key, "reply": reply, "session": self._snapshot(key)}
+                        # 推理结束后发布完整 Session，Renderer 据此收敛 optimistic update 与流式状态。
+                        await self.publish_event({"id": request_id, "type": "event", "method": "chat.done", "payload": result})
+                        if voice_turn:
+                            await self._speak_reply(key, voice_turn, request_id, reply)
+                        return result
                 except asyncio.CancelledError:
-                    await self._persist_interrupted_turn(key, request_id, media, previous_message_ids)
+                    await self._persist_interrupted_turn(key, request_id, content, media, metadata, previous_message_ids)
                     return {"session_key": key, "cancelled": True, "session": self._snapshot(key)}
                 finally:
                     self._requests.pop(key, None)

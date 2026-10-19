@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-19",
+  "branch": "codex/cancel-voice-lifecycle",
+  "base_commit": "e36e184c56d1b647997270a260e4afe64f9a43e2",
+  "conclusion": "三个已确认的代码缺陷已修复，回归和隔离跨进程复测通过；配置服务验收仍单独待办。",
+  "fixes": [
+    {
+      "issue": "首个输出前取消导致输入和附件丢失",
+      "result": "无回复时也持久化用户输入和附件，不生成空助手消息；重复取消不会中断落盘；重试不重复提交。"
+    },
+    {
+      "issue": "等待 dispatcher 并发名额的请求无法取消",
+      "result": "先登记取消句柄，再获取共享执行名额；集成名额与全局名额均保持原上限；取消后不再调用模型。"
+    },
+    {
+      "issue": "语音回复事件早于 chat.send 响应时卡在 waiting_reply",
+      "result": "sending 状态接受回复生命周期事件，迟到的成功响应不覆盖播报或空闲状态；提前进入回复阶段后的 RPC 失败会清理语音任务。"
+    }
+  ],
+  "related_regressions": [
+    "文字取消与语音取消统一执行幂等持久化",
+    "已有历史、相同请求 ID、部分回复、仅思考、工具调用结果和完成回复竞态",
+    "取消后的持久化期间保持用户对话优先，主动推送必须等待落盘",
+    "等待其他回合会话锁时，取消只影响当前请求",
+    "TTS 关闭、TTS 失败、响应先于播放结束以及后端断开"
+  ],
+  "verification": {
+    "backend": {
+      "command": "python -m pytest -q -W error tests/",
+      "passed": 1869,
+      "failed": 0
+    },
+    "desktop": {
+      "command": "pnpm test",
+      "passed": 215,
+      "failed": 0,
+      "existing_skipped": 1
+    },
+    "static_and_build": {
+      "pyright": "passed",
+      "pyright_tests": "passed",
+      "pnpm_typecheck": "passed",
+      "pnpm_lint": "passed",
+      "pnpm_build": "passed"
+    },
+    "cross_process": {
+      "command": "node --import tsx tests/e2e/desktop_lifecycle.mjs",
+      "result": "passed",
+      "real_components": [
+        "DesktopBridgeClient",
+        "Python stdio DesktopBridgeServer",
+        "AgentLoop",
+        "SQLite",
+        "DesktopVoiceController",
+        "BrowserVoicePlayback queue"
+      ],
+      "assertions": [
+        "两个集成执行名额被占用时，第三个请求可取消且模型调用为 0",
+        "首个输出前取消保留输入；取消后的重试正常完成",
+        "连续两个语音回合均回到 idle，迟到的 RPC 响应不会恢复等待状态",
+        "真实 Python 进程重启后，会话和附件从 SQLite 恢复且没有重复消息"
+      ],
+      "fixtures": "模型、麦克风、ASR 使用测试替身，TTS 保持关闭；不会读取用户配置或发送外部消息。"
+    }
+  },
+  "configuration": "未修改用户配置、密钥、服务开关或主动提醒轮询策略。",
+  "limits": [
+    "未配置的云端 ASR/TTS 与麦克风、扬声器仍未进行真机验收。",
+    "跨进程复测使用隔离工作区，未重启用户当前运行的 Kaze。",
+    "本记录描述提交前的本地验收；GitHub CI 与合并状态以对应 PR 为准。"
+  ]
+}
