@@ -51,6 +51,7 @@ class DesktopBridgeServer:
                 response = await self.service.handle(
                     request,
                     emit_event=_emit_event,
+                    chat_admission=dispatcher.integration_slot,
                 )
             except Exception as exc:
                 request_id = str(request.get("id") or "").strip() or "bridge-request"

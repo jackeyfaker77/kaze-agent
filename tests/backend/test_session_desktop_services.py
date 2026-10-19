@@ -264,7 +264,8 @@ async def test_json_lines_server_accepts_plain_sessions_and_utf8(desktop):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_history", [False, True])
 @pytest.mark.parametrize("partial", ["", "部分回复", "thinking"])
-async def test_cancel_releases_session_and_retry_commits_once(desktop, with_history, partial, tmp_path):
+@pytest.mark.parametrize("cancel_method", ["chat.cancel", "voice.turn.cancel"])
+async def test_cancel_releases_session_and_retry_commits_once(desktop, with_history, partial, tmp_path, cancel_method):
     runtime, bridge = desktop
     key = "desktop:cancel-retry"
     history = []
@@ -290,9 +291,10 @@ async def test_cancel_releases_session_and_retry_commits_once(desktop, with_hist
         await asyncio.Event().wait()
     runtime.provider.chat = wait_for_cancel
     request = {"id": "cancelled", "method": "chat.send", "payload": {"session_key": key, "content": "请回复", "media": [str(attachment)]}}
+    request["payload"]["voice_turn_id"] = "cancel-test-voice"
     pending = asyncio.create_task(bridge.handle(request))
     await asyncio.wait_for(entered.wait(), 2)
-    cancelled = await bridge.handle({"method": "chat.cancel", "payload": {"session_key": key}})
+    cancelled = await bridge.handle({"method": cancel_method, "payload": {"session_key": key, "voice_turn_id": "cancel-test-voice"}})
     assert cancelled.payload["cancelled"] is True
     result = await asyncio.wait_for(pending, 2)
     assert result.error is None
@@ -303,8 +305,9 @@ async def test_cancel_releases_session_and_retry_commits_once(desktop, with_hist
     assert not any(event["method"] == "chat.done" for event in events)
     expected = [(message["role"], message["content"]) for message in history]
     partial_reply = "" if partial == "thinking" else partial
+    expected += [("user", "请回复")]
     if partial:
-        expected += [("user", "请回复"), ("assistant", partial_reply)]
+        expected += [("assistant", partial_reply)]
     messages = result.payload["session"]["messages"]
     assert [(m["role"], m["content"]) for m in messages] == expected
     assert messages[:len(history)] == history
@@ -317,6 +320,7 @@ async def test_cancel_releases_session_and_retry_commits_once(desktop, with_hist
     for stored, original in zip(reopened.payload["messages"], messages, strict=True):
         # SQLite omits the optional tool_chain field when it is NULL.
         assert {**stored, "tool_chain": stored.get("tool_chain")} == {**original, "tool_chain": original.get("tool_chain")}
+    assert messages[len(history)]["media"] == [str(attachment)]
     if partial:
         assert messages[-2]["media"] == [str(attachment)]
         assert messages[-1]["reasoning_content"] == "尚未完成的思考"
@@ -397,11 +401,14 @@ async def test_cancel_preserves_completed_tool_results_for_next_turn(desktop, pa
 
 
 @pytest.mark.asyncio
-async def test_repeated_cancel_during_snapshot_write_preserves_reply_once(desktop, monkeypatch):
+@pytest.mark.parametrize("partial", ["", "保存中的部分回复"])
+@pytest.mark.parametrize("cancel_method", ["chat.cancel", "voice.turn.cancel"])
+async def test_repeated_cancel_during_snapshot_write_preserves_reply_once(desktop, monkeypatch, partial, cancel_method):
     runtime, bridge = desktop
     key = "desktop:cancel-write"
     streamed = asyncio.Event()
     writing = asyncio.Event()
+    pushed = asyncio.Event()
     append_messages = runtime.session_manager.append_messages
 
     async def record_write(session, messages):
@@ -409,14 +416,15 @@ async def test_repeated_cancel_during_snapshot_write_preserves_reply_once(deskto
         await append_messages(session, messages)
 
     async def stream_then_wait(**kwargs):
-        await kwargs["on_content_delta"]({"content_delta": "保存中的部分回复"})
+        if partial:
+            await kwargs["on_content_delta"]({"content_delta": partial})
         streamed.set()
         await asyncio.Event().wait()
 
     monkeypatch.setattr(runtime.session_manager, "append_messages", record_write)
     runtime.provider.chat = stream_then_wait
-    request = {"id": "cancel-write", "method": "chat.send", "payload": {"session_key": key, "content": "请回复"}}
-    cancel = {"method": "chat.cancel", "payload": {"session_key": key}}
+    request = {"id": "cancel-write", "method": "chat.send", "payload": {"session_key": key, "content": "请回复", "voice_turn_id": "write-voice"}}
+    cancel = {"method": cancel_method, "payload": {"session_key": key, "voice_turn_id": "write-voice"}}
     async with runtime.session_manager._lock(key):
         pending = asyncio.create_task(bridge.handle(request))
         await asyncio.wait_for(streamed.wait(), 2)
@@ -424,18 +432,24 @@ async def test_repeated_cancel_during_snapshot_write_preserves_reply_once(deskto
         await asyncio.wait_for(writing.wait(), 2)
         assert (await bridge.handle(cancel)).payload["cancelled"] is True
         assert (await bridge.handle({"method": "health"})).payload["ok"] is True
+        async def push():
+            pushed.set()
+        proactive = asyncio.create_task(runtime.bus.chat_lane.run_non_passive("desktop", key, push))
+        await asyncio.sleep(0)
+        assert not pushed.is_set(), "proactive sends must wait until the cancelled input is durable"
         busy = await bridge.handle({**request, "id": "too-early"})
         assert busy.error is not None and "正在回复" in busy.error.message
         assert not pending.done()
 
     result = await asyncio.wait_for(pending, 2)
+    await asyncio.wait_for(proactive, 2)
+    assert pushed.is_set()
     assert result.error is None and result.payload["cancelled"] is True
     assert not bridge._chat_interrupts and not runtime.loop._interrupt_states
     assert (await bridge.handle(cancel)).payload["cancelled"] is False
     with closing(sqlite3.connect(runtime.session_manager.db_path)) as db:
-        assert db.execute("SELECT role, content FROM messages WHERE session_key = ? ORDER BY seq", (key,)).fetchall() == [
-            ("user", "请回复"), ("assistant", "保存中的部分回复"),
-        ]
+        expected = [("user", "请回复")] + ([("assistant", partial)] if partial else [])
+        assert db.execute("SELECT role, content FROM messages WHERE session_key = ? ORDER BY seq", (key,)).fetchall() == expected
 
 
 @pytest.mark.asyncio
@@ -534,6 +548,7 @@ async def test_cancel_queued_desktop_request_does_not_interrupt_another_turn(des
         assert await asyncio.wait_for(active, 2) == "先前任务完成"
     with closing(sqlite3.connect(runtime.session_manager.db_path)) as db:
         assert db.execute("SELECT role, content FROM messages WHERE session_key = ? ORDER BY seq", (key,)).fetchall() == [
+            ("user", "等待执行"),
             ("user", "先前任务"), ("assistant", "先前任务完成"),
         ]
 
@@ -563,3 +578,125 @@ def test_pet_import_is_global_and_validates_actual_atlas(tmp_path):
         output.writestr("../pet.json", "{}")
     with pytest.raises(ValueError):
         service.import_package(tmp_path / "unsafe.zip")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_lane", ["integration", "global"])
+@pytest.mark.parametrize("cancel_method", ["chat.cancel", "voice.turn.cancel"])
+async def test_server_cancels_chat_before_dispatch_slot_and_preserves_input(desktop, monkeypatch, blocked_lane, cancel_method):
+    from desktop_bridge.request_dispatcher import BridgeRequestDispatcher
+
+    runtime, old_bridge = desktop
+    await old_bridge.aclose()
+    dispatcher = BridgeRequestDispatcher(max_concurrency=1, integration_concurrency=1)
+    monkeypatch.setattr("desktop_bridge.server.BridgeRequestDispatcher", lambda: dispatcher)
+    server = DesktopBridgeServer(runtime)
+    incoming = asyncio.Queue()
+    responses = asyncio.Queue()
+    frames = []
+    calls = 0
+    key = "desktop:dispatch-queued"
+
+    async def complete(**kwargs):
+        nonlocal calls
+        calls += 1
+        return LLMResponse(content="retry complete")
+
+    async def write(frame):
+        frames.append(frame)
+        if frame["type"] == "response":
+            responses.put_nowait(frame)
+
+    async def rpc(request):
+        incoming.put_nowait(json.dumps(request))
+        return await asyncio.wait_for(responses.get(), 2)
+
+    runtime.provider.chat = complete
+    serving = asyncio.create_task(server.serve_streams(read_line=incoming.get, write_payload=write))
+    slot = dispatcher._integration_semaphore if blocked_lane == "integration" else dispatcher._semaphore
+    await slot.acquire()
+    slot_held = True
+    try:
+        incoming.put_nowait(json.dumps({"id": "queued", "method": "chat.send", "payload": {
+            "session_key": key, "content": "keep this input", "media": ["queued.png"],
+            "voice_turn_id": "queued-voice", "input_method": "voice",
+        }}))
+        # This control RPC is a barrier: the preceding chat has entered the dispatcher.
+        cancel = await rpc({"id": "cancel", "method": cancel_method, "payload": {
+            "session_key": key, "voice_turn_id": "queued-voice",
+        }})
+        assert cancel["id"] == "cancel" and cancel["payload"]["cancelled"] is True
+        stopped = await asyncio.wait_for(responses.get(), 2)
+        assert stopped["id"] == "queued" and stopped["payload"]["cancelled"] is True
+        assert calls == 0
+        assert not server.service._requests and not server.service._chat_tasks
+        assert not server.service._voice_turns and not server.service._chat_interrupts
+        runtime.session_manager.invalidate(key)
+        saved = runtime.session_manager.get_or_create(key)
+        assert [(m["role"], m["content"]) for m in saved.messages] == [("user", "keep this input")]
+        assert saved.messages[0]["media"] == ["queued.png"]
+        assert saved.messages[0]["metadata"]["input_method"] == "voice"
+        assert not any(f["method"] == "chat.done" for f in frames)
+        stale = await rpc({"id": "stale", "method": cancel_method, "payload": {
+            "session_key": key, "voice_turn_id": "queued-voice",
+        }})
+        assert stale["payload"]["cancelled"] is False
+        slot.release()
+        slot_held = False
+        retry = await rpc({"id": "retry", "method": "chat.send", "payload": {
+            "session_key": key, "content": "retry",
+        }})
+        assert retry["error"] is None and retry["payload"]["reply"] == "retry complete"
+        assert calls == 1
+        runtime.session_manager.invalidate(key)
+        assert [(m["role"], m["content"]) for m in runtime.session_manager.get_or_create(key).messages] == [
+            ("user", "keep this input"), ("user", "retry"), ("assistant", "retry complete"),
+        ]
+    finally:
+        if slot_held:
+            slot.release()
+        incoming.put_nowait(None)
+        await asyncio.wait_for(serving, 2)
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_voice_without_tts_emits_reply_events_before_rpc_response(desktop):
+    runtime, old_bridge = desktop
+    await old_bridge.aclose()
+    server = DesktopBridgeServer(runtime)
+    incoming = asyncio.Queue()
+    frames = []
+    finished = asyncio.Event()
+
+    async def provider(**kwargs):
+        return LLMResponse(content="text reply")
+
+    async def write(frame):
+        frames.append(frame)
+        if frame["type"] == "response":
+            finished.set()
+
+    runtime.provider.chat = provider
+    assert not runtime.config.voice.tts.enabled
+    serving = asyncio.create_task(server.serve_streams(read_line=incoming.get, write_payload=write))
+    try:
+        incoming.put_nowait(json.dumps({"id": "voice-contract", "method": "chat.send", "payload": {
+            "session_key": "desktop:voice-contract", "content": "hello", "input_method": "voice",
+            "voice_turn_id": "voice-contract",
+        }}))
+        await asyncio.wait_for(finished.wait(), 2)
+        assert [(frame["type"], frame["method"]) for frame in frames] == [
+            ("event", "chat.done"), ("event", "voice.reply.started"),
+            ("event", "voice.tts.finished"), ("response", "chat.send"),
+        ]
+        assert frames[1]["payload"]["has_voice"] is False
+        assert frames[1]["payload"]["voice_turn_id"] == frames[2]["payload"]["voice_turn_id"] == "voice-contract"
+        assert frames[-1]["error"] is None
+        runtime.session_manager.invalidate("desktop:voice-contract")
+        assert [(m["role"], m["content"]) for m in runtime.session_manager.get_or_create("desktop:voice-contract").messages] == [
+            ("user", "hello"), ("assistant", "text reply"),
+        ]
+    finally:
+        incoming.put_nowait(None)
+        await asyncio.wait_for(serving, 2)
