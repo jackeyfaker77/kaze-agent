@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-19",
+  "branch": "codex/recover-cancelled-persistence",
+  "base_commit": "63d944aa881c7b72840e23c37ec4a5da4f704502",
+  "conclusion": "取消后的数据库保存失败可通过后续重试补齐原输入和部分回复；补存成功后，独立后端进程重启两次均无丢失或重复。",
+  "fix": {
+    "cause": "取消时写入失败后，任务登记被清理，后续请求仅保存新回合，旧输入和部分回复只留在缓存。",
+    "recovery": "失败批次独立保留，在下一次模型调用前补存；补存仍失败则返回错误，不执行新的模型调用。",
+    "deduplication": "使用稳定消息写入标识核对已提交记录，处理部分写入和提交成功但返回报错；补存全部成功后才释放待写批次与中断状态。",
+    "delete_guard": "存在待补存记录的会话暂不可删除，避免丢失恢复数据或重建已删除会话。"
+  },
+  "verification": {
+    "new_backend_regressions": {
+      "cases": 13,
+      "result": "passed",
+      "coverage": [
+        "写入前失败、第二条消息写入失败、提交后抛错、整个批次写完后抛错",
+        "上述四类故障均覆盖保留缓存及清除缓存后重试，并复用请求 ID",
+        "原输入、附件、部分回复和思考内容补齐后由独立 SessionManager 读取 SQLite",
+        "连续失败不重复调用模型；文字和语音取消均覆盖有无部分回复",
+        "其他会话仍可使用，补存成功后继续下一轮不会重复旧消息",
+        "补存期间再次取消及重复取消，保留两个输入且不重复写入"
+      ]
+    },
+    "backend_full": {
+      "command": "python -m pytest -q -W error tests/",
+      "passed": 1882,
+      "failed": 0,
+      "seconds": 236.87
+    },
+    "pyright": "0 errors, 0 warnings",
+    "pyright_tests": "0 errors, 0 warnings",
+    "cross_process_recovery": {
+      "command": "node --import tsx tests/e2e/cancel_write_recovery.mjs",
+      "result": "passed",
+      "fault": "SQLite 已提交第一条消息，但 insert_message 返回前抛错",
+      "real_components": ["DesktopBridgeClient", "Python stdio DesktopBridgeServer", "AgentLoop", "SQLite"],
+      "assertions": [
+        "重试补齐原输入、附件、部分回复和思考内容",
+        "恢复不重新执行原模型调用",
+        "两次重建客户端并启动新的 Python 进程后，所有消息 ID 与内容保持一致",
+        "重启后再发一轮，最终六条消息，无重复"
+      ],
+      "fixtures": "模型与写入故障使用测试替身；隔离工作区不读取用户配置。"
+    },
+    "previous_lifecycle_regressions": {
+      "command": "node --import tsx tests/e2e/desktop_lifecycle.mjs",
+      "result": "passed",
+      "coverage": "排队取消、首个输出前取消、取消后重试、连续语音回合与 SQLite 重启读取"
+    },
+    "original_reproducer": "修复前缓存四条而 SQLite 仅两条；修复后均为原输入、部分回复、继续输入和完整回复四条。",
+    "git_diff_check": "passed"
+  },
+  "configuration": {
+    "changed": false,
+    "sha256_matches_previous_baseline": ["config.toml", "channels.json", "mcp_servers.json", "proactive_sources.json"]
+  },
+  "limits": [
+    "本次验证重试补存成功后的重启持久性；数据库仍不可写且补存尚未成功时，待补存批次依赖当前进程内存，不提供崩溃恢复日志。",
+    "跨进程复测使用隔离工作区，未重启用户当前运行的 Kaze，未验收云端 ASR/TTS 或真实硬件。",
+    "这是本地验收记录，本轮尚未提交 GitHub 或运行 GitHub CI。"
+  ]
+}

@@ -18,9 +18,27 @@ async def main():
         Path(sys.argv[1]), http,
     )
     server = DesktopBridgeServer(runtime)
+    recover_write = "--recover-write" in sys.argv[2:]
+    if recover_write:
+        insert = runtime.session_manager._store.insert_message
+        failed = False
+
+        def fail_after_commit(*args, **kwargs):
+            nonlocal failed
+            row = insert(*args, **kwargs)
+            if not failed:
+                failed = True
+                raise OSError("injected failure after SQLite commit")
+            return row
+
+        runtime.session_manager._store.insert_message = fail_after_commit
 
     async def provider(**kwargs):
         content = kwargs["messages"][-1]["content"]
+        if recover_write and "hold-recovery" in str(content):
+            await kwargs["on_content_delta"]({
+                "content_delta": "retained partial", "thinking_delta": "retained reasoning",
+            })
         await server.service.publish_event({
             "id": "probe", "type": "event", "method": "probe.provider",
             "payload": {"content": content},
