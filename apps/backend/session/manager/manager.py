@@ -18,6 +18,9 @@ class _ManagerCoreMixin:
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = workspace / "sessions.db"
         self._store = SessionStore(self.db_path)
+        from core.execution.journal import ExecutionJournal
+        self.execution_journal = ExecutionJournal(workspace)
+        self._store.execution_journal = self.execution_journal
         self._cache: dict[str, Session] = {}
         self._write_locks: dict[str, asyncio.Lock] = {}
 

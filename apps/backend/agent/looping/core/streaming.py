@@ -96,12 +96,16 @@ class _StreamingMixin:
         return _push
 
     def _append_partial_reply(self, session_key: str, delta: str) -> None:
+        from core.execution.scope import record_fact
+        record_fact("reply.delta", {"session_key": session_key, "content": delta})
         state = self._active_turn_states.get(session_key)
         if state is None or not delta:
             return
         state.partial_reply += delta
 
     def _append_partial_thinking(self, session_key: str, delta: str) -> None:
+        from core.execution.scope import record_fact
+        record_fact("reply.delta", {"session_key": session_key, "thinking": delta})
         state = self._active_turn_states.get(session_key)
         if state is None or not delta:
             return

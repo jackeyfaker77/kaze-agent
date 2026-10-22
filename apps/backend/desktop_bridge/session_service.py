@@ -259,10 +259,26 @@ class DesktopBridgeService:
                                   error=BridgeError(code="request_failed", message=str(exc)))
 
     async def _dispatch(self, method, payload, request_id, *, chat_admission: Callable[[], AbstractAsyncContextManager[None]] = nullcontext):
+        if method == "execution.get":
+            journal = self.sessions.execution_journal
+            if payload.get("turn_id"):
+                return journal.get(str(payload["turn_id"]))
+            record = journal.find(self._key(payload), str(payload.get("source") or "desktop"), str(payload.get("execution_request_id") or ""))
+            if record is None:
+                raise ValueError("未找到该执行请求")
+            return record
+        if method == "execution.events":
+            return self.sessions.execution_journal.events(str(payload.get("turn_id") or ""),
+                after=payload.get("after", 0), limit=payload.get("limit", 100))
+        if method == "executions.list":
+            return self.sessions.execution_journal.list_executions(self._key(payload),
+                before=payload.get("before", 0), limit=payload.get("limit", 50))
         if method.startswith("codex."):
             return await self.codex.handle(method, payload)
         if method == "health":
             return {"ok": True, "architecture": "sessions", "memory_path": str(self.workspace / "memory"),
+                    "execution_contract_version": 1, "root_id": self.sessions.execution_journal.root_id,
+                    "epoch": self.sessions.execution_journal.epoch,
                     "pending_chat_writes": len(self._pending_chat_writes)}
         voice_result = await self.voice.handle(method, payload)
         if voice_result is not None:
@@ -364,6 +380,8 @@ class DesktopBridgeService:
             if voice_turn:
                 self._voice_turns[voice_turn] = key
             metadata = {"request_id": request_id, "input_method": payload.get("input_method", "text")}
+            if "execution_request_id" in payload:
+                metadata["execution_request_id"] = payload["execution_request_id"]
             async with AsyncExitStack() as turn_context:
                 try:
                     # Keep passive priority through cancellation persistence, including

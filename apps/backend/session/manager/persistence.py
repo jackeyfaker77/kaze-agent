@@ -265,6 +265,8 @@ class _PersistenceMixin:
             self._ensure_session_meta(session)
             # 2. 追加写入本次新增消息，并补齐稳定 id。
             self._persist_messages(session, msgs_copy)
+            from core.execution.scope import record_fact
+            record_fact("messages.committed", {"session_key": session.key, "messages": msgs_copy})
             # 3. 回写 session 元数据（含 last_consolidated / metadata）。
             self._store.upsert_session(
                 session.key,

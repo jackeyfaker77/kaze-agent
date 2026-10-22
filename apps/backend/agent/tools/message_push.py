@@ -99,6 +99,8 @@ class MessagePushTool(Tool):
     }
 
     def __init__(self, event_bus: EventBus | None = None, *, chat_lane: ChatLane | None = None) -> None:
+        from core.execution.journal import ExecutionJournal
+        self.execution_journal: ExecutionJournal | None = None
         # channel -> {type: sender_fn}
         self._senders: dict[str, dict[str, Callable[..., Awaitable[Any]]]] = {}
         self._target_resolvers: dict[str, Callable[[str], str]] = {}
@@ -208,11 +210,15 @@ class MessagePushTool(Tool):
 
         async def send_part(sender_name: str, args: tuple[Any, ...], kind: str, success_text: str) -> bool:
             nonlocal message_id
-            try:
-                raw = await senders[sender_name](*args)
-                mid, err = _extract_receipt(raw)
-            except Exception as exc:
-                mid, err = None, str(exc) or type(exc).__name__
+            from core.execution.delivery import record_delivery
+            async def deliver():
+                try:
+                    raw = await senders[sender_name](*args)
+                    return _extract_receipt(raw)
+                except Exception as exc:
+                    return None, str(exc) or type(exc).__name__
+            mid, err = await record_delivery(self.execution_journal, session_key,
+                {"channel": channel, "chat_id": chat_id, "kind": sender_name, "arguments": list(args)}, deliver)
             if err:
                 errors.append(err)
                 results.append(f"{kind}发送失败：{err}")

@@ -999,3 +999,66 @@ async def test_journal_survives_failed_startup_recovery_and_later_retry(desktop,
         assert not recovered._chat_journal.load()
     finally:
         await recovered.aclose()
+
+
+@pytest.mark.asyncio
+async def test_execution_request_replay_and_conflict_do_not_call_model_again(desktop):
+    runtime, bridge = desktop
+    calls = 0
+    async def provider(**kwargs):
+        nonlocal calls
+        calls += 1
+        return LLMResponse(content="durable result")
+    runtime.provider.chat = provider
+    payload = {"session_key": "desktop:contract", "content": "original", "execution_request_id": "logical-request"}
+    first = await bridge.handle({"id": "rpc-a", "method": "chat.send", "payload": payload})
+    second = await bridge.handle({"id": "rpc-b", "method": "chat.send", "payload": payload})
+    assert first.error is None and second.error is None
+    assert first.payload["reply"] == second.payload["reply"] == "durable result"
+    assert calls == 1
+    assert len(second.payload["session"]["messages"]) == 2
+    conflict = await bridge.handle({"method": "chat.send", "payload": {**payload, "content": "different"}})
+    assert conflict.error is not None and "不同内容" in conflict.error.message
+    assert calls == 1
+    status = await bridge.handle({"method": "execution.get", "payload": payload})
+    assert status.error is None and status.payload["status"] == "completed"
+    events = await bridge.handle({"method": "execution.events", "payload": {"turn_id": status.payload["turn_id"]}})
+    kinds = [e["kind"] for e in events.payload["events"]]
+    assert kinds[0:2] == ["request.accepted", "run.started"]
+    assert "messages.committed" in kinds and kinds[-1] == "run.ended"
+    listed = await bridge.handle({"method": "executions.list", "payload": payload})
+    assert listed.payload["executions"][0]["turn_id"] == status.payload["turn_id"]
+
+
+@pytest.mark.asyncio
+async def test_execution_records_provider_error_without_claiming_success(desktop):
+    runtime, bridge = desktop
+    async def fail(**kwargs):
+        raise RuntimeError("private upstream detail")
+    runtime.provider.chat = fail
+    payload = {"session_key": "desktop:failed-contract", "content": "input", "execution_request_id": "failure"}
+    response = await bridge.handle({"method": "chat.send", "payload": payload})
+    assert response.error is not None
+    row = (await bridge.handle({"method": "execution.get", "payload": payload})).payload
+    assert row["status"] == "failed"
+    events = runtime.session_manager.execution_journal.events(row["turn_id"])["events"]
+    assert "private upstream detail" not in json.dumps(events)
+    assert any(e["kind"] == "run.error" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_standalone_proactive_push_has_durable_dispatch_and_receipt(desktop):
+    runtime, _ = desktop
+    journal = runtime.session_manager.execution_journal
+    async def sender(chat_id, text):
+        rows = journal.list_executions("probe:42")["executions"]
+        kinds = [e["kind"] for e in journal.events(rows[0]["turn_id"])["events"]]
+        assert kinds[-1] == "delivery.dispatched"
+        return type("Receipt", (), {"message_id": 123})()
+    runtime.push_tool.register_channel("probe", text=sender)
+    receipt = await runtime.push_tool.send(channel="probe", chat_id="42", message="test reminder")
+    assert receipt.ok
+    row = journal.list_executions("probe:42")["executions"][0]
+    assert row["status"] == "completed"
+    returned = [e["payload"] for e in journal.events(row["turn_id"])["events"] if e["kind"] == "delivery.returned"]
+    assert returned[0]["message_id"] == "123" and returned[0]["certainty"] == "confirmed"
