@@ -24,6 +24,7 @@ declare module "electron" {
   };
 
   export interface BrowserWindowOptions {
+    show?: boolean;
     width?: number;
     height?: number;
     minWidth?: number;

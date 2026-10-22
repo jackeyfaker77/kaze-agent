@@ -1,5 +1,7 @@
 import { BrowserWindow } from "electron";
 import { logDesktopDiagnostic } from "./diagnostics.js";
+import { prepareDesktopWindowPresentation, showDesktopWindow } from "./windowPresentation.js";
+export { showDesktopWindow } from "./windowPresentation.js";
 import { desktopWindowIcon, preloadScript, rendererDevServerUrl, rendererDist } from "./paths.js";
 import type { BridgeEvent, LocalAssetTransport } from "./bridge/shared.js";
 import {
@@ -62,6 +64,7 @@ export function createDesktopWindow({ openLocalAttachment }: CreateDesktopWindow
 
   const win = new BrowserWindow({
     title: "Kaze",
+    show: false,
     icon: desktopWindowIcon,
     width: 1320,
     height: 860,
@@ -77,6 +80,7 @@ export function createDesktopWindow({ openLocalAttachment }: CreateDesktopWindow
       spellcheck: false,
     },
   });
+  prepareDesktopWindowPresentation(win);
   attachDesktopWindowSecurity(win.webContents, {
     rendererEntryUrl: resolveRendererEntryUrl(rendererDist, rendererDevServerUrl),
     openLocalAttachment,
@@ -172,16 +176,6 @@ export function createDesktopWindow({ openLocalAttachment }: CreateDesktopWindow
   win.on("restore", () => emitWindowState(win));
   void loadDesktopRenderer(win);
   win.webContents.on("did-finish-load", () => emitWindowState(win));
+  showDesktopWindow(win);
   return win;
-}
-
-/** Restores a hidden desktop window and brings it back to the foreground. */
-export function showDesktopWindow(window: BrowserWindow): void {
-  if (window.isMinimized()) {
-    window.restore();
-  }
-  if (!window.isVisible()) {
-    window.show();
-  }
-  window.focus();
 }

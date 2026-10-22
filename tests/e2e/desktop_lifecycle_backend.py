@@ -1,5 +1,6 @@
 """Isolated stdio backend for the desktop lifecycle probe; never loads user config."""
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -18,7 +19,8 @@ async def main():
         Path(sys.argv[1]), http,
     )
     server = DesktopBridgeServer(runtime)
-    recover_write = "--recover-write" in sys.argv[2:]
+    crash_mode = next((arg.split("=", 1)[1] for arg in sys.argv[2:] if arg.startswith("--crash-write=")), None)
+    recover_write = "--recover-write" in sys.argv[2:] or crash_mode is not None
     if recover_write:
         insert = runtime.session_manager._store.insert_message
         failed = False
@@ -32,6 +34,22 @@ async def main():
             return row
 
         runtime.session_manager._store.insert_message = fail_after_commit
+        if crash_mode == "before_append":
+            async def fail_append(session, messages):
+                raise OSError("injected failure before SQLite write")
+            runtime.session_manager.append_messages = fail_append
+        elif crash_mode == "before_cleanup":
+            runtime.session_manager._store.insert_message = insert
+            def fail_cleanup(key):
+                raise OSError("injected failure before journal cleanup")
+            server.service._chat_journal.remove = fail_cleanup
+        if crash_mode:
+            handle = server.service.handle
+            async def crash_request(request, **kwargs):
+                if request.get("method") == "probe.crash":
+                    os._exit(73)  # No finally, aclose, pending write flush or orderly shutdown.
+                return await handle(request, **kwargs)
+            server.service.handle = crash_request
 
     async def provider(**kwargs):
         content = kwargs["messages"][-1]["content"]

@@ -5,6 +5,7 @@ import asyncio
 import base64
 import inspect
 import json
+import logging
 import threading
 from dataclasses import asdict, dataclass, field
 from collections.abc import Callable
@@ -16,6 +17,7 @@ from agent.looping.interrupt import TurnInterruptState
 from bus.events import OutboundMessage
 from bus.events_lifecycle import StreamDeltaReady, ToolCallStarted, ToolCallCompleted, ProactiveMessageCommitted, TurnCommitted
 from desktop_bridge.models import BridgeError, BridgeResponse
+from desktop_bridge.pending_chat_journal import PendingChatJournal
 from desktop_bridge.voice.voice_handler import DesktopVoiceHandler
 from desktop_bridge.voice.voice_service import VoiceService
 from session.manager.models import INTERRUPTED_TURN_METADATA_KEY
@@ -43,7 +45,12 @@ class DesktopBridgeService:
         self._voice_turns = {}
         self._chat_tasks = {}
         self._chat_interrupts: dict[str, TurnInterruptState | None] = {}
-        self._pending_chat_writes: dict[str, _PendingChatWrite] = {}
+        self._chat_journal = PendingChatJournal(self.workspace)
+        self._pending_chat_writes = {
+            key: _PendingChatWrite(messages=batch["messages"], title=batch["title"],
+                                   interruption_metadata=batch["interruption_metadata"])
+            for key, batch in self._chat_journal.load().items()
+        }
         self._tts_cancels = {}
         self.active_session_key = "desktop:default"
         self.voice = DesktopVoiceHandler(
@@ -95,6 +102,14 @@ class DesktopBridgeService:
     def start_background_tasks(self):
         # Clone retirement is explicit; migration must never delete remote voices.
         pass
+
+    async def recover_pending_chat_writes(self):
+        """Recover before accepting RPCs; a still-unavailable database keeps its journal."""
+        for key in list(self._pending_chat_writes):
+            try:
+                await self._flush_pending_chat_writes(key)
+            except Exception:
+                logging.getLogger(__name__).exception("Pending chat recovery failed for %s", key)
 
     def add_event_listener(self, listener):
         self._listeners.append(listener)
@@ -188,6 +203,9 @@ class DesktopBridgeService:
         pending = self._pending_chat_writes.get(key)
         if pending is None:
             return
+        # Persist the entire batch BEFORE touching SQLite. A process can exit at
+        # any subsequent point; committed rows are reconciled by desktop_write_id.
+        self._chat_journal.save(key, pending.messages, pending.title, pending.interruption_metadata)
         # Reconcile committed rows even if the cache was invalidated after failure.
         saved = {
             row["desktop_write_id"]: row
@@ -207,6 +225,7 @@ class DesktopBridgeService:
             session.metadata[INTERRUPTED_TURN_METADATA_KEY] = dict(pending.interruption_metadata)
         # Retain the batch and interruption context until the entire write succeeds.
         await self.sessions.append_messages(session, pending.messages)
+        self._chat_journal.remove(key)
         for state in pending.interruptions:
             self.runtime.loop.discard_interrupt_state(key, state)
         self._pending_chat_writes.pop(key, None)
@@ -243,7 +262,8 @@ class DesktopBridgeService:
         if method.startswith("codex."):
             return await self.codex.handle(method, payload)
         if method == "health":
-            return {"ok": True, "architecture": "sessions", "memory_path": str(self.workspace / "memory")}
+            return {"ok": True, "architecture": "sessions", "memory_path": str(self.workspace / "memory"),
+                    "pending_chat_writes": len(self._pending_chat_writes)}
         voice_result = await self.voice.handle(method, payload)
         if voice_result is not None:
             return voice_result
