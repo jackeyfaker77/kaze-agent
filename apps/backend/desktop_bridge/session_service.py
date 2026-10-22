@@ -6,10 +6,11 @@ import base64
 import inspect
 import json
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, nullcontext
 from uuid import uuid4
+from typing import Any
 
 from agent.looping.interrupt import TurnInterruptState
 from bus.events import OutboundMessage
@@ -18,6 +19,14 @@ from desktop_bridge.models import BridgeError, BridgeResponse
 from desktop_bridge.voice.voice_handler import DesktopVoiceHandler
 from desktop_bridge.voice.voice_service import VoiceService
 from session.manager.models import INTERRUPTED_TURN_METADATA_KEY
+
+
+@dataclass
+class _PendingChatWrite:
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    interruptions: list[TurnInterruptState] = field(default_factory=list)
+    interruption_metadata: dict[str, Any] | None = None
+    title: str = ""
 
 
 class DesktopBridgeService:
@@ -34,6 +43,7 @@ class DesktopBridgeService:
         self._voice_turns = {}
         self._chat_tasks = {}
         self._chat_interrupts: dict[str, TurnInterruptState | None] = {}
+        self._pending_chat_writes: dict[str, _PendingChatWrite] = {}
         self._tts_cancels = {}
         self.active_session_key = "desktop:default"
         self.voice = DesktopVoiceHandler(
@@ -135,16 +145,16 @@ class DesktopBridgeService:
     async def _persist_interrupted_turn(self, key, request_id, content, media, metadata, previous_message_ids):
         state = self._chat_interrupts.get(key)
         session = self.sessions.get_or_create(key)
+        pending = self._pending_chat_writes.setdefault(key, _PendingChatWrite())
         turn_messages = [
             message for message in session.messages
             if message.get("id") not in previous_message_ids
             and (message.get("metadata") or {}).get("request_id") == request_id
+            and not any(message is retained for retained in pending.messages)
         ]
-        if any(message.get("role") == "assistant" for message in turn_messages):
-            # Reasoning may have finished just before cancellation, including while
-            # its append waited for the write lock. Keep that complete reply once.
-            await self.sessions.append_messages(session, turn_messages)
-        else:
+        # A completed reply may already be waiting for its append. Preserve it;
+        # only construct a partial reply when no assistant message exists yet.
+        if not any(message.get("role") == "assistant" for message in turn_messages):
             metadata = {**metadata, "source": "desktop"}
             if not turn_messages:
                 session.add_message("user", content, media=media, metadata=metadata)
@@ -161,9 +171,45 @@ class DesktopBridgeService:
                 session.metadata[INTERRUPTED_TURN_METADATA_KEY] = {
                     "request_id": request_id, "interrupted_by": state.interrupted_by,
                 }
-            await self.sessions.append_messages(session, turn_messages)
-        if state is not None:
+        for message in turn_messages:
+            # A store can commit a row and then fail before returning its ID.
+            # Keep a stable identity across retries, independent of the RPC ID.
+            if not message.get("id"):
+                message.setdefault("desktop_write_id", uuid4().hex)
+            pending.messages.append(message)
+        if state is not None and not any(state is retained for retained in pending.interruptions):
+            pending.interruptions.append(state)
+        if INTERRUPTED_TURN_METADATA_KEY in session.metadata:
+            pending.interruption_metadata = dict(session.metadata[INTERRUPTED_TURN_METADATA_KEY])
+        pending.title = session.metadata.get("title", key)
+        await self._flush_pending_chat_writes(key)
+
+    async def _flush_pending_chat_writes(self, key):
+        pending = self._pending_chat_writes.get(key)
+        if pending is None:
+            return
+        # Reconcile committed rows even if the cache was invalidated after failure.
+        saved = {
+            row["desktop_write_id"]: row
+            for row in self.sessions._store.fetch_session_messages(key)
+            if row.get("desktop_write_id")
+        }
+        session = self.sessions.get_or_create(key)
+        for message in pending.messages:
+            if row := saved.get(message.get("desktop_write_id")):
+                message.update(row)
+            if not any(message is existing or (message.get("id") and message["id"] == existing.get("id"))
+                       for existing in session.messages):
+                session.messages.append(message)
+        if not session.metadata.get("title"):
+            session.metadata["title"] = pending.title
+        if pending.interruption_metadata is not None:
+            session.metadata[INTERRUPTED_TURN_METADATA_KEY] = dict(pending.interruption_metadata)
+        # Retain the batch and interruption context until the entire write succeeds.
+        await self.sessions.append_messages(session, pending.messages)
+        for state in pending.interruptions:
             self.runtime.loop.discard_interrupt_state(key, state)
+        self._pending_chat_writes.pop(key, None)
 
     def _cancel_voice_turn(self, turn_id):
         key = self._voice_turns.get(turn_id)
@@ -266,6 +312,8 @@ class DesktopBridgeService:
             key = self._key(payload)
             if key in self._requests:
                 raise ValueError("请先停止正在运行的会话")
+            if key in self._pending_chat_writes:
+                raise ValueError("此会话有保存失败的消息，请先重试保存后再删除")
             self.sessions.invalidate(key)
             return {"deleted": self.sessions._store.delete_session(key, cascade=True)}
         if method == "chat.cancel":
@@ -302,6 +350,9 @@ class DesktopBridgeService:
                     # requests still waiting for an integration execution slot.
                     await turn_context.enter_async_context(self.runtime.bus.chat_lane.passive_turn("desktop", key))
                     async with chat_admission():
+                        await self._flush_pending_chat_writes(key)
+                        session = self.sessions.get_or_create(key)
+                        previous_message_ids = {message["id"] for message in session.messages if message.get("id")}
                         # 把桌面消息交给 AgentLoop；stream_events=True 会持续发布增量与工具事件。
                         reply = await self.runtime.loop.process_direct(
                             content=content, session_key=key, channel="desktop", chat_id=key,

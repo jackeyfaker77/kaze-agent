@@ -700,3 +700,198 @@ async def test_voice_without_tts_emits_reply_events_before_rpc_response(desktop)
     finally:
         incoming.put_nowait(None)
         await asyncio.wait_for(serving, 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_point", ["before_append", "second_message", "after_commit", "after_append"])
+@pytest.mark.parametrize("invalidate", [False, True])
+async def test_retry_recovers_failed_cancel_write_before_model_and_survives_reload(desktop, monkeypatch, tmp_path, failure_point, invalidate):
+    from session.manager import SessionManager
+
+    runtime, bridge = desktop
+    manager = runtime.session_manager
+    key = "desktop:failed-cancel-write"
+    attachment = tmp_path / "retained.png"
+    Image.new("RGB", (2, 2)).save(attachment)
+    started = asyncio.Event()
+    append = manager.append_messages
+    insert = manager._store.insert_message
+    attempts = 0
+
+    async def partial(**kwargs):
+        await kwargs["on_content_delta"]({"content_delta": "partial", "thinking_delta": "reasoning"})
+        started.set()
+        await asyncio.Event().wait()
+
+    async def failing_append(session, messages):
+        if failure_point == "before_append":
+            raise OSError("injected write failure")
+        await append(session, messages)
+        if failure_point == "after_append":
+            raise OSError("injected write failure")
+
+    def failing_insert(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if failure_point == "second_message" and attempts == 2:
+            raise OSError("injected write failure")
+        result = insert(*args, **kwargs)
+        if failure_point == "after_commit" and attempts == 1:
+            raise OSError("injected write failure")
+        return result
+
+    runtime.provider.chat = partial
+    request = {"id": "reused-id", "method": "chat.send", "payload": {
+        "session_key": key, "content": "original", "media": [str(attachment)],
+    }}
+    pending = asyncio.create_task(bridge.handle(request))
+    await asyncio.wait_for(started.wait(), 2)
+    monkeypatch.setattr(manager, "append_messages", failing_append)
+    monkeypatch.setattr(manager._store, "insert_message", failing_insert)
+    await bridge.handle({"method": "chat.cancel", "payload": {"session_key": key}})
+    failed = await asyncio.wait_for(pending, 2)
+    assert failed.error is not None and "injected write failure" in failed.error.message
+    assert not bridge._requests and not bridge._chat_tasks
+    monkeypatch.setattr(manager, "append_messages", append)
+    monkeypatch.setattr(manager._store, "insert_message", insert)
+    if invalidate:
+        manager.invalidate(key)
+
+    async def complete(**kwargs):
+        # Check durable recovery before the next provider can produce side effects.
+        rows = manager._store.fetch_session_messages(key)
+        assert [(m["role"], m["content"]) for m in rows] == [("user", "original"), ("assistant", "partial")]
+        assert rows[0]["media"] == [str(attachment)]
+        assert rows[1]["reasoning_content"] == "reasoning"
+        assert rows[1]["metadata"]["interrupted_reply"] is True
+        assert sum(m.get("content") == "partial" for m in kwargs["messages"]) == 1
+        return LLMResponse(content="recovered")
+
+    runtime.provider.chat = complete
+    retry = await bridge.handle({"id": "reused-id", "method": "chat.send", "payload": {"session_key": key, "content": "continue"}})
+    assert retry.error is None
+    assert not runtime.loop._interrupt_states
+    expected = [("user", "original"), ("assistant", "partial"), ("user", "continue"), ("assistant", "recovered")]
+    # Reopen the real SQLite store independently of the original session cache.
+    reopened = SessionManager(manager.workspace)
+    try:
+        saved = reopened.get_or_create(key)
+        assert [(m["role"], m["content"]) for m in saved.messages] == expected
+        assert len({m["id"] for m in saved.messages}) == 4
+        assert saved.messages[0]["media"] == [str(attachment)]
+        assert saved.messages[1]["reasoning_content"] == "reasoning"
+        assert INTERRUPTED_TURN_METADATA_KEY not in saved.metadata
+    finally:
+        reopened._store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("partial", ["", "retained partial"])
+@pytest.mark.parametrize("cancel_method", ["chat.cancel", "voice.turn.cancel"])
+async def test_failed_recovery_blocks_provider_until_storage_recovers(desktop, monkeypatch, partial, cancel_method):
+    runtime, bridge = desktop
+    key = "desktop:persistent-failure"
+    manager = runtime.session_manager
+    started = asyncio.Event()
+    calls = 0
+    append = manager.append_messages
+
+    async def blocked(**kwargs):
+        nonlocal calls
+        calls += 1
+        if partial:
+            await kwargs["on_content_delta"]({"content_delta": partial})
+        started.set()
+        await asyncio.Event().wait()
+
+    async def fail_target(session, messages):
+        if session.key == key:
+            raise OSError("database unavailable")
+        await append(session, messages)
+
+    async def complete(**kwargs):
+        nonlocal calls
+        calls += 1
+        return LLMResponse(content="complete")
+
+    runtime.provider.chat = blocked
+    request = {"id": "same-id", "method": "chat.send", "payload": {"session_key": key, "content": "original", "voice_turn_id": "failed-voice"}}
+    pending = asyncio.create_task(bridge.handle(request))
+    await asyncio.wait_for(started.wait(), 2)
+    monkeypatch.setattr(manager, "append_messages", fail_target)
+    await bridge.handle({"method": cancel_method, "payload": {"session_key": key, "voice_turn_id": "failed-voice"}})
+    failed = await asyncio.wait_for(pending, 2)
+    assert failed.error is not None
+    runtime.provider.chat = complete
+    retry = {"id": "same-id", "method": "chat.send", "payload": {"session_key": key, "content": "continue"}}
+    for _ in range(3):
+        manager.invalidate(key)
+        result = await bridge.handle(retry)
+        assert result.error is not None and "database unavailable" in result.error.message
+        assert calls == 1
+        assert not bridge._requests and not bridge._chat_tasks
+    deletion = await bridge.handle({"method": "session.delete", "payload": {"session_key": key}})
+    assert deletion.error is not None
+    unrelated = await bridge.handle({"method": "chat.send", "payload": {"session_key": "desktop:healthy", "content": "hello"}})
+    assert unrelated.error is None and calls == 2
+    monkeypatch.setattr(manager, "append_messages", append)
+    result = await bridge.handle(retry)
+    assert result.error is None and calls == 3
+    assert not bridge._pending_chat_writes and not runtime.loop._interrupt_states
+    expected = [("user", "original")] + ([("assistant", partial)] if partial else []) + [("user", "continue"), ("assistant", "complete")]
+    again = await bridge.handle({**retry, "id": "next", "payload": {"session_key": key, "content": "next"}})
+    assert again.error is None
+    expected += [("user", "next"), ("assistant", "complete")]
+    manager.invalidate(key)
+    assert [(m["role"], m["content"]) for m in manager.get_or_create(key).messages] == expected
+
+
+@pytest.mark.asyncio
+async def test_cancelling_retry_during_recovery_keeps_both_inputs_once(desktop, monkeypatch):
+    runtime, bridge = desktop
+    manager = runtime.session_manager
+    key = "desktop:cancel-recovery"
+    started = asyncio.Event()
+    writing = asyncio.Event()
+    append = manager.append_messages
+    calls = 0
+
+    async def partial(**kwargs):
+        nonlocal calls
+        calls += 1
+        await kwargs["on_content_delta"]({"content_delta": "partial"})
+        started.set()
+        await asyncio.Event().wait()
+
+    async def fail(session, messages):
+        raise OSError("temporary failure")
+
+    async def record_write(session, messages):
+        writing.set()
+        await append(session, messages)
+
+    runtime.provider.chat = partial
+    request = {"id": "reused", "method": "chat.send", "payload": {"session_key": key, "content": "original"}}
+    pending = asyncio.create_task(bridge.handle(request))
+    await asyncio.wait_for(started.wait(), 2)
+    monkeypatch.setattr(manager, "append_messages", fail)
+    cancel = {"method": "chat.cancel", "payload": {"session_key": key}}
+    await bridge.handle(cancel)
+    assert (await asyncio.wait_for(pending, 2)).error is not None
+    manager.invalidate(key)
+    monkeypatch.setattr(manager, "append_messages", record_write)
+    async with manager._lock(key):
+        retry = asyncio.create_task(bridge.handle({**request, "payload": {"session_key": key, "content": "new input"}}))
+        await asyncio.wait_for(writing.wait(), 2)
+        assert (await bridge.handle(cancel)).payload["cancelled"] is True
+        await asyncio.sleep(0)
+        assert (await bridge.handle(cancel)).payload["cancelled"] is True
+        assert not retry.done()
+    result = await asyncio.wait_for(retry, 2)
+    assert result.error is None and result.payload["cancelled"] is True
+    assert calls == 1
+    assert not bridge._pending_chat_writes and not runtime.loop._interrupt_states
+    manager.invalidate(key)
+    assert [(m["role"], m["content"]) for m in manager.get_or_create(key).messages] == [
+        ("user", "original"), ("assistant", "partial"), ("user", "new input"),
+    ]
