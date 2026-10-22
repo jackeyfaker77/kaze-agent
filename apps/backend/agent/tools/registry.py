@@ -259,6 +259,8 @@ class ToolRegistry:
         raise_errors: bool = False,
         execution_timeout: float | None = None,
     ) -> str | ToolResult:
+        from core.execution.contracts import JournalWriteError
+        from core.execution.scope import active_execution
         tool = self._tools.get(name)
         if tool is None:
             if raise_errors:
@@ -277,13 +279,17 @@ class ToolRegistry:
                     merged[key] = execution_context[key]
             if not _tool_defines_parameter(tool, _PROGRESS_DESCRIPTION_FIELD):
                 merged.pop(_PROGRESS_DESCRIPTION_FIELD, None)
-            if execution_timeout is not None:
-                import asyncio
-
-                return await asyncio.wait_for(
-                    tool.execute(**merged), timeout=execution_timeout
-                )
-            return await tool.execute(**merged)
+            async def invoke():
+                if execution_timeout is not None:
+                    import asyncio
+                    return await asyncio.wait_for(tool.execute(**merged), timeout=execution_timeout)
+                return await tool.execute(**merged)
+            scope = active_execution()
+            if scope is not None:
+                return await scope.effect("tool", {"name": name, "arguments": merged, "context": execution_context}, invoke)
+            return await invoke()
+        except JournalWriteError:
+            raise
         except Exception as e:
             if raise_errors:
                 raise

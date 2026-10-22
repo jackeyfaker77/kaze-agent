@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any, Awaitable, Callable
+from core.execution.contracts import JournalWriteError
 
 from agent.tool_hooks.base import ToolHook
 from agent.tool_hooks.types import (
@@ -80,6 +81,8 @@ class ToolExecutor:
         try:
             # 这里才进入真实工具执行；hook 本身不直接替代工具实现。
             output = await invoker(request.tool_name, final_arguments)
+        except JournalWriteError:
+            raise
         except Exception as exc:
             error_text = str(exc)
             try:

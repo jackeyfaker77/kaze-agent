@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from core.execution.contracts import JournalWriteError
+from core.execution.scope import current_execution
+
 import hashlib
 import logging
 import time
@@ -47,6 +50,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger("agent.core.passive_turn")
 
 def _turn_log_id(key: str, msg: InboundMessage) -> str:
+    execution = current_execution.get()
+    if execution is not None:
+        return execution.turn_id
     raw = f"{key}|{msg.timestamp.isoformat()}|{msg.content[:80]}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
 
@@ -401,7 +407,12 @@ class PassiveTurnPipeline:
                 )
             except MemoryConsolidationFailedError:
                 raise
+            except JournalWriteError:
+                raise
             except Exception as exc:
+                execution = current_execution.get()
+                if execution is not None:
+                    execution.error(exc)
                 logger.exception(
                     diagnostic_line(
                         "PassiveTurnPipeline.run",

@@ -255,6 +255,7 @@ def build_registered_tools(
     )
     store = session_store or SessionStore(workspace / "sessions.db")
     push_tool = MessagePushTool(event_bus=event_publisher, chat_lane=bus.chat_lane)
+    push_tool.execution_journal = getattr(session_store, "execution_journal", None)
     memory_result = resolve_memory_toolset_provider(wiring.memory).register(
         tools,
         ToolsetDeps(

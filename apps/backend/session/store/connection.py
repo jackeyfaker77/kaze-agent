@@ -145,6 +145,9 @@ class _SessionConnection:
             self._has_fts = False
 
     def close(self) -> None:
+        journal = getattr(self, "execution_journal", None)
+        if journal is not None:
+            journal.close()
         with self._lock:
             if self._closed:
                 return

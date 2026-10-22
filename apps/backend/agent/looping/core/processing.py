@@ -8,6 +8,9 @@ import time
 from datetime import datetime
 
 from core.error_context import current_session_key
+from core.execution.journal import ExecutionJournal
+from core.execution.runner import run_recorded
+from core.execution.scope import current_execution
 from ..interrupt import (
     TurnInterruptState,
 )
@@ -178,9 +181,19 @@ class _ProcessingMixin:
             self._active_tasks[session_key] = task
             self._active_turn_states[session_key] = self._build_initial_turn_state(item, session_key)
             try:
-                return await self._process(item, session_key=session_key,
-                                           busy_session_key=busy_session_key,
-                                           dispatch_outbound=dispatch_outbound)
+                async def execute():
+                    return await self._process(item, session_key=session_key,
+                                               busy_session_key=busy_session_key,
+                                               dispatch_outbound=dispatch_outbound)
+                journal = getattr(getattr(self, "session_manager", None), "execution_journal", None)
+                if isinstance(item, InboundMessage) and not stateless and isinstance(journal, ExecutionJournal):
+                    return await run_recorded(journal, item, session_key, execute)
+                # Stateless/internal work must not inherit a parent's execution id.
+                token = current_execution.set(None)
+                try:
+                    return await execute()
+                finally:
+                    current_execution.reset(token)
             finally:
                 if self._active_tasks.get(session_key) is task:
                     self._active_tasks.pop(session_key, None)

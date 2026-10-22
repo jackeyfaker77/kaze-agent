@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-23",
+  "scope": "Execution contract v1 and minimal durable execution facts in the existing local runtime",
+  "branch": "codex/execution-contract-journal",
+  "validation": {
+    "pyright": {"production": "0 errors, 0 warnings", "tests": "0 errors, 0 warnings"},
+    "backend_full_suite": {"passed": 1908, "log": ".tmp/execution-full-tests-final.log"},
+    "final_targeted_suite": {
+      "passed": 24,
+      "includes": "Final tool argument capture regression, execution journal crash tests and bridge dispatcher tests",
+      "log": ".tmp/execution-final-targeted.log"
+    },
+    "hard_exit_scenarios": [
+      "accepted input before start",
+      "partial output",
+      "tool dispatched before invocation",
+      "tool effect before receipt",
+      "confirmed tool result before turn completion",
+      "delivery effect before receipt",
+      "completed result before process exit",
+      "real local bridge partial output",
+      "real local bridge completed result"
+    ],
+    "crash_method": "Real child process os._exit(73), followed by two separate recovery processes",
+    "existing_cancel_write_crashes": {"passed": 3, "log": ".tmp/execution-existing-crash-e2e.log"},
+    "desktop_lifecycle": {
+      "passed": true,
+      "coverage": ["real local IPC", "cancellation", "retry", "voice controller/playback with fake providers", "SQLite reload after restart"],
+      "log": ".tmp/execution-desktop-lifecycle.log"
+    }
+  },
+  "configuration": {
+    "changed": false,
+    "hash_comparison": "Unchanged against existing local 2026-10-22 baseline",
+    "files": ["config.toml", "channels.json", "mcp_servers.json", "proactive_sources.json"],
+    "reminder_interval_seconds": 300
+  },
+  "boundaries": [
+    "All runtime probes use isolated temporary workspaces and fake providers/transports",
+    "No real Telegram messages, server deployment or live desktop restart",
+    "Durable explicit request IDs deduplicate completed work; legacy callers retain their behavior",
+    "Original input and partial output are queryable after a crash; no automatic model continuation or insertion of crash fragments into conversation history",
+    "Ambiguous external effects require review and are never automatically replayed by recovery",
+    "Execution audit and conversation store are separate databases without a cross-database transaction",
+    "This phase is not a complete Runtime Host, Peer Mesh or exactly-once delivery implementation"
+  ]
+}
