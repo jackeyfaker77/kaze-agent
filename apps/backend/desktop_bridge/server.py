@@ -37,6 +37,7 @@ class DesktopBridgeServer:
     ) -> None:
         """Dispatches stream requests concurrently and serializes all output frames."""
 
+        await self.service.recover_pending_chat_writes()
         self.service.start_background_tasks()
         writer = BridgeStreamWriter(write_payload)
         dispatcher = BridgeRequestDispatcher()

@@ -895,3 +895,107 @@ async def test_cancelling_retry_during_recovery_keeps_both_inputs_once(desktop, 
     assert [(m["role"], m["content"]) for m in manager.get_or_create(key).messages] == [
         ("user", "original"), ("assistant", "partial"), ("user", "new input"),
     ]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure_point', ['before_append', 'second_message', 'after_commit', 'journal_cleanup'])
+async def test_cancel_journal_recovers_in_fresh_runtime_without_replaying_model(desktop, monkeypatch, failure_point):
+    runtime, bridge = desktop
+    manager = runtime.session_manager
+    key = 'desktop:durable-recovery'
+    started = asyncio.Event()
+    append = manager.append_messages
+    insert = manager._store.insert_message
+    attempts = 0
+
+    async def partial(**kwargs):
+        await kwargs['on_content_delta']({'content_delta': 'retained partial', 'thinking_delta': 'retained thinking'})
+        started.set()
+        await asyncio.Event().wait()
+
+    async def fail_append(session, messages):
+        raise OSError('database unavailable')
+
+    def fail_insert(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if failure_point == 'second_message' and attempts == 2:
+            raise OSError('database unavailable')
+        row = insert(*args, **kwargs)
+        if failure_point == 'after_commit' and attempts == 1:
+            raise OSError('commit acknowledgement lost')
+        return row
+
+    def fail_remove(key):
+        raise OSError('journal cleanup failed')
+
+    runtime.provider.chat = partial
+    pending = asyncio.create_task(bridge.handle({'id': 'original', 'method': 'chat.send', 'payload': {
+        'session_key': key, 'content': 'original input', 'media': ['retained.txt'],
+    }}))
+    await asyncio.wait_for(started.wait(), 2)
+    if failure_point == 'before_append':
+        monkeypatch.setattr(manager, 'append_messages', fail_append)
+    elif failure_point == 'journal_cleanup':
+        monkeypatch.setattr(bridge._chat_journal, 'remove', fail_remove)
+    else:
+        monkeypatch.setattr(manager._store, 'insert_message', fail_insert)
+    await bridge.handle({'method': 'chat.cancel', 'payload': {'session_key': key}})
+    assert (await pending).error is not None
+    assert key in bridge._chat_journal.load()
+    monkeypatch.setattr(manager, 'append_messages', append)
+    monkeypatch.setattr(manager._store, 'insert_message', insert)
+
+    http = SharedHttpResources()
+    restarted = build_core_runtime(Config(provider='openai', model='fake', api_key='fake'), manager.workspace, http)
+    recovered = DesktopBridgeService(restarted)
+    async def forbidden(**kwargs):
+        pytest.fail('journal recovery must never invoke the provider')
+    restarted.provider.chat = forbidden
+    try:
+        await recovered.recover_pending_chat_writes()
+        rows = restarted.session_manager._store.fetch_session_messages(key)
+        assert [(m['role'], m['content']) for m in rows] == [('user', 'original input'), ('assistant', 'retained partial')]
+        assert rows[0]['media'] == ['retained.txt']
+        assert rows[1]['reasoning_content'] == 'retained thinking'
+        assert rows[1]['metadata']['interrupted_reply'] is True
+        assert not recovered._chat_journal.load()
+        assert not recovered._pending_chat_writes
+        ids = [m['id'] for m in rows]
+        await recovered.recover_pending_chat_writes()
+        assert [m['id'] for m in restarted.session_manager._store.fetch_session_messages(key)] == ids
+    finally:
+        await recovered.aclose()
+        await restarted.stop()
+        await restarted.memory_runtime.aclose()
+        restarted.session_manager._store.close()
+        await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_journal_survives_failed_startup_recovery_and_later_retry(desktop, monkeypatch):
+    runtime, bridge = desktop
+    key = 'desktop:startup-recovery'
+    message = {'role': 'user', 'content': 'saved input', 'desktop_write_id': 'stable-input'}
+    bridge._chat_journal.save(key, [message], 'original title', None)
+    recovered = DesktopBridgeService(runtime)
+    append = runtime.session_manager.append_messages
+    async def unavailable(session, messages):
+        raise OSError('still unavailable')
+    monkeypatch.setattr(runtime.session_manager, 'append_messages', unavailable)
+    try:
+        await recovered.recover_pending_chat_writes()
+        assert key in recovered._chat_journal.load()
+        health = await recovered.handle({'method': 'health'})
+        assert health.payload['pending_chat_writes'] == 1
+        assert (await recovered.handle({'method': 'session.delete', 'payload': {'session_key': key}})).error
+        monkeypatch.setattr(runtime.session_manager, 'append_messages', append)
+        async def provider(**kwargs):
+            assert len(runtime.session_manager._store.fetch_session_messages(key)) == 1
+            return LLMResponse(content='complete')
+        runtime.provider.chat = provider
+        result = await recovered.handle({'method': 'chat.send', 'payload': {'session_key': key, 'content': 'continue'}})
+        assert result.error is None
+        assert [m['content'] for m in result.payload['session']['messages']] == ['saved input', 'continue', 'complete']
+        assert not recovered._chat_journal.load()
+    finally:
+        await recovered.aclose()

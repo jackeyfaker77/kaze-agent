@@ -1,0 +1,131 @@
+{
+  "date": "2026-10-22",
+  "branch": "codex/durable-recovery-startup",
+  "base_commit": "8e1aac44aee226a8d91c55ffa2a40ab766f7fd99",
+  "fixes": [
+    {
+      "issue": "数据库补存成功前进程崩溃丢失待写消息",
+      "change": "SQLite 写入前先写入独立 JSON 恢复日志，flush/fsync 后原子替换；启动时按稳定写入标识核对已提交消息并补存；全部落库后删除日志。补存或日志清理失败时保留恢复批次并明确报错。"
+    },
+    {
+      "issue": "启动加载或渲染异常可能留下空白窗口",
+      "finding": "原入口未接入已有全局诊断和错误边界，HTML root 在模块加载前为空，原生窗口在首次绘制前就显示。",
+      "change": "静态加载提示先出现，轻量入口动态加载应用；接入错误边界、诊断和重载入口；窗口等待 ready-to-show 后显示。"
+    }
+  ],
+  "verification": {
+    "backend": {
+      "command": "python -m pytest -q -W error tests/",
+      "passed": 1890,
+      "failed": 0,
+      "new_cases": 8
+    },
+    "desktop": {
+      "command": "pnpm test",
+      "passed": 219,
+      "failed": 0,
+      "existing_skipped": 1,
+      "new_cases": 4
+    },
+    "static": {
+      "pyright": "passed",
+      "pyright_tests": "passed",
+      "typecheck": "passed",
+      "lint": "passed",
+      "build": "passed",
+      "diff_check": "passed"
+    },
+    "abrupt_process_exit": {
+      "command": "node --import tsx tests/e2e/cancel_write_crash.mjs",
+      "results": [
+        {
+          "fault": "before_append",
+          "abrupt_exit": true,
+          "recovered_before_retry": true,
+          "stable_ids_after_second_restart": true
+        },
+        {
+          "fault": "after_commit",
+          "abrupt_exit": true,
+          "recovered_before_retry": true,
+          "stable_ids_after_second_restart": true
+        },
+        {
+          "fault": "before_cleanup",
+          "abrupt_exit": true,
+          "recovered_before_retry": true,
+          "stable_ids_after_second_restart": true
+        }
+      ],
+      "semantics": "故障返回后使用 os._exit(73) 终止真实后端，无 finally 或退出刷新；新进程自动恢复，再继续对话并再次重启核对 ID 和内容。"
+    },
+    "startup": {
+      "runner": "Electron tests/e2e/desktop_startup.cjs <mode>",
+      "results": [
+        {
+          "mode": "normal",
+          "first_paint_before_show": true,
+          "final_visible": true,
+          "diagnostics": [],
+          "reload_recovered": false
+        },
+        {
+          "mode": "delayed",
+          "first_paint_before_show": true,
+          "final_visible": true,
+          "diagnostics": [],
+          "reload_recovered": false
+        },
+        {
+          "mode": "module-error",
+          "first_paint_before_show": true,
+          "final_visible": true,
+          "diagnostics": [
+            "error"
+          ],
+          "reload_recovered": true
+        },
+        {
+          "mode": "render-error",
+          "first_paint_before_show": true,
+          "final_visible": true,
+          "diagnostics": [
+            "error-boundary"
+          ],
+          "reload_recovered": true
+        }
+      ],
+      "real_components": [
+        "Electron BrowserWindow",
+        "production preload",
+        "built React renderer",
+        "CSP"
+      ],
+      "fixture": "隔离用户目录，RPC 返回测试数据；用户手动重载场景通过页面链接或按钮触发。"
+    },
+    "previous_lifecycle": {
+      "command": "node --import tsx tests/e2e/desktop_lifecycle.mjs",
+      "result": "passed"
+    },
+    "live_application": {
+      "restarted": true,
+      "main_pid": 41620,
+      "window": "主界面与历史会话正常可见，本地服务已连接",
+      "reload_needed": false
+    }
+  },
+  "configuration": {
+    "unchanged": true,
+    "verified_by_sha256": [
+      "config.toml",
+      "channels.json",
+      "mcp_servers.json",
+      "proactive_sources.json"
+    ]
+  },
+  "limits": [
+    "覆盖恢复日志成功写入后的进程崩溃；恢复日志本身无法落盘时仍返回错误，不承诺磁盘损坏或整个文件系统不可写时的数据耐久性。",
+    "此前单次空白没有诊断记录，无法追溯其唯一触发原因；本轮对已确认的首帧、加载和渲染故障路径补齐恢复机制并复测。",
+    "未改服务配置或补做云端语音/视觉服务验收；本轮为本地修复，尚未提交 GitHub。"
+  ]
+}

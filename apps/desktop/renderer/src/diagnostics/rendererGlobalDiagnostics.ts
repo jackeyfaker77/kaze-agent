@@ -9,7 +9,8 @@ type RendererGlobalError = {
 };
 
 function reportRendererGlobalError(payload: RendererGlobalError): void {
-  window.miraDesktop.reportRendererDiagnostic(payload);
+  try { window.miraDesktop?.reportRendererDiagnostic(payload); }
+  catch { /* Error reporting must not cause a second uncaught renderer error. */ }
 }
 
 /** Registers process-wide renderer error reporting before React mounts. */
