@@ -12,12 +12,14 @@ class _ProjectionMixin:
         session_key: str,
         *,
         thread_id: str = "",
+        message_id: str | None = None,
         delivery_status: str,
         external_message_id: str = "",
     ) -> dict[str, Any] | None:
         updated = self._store.update_latest_assistant_delivery(
             session_key,
             thread_id=thread_id,
+            message_id=message_id,
             delivery_status=delivery_status,
             external_message_id=external_message_id,
         )

@@ -107,6 +107,9 @@ Telegram live-preview edits, and all bus-based passive transport receipts are no
 yet a unified execution lifecycle. They must be brought into the future Host
 admission/outbox design. This increment must not be described as exactly-once
 Telegram delivery, a durable inbound queue, or full event-sourced model context.
+The later [durable transport increment](durable-transport-v1.md) now adds a
+Telegram inbox and a shared outbox, including part receipts and recovery. It does
+not change the execution contract's conservative rule for interrupted tools.
 Conversation deletion and execution audit retention are separate concerns; this
 append-only audit currently remains until the workspace is explicitly removed.
 

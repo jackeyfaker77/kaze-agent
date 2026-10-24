@@ -35,7 +35,7 @@ class _InboundMixin:
 
         # 去重：同一 (chat_id, message_id) 只处理一次，防止 Telegram 重投
         msg_key = f"{chat.id}:{msg.message_id}"
-        if self._message_deduper.seen(msg_key):
+        if getattr(self._bus, 'transport', None) is None and self._message_deduper.seen(msg_key):
             logger.warning(
                 f"[telegram] 重复消息已忽略  chat_id={chat.id}  message_id={msg.message_id}"
             )
@@ -110,6 +110,10 @@ class _InboundMixin:
         return self._channel_hub.route_inbound(message)
 
     async def _publish_inbound(self, message: InboundMessage) -> None:
+        from .durable import current_update
+        identity = current_update.get()
+        if identity:
+            message.metadata.update({'_transport_id': identity, 'execution_request_id': identity})
         if self._channel_hub is not None and not self._channel_hub.is_sender_allowed(
             channel=message.channel,
             chat_id=message.chat_id,

@@ -66,7 +66,13 @@ class TelegramWire(BaseRequest):
             self.next_id += 1
             message_id = params.get("message_id", self.next_id)
             text = str(params.get("text", ""))
+            if text == 'host reply' and scenario == 'queue-retry' and not (workspace/'rejected').exists():
+                (workspace/'rejected').write_text('yes')
+                record('rejected', text=text)
+                return 429, json.dumps({'ok':False, 'error_code':429, 'description':'Too Many Requests', 'parameters':{'retry_after':1}}).encode()
             record("outbound", text=text, chat_id=str(params["chat_id"]), message_id=message_id)
+            if text == 'host reply' and scenario == 'queue-unknown':
+                os._exit(73)
             result = {"message_id": message_id, "date": 1700000000,
                       "chat": {"id": int(params["chat_id"]), "type": "private"}, "text": text}
         elif endpoint not in {"deleteWebhook", "setMyCommands", "sendChatAction", "deleteMessage"}:
@@ -130,6 +136,22 @@ def build(*args):
 
 
 app_module.build_core_runtime = build
+if scenario == 'queue-inbox':
+    from infra.channels.telegram_channel.durable import PersistentUpdateQueue
+    original_put = PersistentUpdateQueue.put
+    async def crash_after_ingress(self, item):
+        await original_put(self, item)
+        if getattr(item, 'update_id', None) == 1:
+            os._exit(73)
+    PersistentUpdateQueue.put = crash_after_ingress
+if scenario == 'queue-receipt':
+    from bus.durable import TransportStore
+    original_state = TransportStore.state
+    def crash_after_receipt(self, key, state, **kwargs):
+        if state == 'done' and self.get(key)['kind'] == 'bus:telegram':
+            os._exit(73)
+        return original_state(self, key, state, **kwargs)
+    TransportStore.state = crash_after_receipt
 main.Config.load = lambda path: config
 for name, value in {
     "channels.json": {"allow_from": {"telegram": ["42", "43", "44"]}},

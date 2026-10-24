@@ -12,6 +12,8 @@ from agent.core.proactive_turn.gates import (
     ProactiveGateContext,
 )
 from agent.looping.ports import SessionServices
+from agent.tools.message_push import DeliveryReceipt
+from bus.durable import Outbox
 from agent.plugins.snapshot import (
     ProactiveContributions,
     ProactivePluginGeneration,
@@ -59,29 +61,43 @@ class _PushPort:
             return False
         push = self.runtime.push_tool
         if hasattr(push, "send"):
-            receipt = await push.send(
-                channel=outbound.channel,
-                chat_id=outbound.chat_id,
-                message=sanitize_user_visible_content(outbound.content),
-                image=outbound.media[0] if outbound.media else None,
-                session_key=self.loop._target_session_key(),
-                commit_after_delivery=True,
-                _outbound_metadata=dict(outbound.metadata),
-            )
+            outbox = getattr(push, 'outbox', None)
+            delivery_id = outbound.metadata.get('delivery_id')
+            previous = None
+            if isinstance(outbox, Outbox) and delivery_id:
+                try:
+                    previous = outbox.store.get(delivery_id)
+                except KeyError:
+                    pass
+            if previous is not None:
+                # A later tick may word the same evidence differently. Resume the
+                # original immutable intent, then acknowledge that evidence normally.
+                payload = previous['payload']
+                target = push.resolve_target(outbound.channel, outbound.chat_id)
+                if (previous['kind'] != 'push:'+outbound.channel
+                        or payload['chat_id'] != target
+                        or payload.get('session_key') != self.loop._target_session_key()):
+                    raise ValueError('Proactive delivery identity changed target')
+                try:
+                    receipt = DeliveryReceipt(**await outbox.deliver(previous['id']))
+                except Exception:
+                    return False
+            else:
+                receipt = await push.send(
+                    channel=outbound.channel,
+                    chat_id=outbound.chat_id,
+                    message=sanitize_user_visible_content(outbound.content),
+                    image=outbound.media[0] if outbound.media else None,
+                    session_key=self.loop._target_session_key(),
+                    commit_after_delivery=True,
+                    _outbound_metadata=dict(outbound.metadata),
+                    delivery_id=outbound.metadata.get('delivery_id'),
+                    images=list(outbound.media[1:]),
+                )
             if not receipt.ok:
                 return False
             if receipt.delivery_ref:
                 outbound.metadata["delivery_ref"] = receipt.delivery_ref
-            for image in outbound.media[1:]:
-                receipt = await push.send(
-                    channel=outbound.channel,
-                    chat_id=outbound.chat_id,
-                    image=image,
-                    session_key=self.loop._target_session_key(),
-                    commit_after_delivery=True,
-                )
-                if not receipt.ok:
-                    return False
             sent = True
         else:
             sent = await PushToolOutboundPort(push).dispatch(outbound)

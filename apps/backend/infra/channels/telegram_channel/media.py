@@ -32,7 +32,7 @@ class _MediaMixin:
             return
 
         msg_key = f"{chat.id}:{msg.message_id}"
-        if self._message_deduper.seen(msg_key):
+        if getattr(self._bus, 'transport', None) is None and self._message_deduper.seen(msg_key):
             logger.warning(
                 f"[telegram] 重复图片消息已忽略  chat_id={chat.id}  message_id={msg.message_id}"
             )

@@ -222,6 +222,8 @@ class CoreRuntime:
             await self.plugin_manager.terminate_all()
         await self.mcp_registry.shutdown()
         await self.event_bus.aclose()
+        if self.bus.transport is not None:
+            self.bus.transport.close()
 
 
 def build_registered_tools(
@@ -256,6 +258,7 @@ def build_registered_tools(
     store = session_store or SessionStore(workspace / "sessions.db")
     push_tool = MessagePushTool(event_bus=event_publisher, chat_lane=bus.chat_lane)
     push_tool.execution_journal = getattr(session_store, "execution_journal", None)
+    push_tool.outbox = bus.outbox
     memory_result = resolve_memory_toolset_provider(wiring.memory).register(
         tools,
         ToolsetDeps(
@@ -421,6 +424,8 @@ def build_core_runtime(
     loop_provider = provider
     loop_model = config.model
     session_manager = SessionManager(workspace)
+    bus.enable_durability(workspace, session_manager.execution_journal)
+    session_manager._store.transport_store = bus.transport
     loop_ref: dict[str, AgentLoop] = {}
     tools, push_tool, scheduler, mcp_registry, memory_runtime, screen_observation = (
         build_registered_tools(
@@ -471,12 +476,11 @@ def build_core_runtime(
         ),
     )
     loop_ref["loop"] = loop
-    from uuid import uuid4
     from agent.scheduler import ScheduledJob
     from agent.tools.message_push import DeliveryReceipt
     from agent.turns.orchestrator import TurnOrchestrator, TurnOrchestratorDeps
     from agent.turns.outbound import BusOutboundPort
-    from agent.turns.result import TurnOutbound, TurnResult
+    from agent.turns.result import TurnOutbound, TurnResult, TurnTrace
 
     delivery_committer = TurnOrchestrator(TurnOrchestratorDeps(
         session=SessionServices(session_manager=session_manager, presence=presence),
@@ -488,7 +492,7 @@ def build_core_runtime(
         metadata = {
             "source": "scheduler", "session_key_override": job.session_key,
             "transport_channel": job.channel, "transport_chat_id": receipt.chat_id,
-            "request_id": job.id, "delivery_id": uuid4().hex,
+            "request_id": job.id, "delivery_id": f'schedule:{job.id}:{job.fire_at.isoformat()}',
             "delivery_ref": receipt.delivery_ref or "",
             "thread_id": job.thread_id, "session_config_version": job.session_config_version,
             "delivery_key": job.delivery_key,
@@ -500,6 +504,24 @@ def build_core_runtime(
         )
 
     scheduler.bind_delivery_committer(commit_scheduler_delivery)
+    async def commit_queued_delivery(payload, receipt):
+        import json
+        metadata = dict(payload.get('_outbound_metadata') or {})
+        if not payload.get('commit_after_delivery') or not metadata.get('delivery_id'):
+            return
+        key = payload['session_key']
+        metadata['delivery_ref'] = receipt.delivery_ref or ''
+        metadata['transport_channel'] = payload['channel']
+        metadata['transport_chat_id'] = receipt.chat_id
+        media = ([payload['image']] if payload.get('image') else []) + list(payload.get('images') or [])
+        projection = json.loads(metadata.pop('_delivery_projection', '{}'))
+        await delivery_committer.commit_sent_turn(
+            result=TurnResult('reply', TurnOutbound(key, payload.get('message') or '', media),
+                evidence=projection.get('evidence', []),
+                trace=TurnTrace('proactive', extra=projection.get('trace_extra', {}))),
+            session_key=key, channel=payload['channel'], chat_id=payload['chat_id'], metadata=metadata,
+        )
+    push_tool.commit_delivery = commit_queued_delivery
     wire_turn_lifecycle(
         lifecycle=TurnLifecycle(event_bus),
         active_turn_states=loop.active_turn_states,

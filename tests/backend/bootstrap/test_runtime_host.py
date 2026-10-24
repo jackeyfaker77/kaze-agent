@@ -7,6 +7,38 @@ import pytest
 from bootstrap.app import AppRuntime, RuntimeFeatures
 from bootstrap.channel_host import ChannelHost
 from bootstrap.host_state import WorkspaceInUse, WorkspaceOwner, host_status, request_host_stop
+
+
+@pytest.mark.parametrize('persistent', [False, True])
+def test_status_replace_retries_windows_reader_lock_and_preserves_old_file(tmp_path, monkeypatch, persistent):
+    from pathlib import Path
+    import bootstrap.host_state as state
+    path = tmp_path / 'status.json'
+    state._write(path, {'state': 'old'})
+    replace = Path.replace
+    attempts = []
+    pauses = []
+    def locked_replace(source, target):
+        attempts.append(source)
+        if persistent or len(attempts) < 3:
+            error = PermissionError('reader holds status file')
+            error.winerror = 5
+            raise error
+        return replace(source, target)
+    monkeypatch.setattr(Path, 'replace', locked_replace)
+    monkeypatch.setattr(state.time, 'sleep', pauses.append)
+    if persistent:
+        with pytest.raises(PermissionError):
+            state._write(path, {'state':'new'})
+        assert state._read(path) == {'state':'old'}
+        assert len(attempts) == 5
+    else:
+        state._write(path, {'state':'new'})
+        assert state._read(path) == {'state':'new'}
+        assert len(attempts) == 3
+    assert len(pauses) == len(attempts) - 1
+    assert sum(pauses) <= .25
+    assert list(tmp_path.glob('*.tmp')) == []
 from bootstrap.runtime_host import RuntimeHost
 from agent.config_models import Config
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import inspect
 import logging
 import asyncio
+import hashlib
+import json
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, nullcontext
 from uuid import uuid4
@@ -63,7 +65,15 @@ class TurnOrchestrator:
             channel=channel,
             chat_id=chat_id,
         )
-        source_metadata["delivery_id"] = uuid4().hex
+        if result.evidence:
+            source_metadata['delivery_id'] = 'proactive:' + hashlib.sha256(json.dumps([channel, chat_id, session_key, sorted(result.evidence)]).encode()).hexdigest()
+        else:
+            source_metadata["delivery_id"] = uuid4().hex
+        # Persist only the data needed to reconstruct conversation history, never callbacks.
+        source_metadata['_delivery_projection'] = json.dumps({
+            'evidence': result.evidence,
+            'trace_extra': result.trace.extra if result.trace else {},
+        }, ensure_ascii=False)
         # 2. 先执行发送前 side_effects，再真正 dispatch 到 outbound。
         await self._run_effects(result.side_effects)
         scope = (
@@ -137,20 +147,32 @@ class TurnOrchestrator:
         if result.outbound is None:
             raise ValueError("已投递回合必须包含正文")
         session = self._session.session_manager.get_or_create(session_key)
-        self._persist_proactive_session(
-            session=session,
-            content=result.outbound.content,
-            media=list(result.outbound.media),
-            result=result,
-            metadata=metadata,
-        )
-        await self._session.session_manager.append_messages(
-            session, session.messages[-1:]
-        )
-        if self._session.presence:
+        delivery_id = metadata.get('delivery_id')
+        existing = next((m for m in session.messages if delivery_id and m.get('delivery_id') == delivery_id), None)
+        if delivery_id and (existing is None or not existing.get('id')):
+            # An INSERT may have committed even when its acknowledgement was lost.
+            store = getattr(self._session.session_manager, '_store', None)
+            persisted = next((m for m in store.fetch_session_messages(session_key)
+                if m.get('delivery_id') == delivery_id), None) if store is not None else None
+            if persisted is not None:
+                if existing is None:
+                    session.messages.append(persisted)
+                    existing = persisted
+                else:
+                    existing.update(persisted)
+        newly_committed = existing is None or not existing.get('id')
+        if existing is not None and not existing.get('id'):
+            await self._session.session_manager.append_messages(session, [existing])
+        elif existing is None:
+            self._persist_proactive_session(
+                session=session, content=result.outbound.content,
+                media=list(result.outbound.media), result=result, metadata=metadata,
+            )
+            await self._session.session_manager.append_messages(session, session.messages[-1:])
+        if newly_committed and self._session.presence:
             self._session.presence.record_proactive_sent(session_key)
         await self._run_effects(result.success_side_effects)
-        if self._event_bus is not None:
+        if newly_committed and self._event_bus is not None:
             await self._event_bus.fanout(
                 ProactiveMessageCommitted(
                     session_key=session_key,
@@ -241,7 +263,7 @@ class TurnOrchestrator:
             evidence_item_ids=[str(item_id) for item_id in result.evidence],
             source_refs=source_refs,
             state_summary_tag=state_summary_tag,
-            metadata=metadata,
+            metadata={k: v for k, v in metadata.items() if k != '_delivery_projection'},
         )
 
     def _build_source_metadata(

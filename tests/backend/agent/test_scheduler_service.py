@@ -58,7 +58,10 @@ async def test_instant_push_receives_correct_args(
     mock_push.send.assert_called_once_with(
         channel="telegram", chat_id="999", message="喝水了", session_key="mira",
         commit_after_delivery=False,
-        _outbound_metadata={"session_key_override": "mira", "source": "scheduler", "request_id": job.id},
+        _outbound_metadata={"session_key_override": "mira", "source": "scheduler", "request_id": job.id,
+            'delivery_id': f'schedule:{job.id}:{job.fire_at.isoformat()}',
+            'thread_id': '', 'session_config_version': '', 'delivery_key': ''},
+        delivery_id=f'schedule:{job.id}:{job.fire_at.isoformat()}',
     )
 
 
@@ -121,7 +124,10 @@ async def test_soft_sends_ai_response_via_push(
         chat_id=job.chat_id,
         message="北京今天晴，15°C",
         commit_after_delivery=False,
-        _outbound_metadata={"session_key_override": "mira", "source": "scheduler", "request_id": job.id},
+        _outbound_metadata={"session_key_override": "mira", "source": "scheduler", "request_id": job.id,
+            'delivery_id': f'schedule:{job.id}:{job.fire_at.isoformat()}',
+            'thread_id': '', 'session_config_version': '', 'delivery_key': ''},
+        delivery_id=f'schedule:{job.id}:{job.fire_at.isoformat()}',
         session_key="mira",
     )
     mock_push.execute.assert_not_called()

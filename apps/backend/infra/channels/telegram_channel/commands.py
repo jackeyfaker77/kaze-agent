@@ -30,6 +30,9 @@ class _CommandMixin:
             )
             return
         if self._interrupt_controller is None:
+            if getattr(self._bus, 'outbox', None) is not None:
+                await self.send(str(chat.id), '当前未启用中断功能。')
+                return
             await _call_send_markdown(
                 self._app.bot,
                 str(chat.id),
@@ -51,6 +54,9 @@ class _CommandMixin:
             sender=str(user.id),
             command="/stop",
         )
+        if getattr(self._bus, 'outbox', None) is not None:
+            await self.send(str(chat.id), result.message)
+            return
         await _call_send_markdown(
             self._app.bot,
             str(chat.id),
