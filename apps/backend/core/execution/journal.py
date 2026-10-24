@@ -1,6 +1,6 @@
 """Append-only execution facts and transactionally maintained status index.
 
-This is an execution ledger, not yet the canonical conversation/model history.
+Conversation projections share this fact space; model context is not yet replayed here.
 All writes commit synchronously before their caller crosses an effect boundary.
 """
 from __future__ import annotations
@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from .contracts import ACTIVE, CONTRACT_VERSION, TERMINAL, ExecutionConflict, ExecutionIdentity
 from .lease import EpochLease
+from .schema import ensure_event_schema
 
 
 def encode(value: Any) -> str:
@@ -36,8 +37,8 @@ class ExecutionJournal:
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=FULL")
+            ensure_event_schema(self._conn)
             self._conn.executescript("""
-                CREATE TABLE IF NOT EXISTS identity (id INTEGER PRIMARY KEY CHECK(id=1), root_id TEXT NOT NULL, version INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS executions (
                     turn_id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE,
                     epoch TEXT NOT NULL, session_key TEXT NOT NULL, source TEXT NOT NULL,
@@ -45,15 +46,6 @@ class ExecutionJournal:
                     result TEXT, UNIQUE(source, session_key, request_key));
                 CREATE UNIQUE INDEX IF NOT EXISTS one_active_execution ON executions(session_key)
                     WHERE status IN ('accepted', 'running');
-                CREATE TABLE IF NOT EXISTS events (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT, turn_id TEXT NOT NULL,
-                    run_id TEXT NOT NULL, epoch TEXT NOT NULL, version INTEGER NOT NULL,
-                    kind TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
-                CREATE INDEX IF NOT EXISTS events_turn ON events(turn_id, seq);
-                CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
-                    BEGIN SELECT RAISE(ABORT, 'execution events are immutable'); END;
-                CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
-                    BEGIN SELECT RAISE(ABORT, 'execution events are immutable'); END;
             """)
             with self._transaction():
                 self._conn.execute("INSERT OR IGNORE INTO identity VALUES (1, ?, ?)", (uuid4().hex, CONTRACT_VERSION))

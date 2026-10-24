@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
+
+from .projection import ConversationProjection
 
 
 
@@ -14,10 +17,46 @@ class _SessionConnection:
         self._workspace = Path(db_path).expanduser().resolve().parent
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._closed = False
         self._has_fts = False
-        self._init_schema()
+        try:
+            self._init_schema()
+            self._conn.execute('PRAGMA journal_mode=WAL')
+            self._conn.execute('PRAGMA synchronous=FULL')
+            self._projection = ConversationProjection(self._conn, Path(self.db_path).resolve())
+        except BaseException:
+            self._conn.close()
+            self._closed = True
+            raise
+
+    @contextmanager
+    def _access(self):
+        """Serialize source acceptance and view application, including other readers."""
+        with self._lock:
+            self._conn.execute('BEGIN IMMEDIATE')
+            try:
+                self._projection.replay()
+                yield
+                if self._conn.in_transaction:
+                    self._commit_projection()
+            except BaseException:
+                self._conn.rollback()
+                raise
+
+    def _commit_projection(self):
+        self._projection.commit()
+
+    def rebuild_projection(self) -> None:
+        """Rebuild rows, search index and cursor atomically from conversation facts."""
+        with self._lock:
+            self._conn.execute('BEGIN IMMEDIATE')
+            try:
+                self._projection.replay(rebuild=True)
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
 
     def __del__(self) -> None:
         if not self._closed:
@@ -155,4 +194,5 @@ class _SessionConnection:
             if self._closed:
                 return
             self._closed = True
+            self._projection.close()
             self._conn.close()

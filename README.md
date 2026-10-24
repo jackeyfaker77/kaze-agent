@@ -73,7 +73,7 @@ pnpm start  # 先构建最新代码，再启动本仓库 Electron
 使用 `python apps/backend/main.py host --workspace ./workspace --config ./workspace/config.toml`，
 无需启动桌面即可运行已配置的 Telegram 和主动提醒。现有桌面本地模式保持可用，
 同一工作区只能选择一种模式。启动、状态、停止及部署示例见
-[Runtime Host v1](docs/architecture/runtime-host-v1.md)。桌面远程连接将在后续阶段接入。
+[Runtime Host v1](docs/architecture/runtime-host-v1.md)。桌面远程连接见下方说明。
 
 ## 桌宠与品牌资源
 
@@ -111,6 +111,9 @@ pnpm --filter kaze-desktop run test:package
 ## 桌面远程连接
 
 桌面可通过 `KAZE_RUNTIME_URL` 与 `KAZE_RUNTIME_TOKEN_FILE` 连接独立 Runtime Host，共用服务器的会话、执行记录和 Calendar 待办。远程模式不启动本地后端；省略环境变量仍使用现有本地模式。启动、TLS/SSH 接入、断线恢复和功能边界见 [远程桌面说明](docs/architecture/remote-desktop-v1.md)。
+
+会话历史由 Runtime Event Log 中的会话事实重建，兼容旧历史并保留本地／远程模式。
+迁移、崩溃恢复边界和离线重建命令见 [可重建会话投影](docs/architecture/conversation-projection-v1.md)。
 
 ## 启动隔离
 

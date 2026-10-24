@@ -36,7 +36,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("bridge", "desktop", "host", "host-status", "host-stop", "setup", "init"),
+        choices=("bridge", "desktop", "host", "host-status", "host-stop", "conversation-rebuild", "setup", "init"),
         help="运行命令；desktop 是 bridge 的兼容别名",
     )
     parser.add_argument("--config", default="config.toml", help="配置文件路径")
@@ -138,6 +138,28 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("远程端口必须在 1–65535 之间")
     config_path = str(args.config)
     workspace = args.workspace
+
+    if args.command == 'conversation-rebuild':
+        from bootstrap.host_state import WorkspaceOwner
+        from session.store import SessionStore
+        target = (workspace or resolve_default_workspace()).resolve()
+        if not (target / 'private_runtime/execution/events.sqlite3').is_file():
+            raise ValueError('没有可用于重建的 Runtime Event Log；请先完成旧历史迁移')
+        try:
+            owner = WorkspaceOwner(target, 'maintenance')
+        except WorkspaceInUse as exc:
+            logger.error('%s', exc)
+            return 2
+        try:
+            store = SessionStore(target / 'sessions.db')
+            try:
+                store.rebuild_projection()
+                print(json.dumps({'rebuilt': True, 'sessions': len(store.list_sessions())}))
+            finally:
+                store.close()
+        finally:
+            owner.close()
+        return 0
 
     if args.command in {"host-status", "host-stop"}:
         target = workspace or resolve_default_workspace()

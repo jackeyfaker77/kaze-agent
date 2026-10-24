@@ -44,7 +44,7 @@ class _SearchMixin:
             return []
 
         results: list[dict[str, Any]] = []
-        with self._lock:
+        with self._access():
             for sk, seqs in session_seqs.items():
                 expanded: set[int] = set()
                 for seq in seqs:
@@ -71,7 +71,7 @@ class _SearchMixin:
             f"SELECT {_MESSAGE_SELECT_COLUMNS} FROM messages "
             f"WHERE id IN ({placeholders}) ORDER BY CASE id {order_expr} END"
         )
-        with self._lock:
+        with self._access():
             rows = self._conn.execute(sql, tuple(ids + ids)).fetchall()
         return [self._row_to_message(row) for row in rows]
 
@@ -83,7 +83,7 @@ class _SearchMixin:
     ) -> dict[str, Any]:
         """Fetch a message and nearby persisted messages by its real id."""
         safe_context = max(0, min(int(context), 100))
-        with self._lock:
+        with self._access():
             target = self._conn.execute(
                 f"SELECT {_MESSAGE_SELECT_COLUMNS} FROM messages WHERE id = ?",
                 (message_id,),
@@ -221,7 +221,7 @@ class _SearchMixin:
                 fts_params.extend(f"%{t}%" for t in terms)
                 fts_params.extend([limit, offset])
                 try:
-                    with self._lock:
+                    with self._access():
                         count_row = self._conn.execute(
                             count_sql, tuple(count_params)
                         ).fetchone()
@@ -249,7 +249,7 @@ class _SearchMixin:
         like_params.extend(params)
         like_params.extend(f"%{t}%" for t in terms)  # for WHERE OR
         like_params.extend([limit, offset])
-        with self._lock:
+        with self._access():
             count_row = self._conn.execute(count_sql, tuple(count_params)).fetchone()
             rows = self._conn.execute(like_sql, tuple(like_params)).fetchall()
         total = int((count_row["c"] if count_row else 0) or 0)

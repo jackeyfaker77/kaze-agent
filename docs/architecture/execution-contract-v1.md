@@ -1,5 +1,10 @@
 # Execution contract v1 (local runtime foundation)
 
+Later increment: [rebuildable conversation projection](conversation-projection-v1.md)
+now writes versioned conversation facts into the same event table. Session rows are
+rebuildable from those facts plus an explicitly imported legacy baseline. The
+execution and model-context boundaries described below remain unless amended there.
+
 This increment adds durable execution facts to the existing local runtime. It does
 not introduce a network listener, server deployment, Peer Mesh, automatic task
 continuation, or a new canonical conversation database. Existing configuration,
