@@ -4,7 +4,7 @@
 
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Any
 from bus.chat_lane import ChatLane
 
@@ -101,9 +101,13 @@ class MessagePushTool(Tool):
     def __init__(self, event_bus: EventBus | None = None, *, chat_lane: ChatLane | None = None) -> None:
         from core.execution.journal import ExecutionJournal
         self.execution_journal: ExecutionJournal | None = None
+        from bus.durable import Outbox
+        self.outbox: Outbox | None = None
+        self.commit_delivery: Callable[[dict, DeliveryReceipt], Awaitable[None]] | None = None
         # channel -> {type: sender_fn}
         self._senders: dict[str, dict[str, Callable[..., Awaitable[Any]]]] = {}
         self._target_resolvers: dict[str, Callable[[str], str]] = {}
+        self._durable_channels: set[str] = set()
         self._event_bus = event_bus
         self.chat_lane = chat_lane
 
@@ -117,6 +121,7 @@ class MessagePushTool(Tool):
         target_resolver: Callable[[str], str] | None = None,
         committed_text: Callable[[str, str], Awaitable[Any]] | None = None,
         pending_text: Callable[[str, str], Awaitable[Any]] | None = None,
+        durable_parts: bool = False,
     ) -> None:
         """注册渠道的各类 sender。
         - text(chat_id, message)
@@ -129,6 +134,9 @@ class MessagePushTool(Tool):
         或任何带 `message_id` 属性的对象 —— 后者会变成回执里的平台消息号。
         """
         self._senders[channel] = {}
+        self._durable_channels.discard(channel)
+        if durable_parts:
+            self._durable_channels.add(channel)
         if committed_text:
             self._senders[channel]["committed_text"] = committed_text
         if pending_text:
@@ -148,6 +156,16 @@ class MessagePushTool(Tool):
         logger.debug(
             f"message_push: 注册渠道 {channel!r}  支持: {list(self._senders[channel])}"
         )
+        if self.outbox is not None and channel != 'desktop':
+            async def deliver(payload):
+                receipt = await self._send_now(**payload)
+                if not receipt.ok:
+                    from bus.durable import PermanentDelivery
+                    raise PermanentDelivery()
+                if receipt.ok and self.commit_delivery is not None:
+                    await self.commit_delivery(payload, receipt)
+                return asdict(receipt)
+            self.outbox.handlers['push:'+channel] = deliver
 
     async def send(self, **kwargs: Any) -> DeliveryReceipt:
         """在目标发送窗口内执行整条消息，包括全部附件。"""
@@ -157,6 +175,26 @@ class MessagePushTool(Tool):
             chat_id = self.resolve_target(channel, requested)
         except Exception as exc:
             return DeliveryReceipt(False, channel, requested, f"发送失败：{exc}", error=str(exc))
+        if self.outbox is not None and channel != 'desktop':
+            payload = {**kwargs, 'channel': channel, 'chat_id': chat_id}
+            if payload.get('file'):
+                from pathlib import Path
+                payload['_file_name'] = Path(payload['file']).name
+            for name in ('file', 'image'):
+                value = payload.get(name)
+                if value and not str(value).startswith(('http://', 'https://')):
+                    payload[name] = self.outbox.store.snapshot_file(str(value))
+            identity = payload.pop('delivery_id', None)
+            payload['images'] = [self.outbox.store.snapshot_file(p) if not p.startswith(('http://', 'https://')) else p for p in payload.get('images', [])]
+            key = self.outbox.enqueue('push:'+channel, payload, identity)
+            async def deliver():
+                try:
+                    return DeliveryReceipt(**await self.outbox.deliver(key))
+                except Exception as exc:
+                    return DeliveryReceipt(False, channel, chat_id, str(exc), error=str(exc))
+            if self.chat_lane is None:
+                return await deliver()
+            return await self.chat_lane.run_send(channel, chat_id, deliver)
         if self.chat_lane is None:
             return await self._send_now(**{**kwargs, "chat_id": chat_id})
         return await self.chat_lane.run_send(
@@ -181,7 +219,7 @@ class MessagePushTool(Tool):
         image: str | None = kwargs.get("image")
         session_key = str(kwargs.get("session_key") or "").strip()
 
-        if not message and not file and not image:
+        if not message and not file and not image and not kwargs.get('images'):
             return DeliveryReceipt(
                 ok=False,
                 channel=channel,
@@ -207,11 +245,24 @@ class MessagePushTool(Tool):
         errors: list[str] = []
         message_id: str | None = None
         image_sent = False
+        part_index = 0
 
         async def send_part(sender_name: str, args: tuple[Any, ...], kind: str, success_text: str) -> bool:
-            nonlocal message_id
+            nonlocal message_id, part_index
+            part_key = f'{part_index}:{sender_name}'
+            part_index += 1
             from core.execution.delivery import record_delivery
             async def deliver():
+                from bus.durable import delivery_scope
+                if self.outbox is not None and delivery_scope.get() is not None:
+                    async def physical():
+                        raw = await senders[sender_name](*args)
+                        _, error = _extract_receipt(raw)
+                        if error:
+                            raise RuntimeError('Channel returned an unsuccessful receipt')
+                        return raw
+                    raw = await physical() if channel in self._durable_channels else await self.outbox.part(part_key, {'args': list(args)}, physical)
+                    return _extract_receipt(raw)
                 try:
                     raw = await senders[sender_name](*args)
                     return _extract_receipt(raw)
@@ -247,15 +298,18 @@ class MessagePushTool(Tool):
             else:
                 import os
 
-                name = os.path.basename(file)
+                name = kwargs.get('_file_name') or os.path.basename(file)
                 await send_part("file", (chat_id, file, name), "文件", f"文件 {name!r} 已发送")
 
-        if image:
+        images = ([image] if image else []) + list(kwargs.get('images') or [])
+        for image in images:
             if "image" not in senders:
                 results.append(f"渠道 {channel!r} 不支持发送图片")
                 errors.append("渠道不支持发送图片")
             else:
                 image_sent = await send_part("image", (chat_id, image), "图片", "图片已发送")
+                if not image_sent:
+                    break
 
         if (
             image_sent

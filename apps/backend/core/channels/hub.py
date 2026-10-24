@@ -31,5 +31,9 @@ class ChannelHub:
 
     def mark_delivery(self, message: OutboundMessage, *, default_channel, delivery_status, external_message_id=''):
         key = str(message.metadata.get('session_key_override') or f'{default_channel}:{message.chat_id}')
+        if '_delivery_message_id' in message.metadata:
+            return self.sessions.mark_latest_assistant_delivery(
+                key, message_id=message.metadata['_delivery_message_id'],
+                delivery_status=delivery_status, external_message_id=external_message_id)
         return self.sessions.mark_latest_assistant_delivery(
             key, delivery_status=delivery_status, external_message_id=external_message_id)

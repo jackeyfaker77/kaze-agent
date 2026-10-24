@@ -25,7 +25,13 @@ async def record_delivery(journal: ExecutionJournal | None, session_key: str, pa
         if owned:
             scope.journal.finish(scope.turn_id, "failed" if error else "completed")
         return message_id, error
-    except BaseException:
+    except BaseException as exc:
+        from bus.durable import RetryDelivery, PermanentDelivery
+        if isinstance(exc, (RetryDelivery, PermanentDelivery)) and not scope.broken:
+            # The adapter confirmed rejection before acceptance. Close this attempt's
+            # effect so a later successful retry doesn't falsely need manual review.
+            scope.record('delivery.returned', {'effect_id': effect_id,
+                'certainty': 'confirmed', 'ok': False, 'message_id': None})
         if owned and not scope.broken:
             scope.journal.finish(scope.turn_id, "failed")
         raise

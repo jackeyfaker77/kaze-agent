@@ -29,6 +29,51 @@ from desktop_bridge.session_service import DesktopBridgeService
 KEY = "desktop:target"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('after_commit', [False, True])
+async def test_outbox_recovers_proactive_history_with_evidence_once(desktop, monkeypatch, after_commit):
+    from agent.turns.result import TurnTrace
+    runtime, _ = desktop
+    calls = []
+    async def sender(chat, text):
+        calls.append(text)
+        return SimpleNamespace(message_id=77)
+    runtime.push_tool.register_channel('fake', text=sender)
+    loop = SimpleNamespace(can_send=lambda: True, _target_session_key=lambda: KEY, delivered=False)
+    orchestrator = TurnOrchestrator(TurnOrchestratorDeps(
+        session=SessionServices(session_manager=runtime.session_manager, presence=None),
+        outbound=_PushPort(runtime, loop),
+    ))
+    result = TurnResult('reply', TurnOutbound(KEY, 'durable reminder'), evidence=['todo:1'],
+        trace=TurnTrace('proactive', extra={'source_refs':[{'id':'todo:1'}], 'state_summary_tag':'reminder'}))
+    insert = runtime.session_manager._store.insert_message
+    def fail_insert(*args, **kwargs):
+        if after_commit:
+            insert(*args, **kwargs)
+        raise OSError('database acknowledgement unavailable')
+    monkeypatch.setattr(runtime.session_manager._store, 'insert_message', fail_insert)
+    assert not await orchestrator.handle_proactive_turn(result=result, session_key=KEY, channel='fake', chat_id='1')
+    monkeypatch.setattr(runtime.session_manager._store, 'insert_message', insert)
+    queued = runtime.bus.transport.db.execute("SELECT id FROM jobs WHERE kind='push:fake'").fetchone()[0]
+    await runtime.bus.outbox.deliver(queued)
+    await runtime.bus.outbox.deliver(queued)
+    # Recovery can complete before the producer acknowledges its evidence. A later
+    # tick must reuse that intent even if the model chooses different wording.
+    result.outbound.content = 'different wording for the same reminder'
+    acknowledged = AsyncMock()
+    result.success_side_effects = [SimpleNamespace(run=acknowledged)]
+    assert await orchestrator.handle_proactive_turn(result=result, session_key=KEY, channel='fake', chat_id='1')
+    acknowledged.assert_awaited_once()
+    rows = runtime.session_manager._store.fetch_session_messages(KEY)
+    assert len(rows) == 1 and calls == ['durable reminder']
+    assert rows[0]['content'] == 'durable reminder'
+    assert rows[0]['evidence_item_ids'] == ['todo:1']
+    assert rows[0]['source_refs'] == [{'id':'todo:1'}]
+    assert rows[0]['state_summary_tag'] == 'reminder'
+    assert rows[0]['metadata']['transport_chat_id'] == '1'
+    assert '_delivery_projection' not in rows[0]['metadata']
+
+
 @pytest_asyncio.fixture
 async def desktop(tmp_path):
     http = SharedHttpResources()

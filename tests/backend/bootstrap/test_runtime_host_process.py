@@ -78,7 +78,7 @@ def test_real_cli_survives_closed_stdin_and_stops_without_desktop(tmp_path):
         wait_for(lambda: host_status(tmp_path).get("state") == "running", process, log)
         status = host_status(tmp_path)
         assert status["healthy"] and status["mode"] == "host"
-        assert status["workers"] == {"agent_loop": True, "bus_dispatch_outbound": True, "scheduler": True}
+        assert status["workers"] == {"agent_loop": True, "bus_dispatch_outbound": True, "scheduler": True, "transport_outbox": True}
         assert process.poll() is None
         stop(process, tmp_path)
         assert process.returncode == 0 and not host_status(tmp_path)["running"]
@@ -162,6 +162,43 @@ def test_production_desktop_bridge_still_answers_health_and_exits_on_eof(tmp_pat
     health = next(frame for frame in frames if frame.get("id") == "probe")
     assert health["payload"]["ok"] and health["payload"]["execution_contract_version"] == 1
     assert not host_status(tmp_path)["running"]
+
+
+@pytest.mark.parametrize('scenario,expected_state', [
+    ('queue-inbox','done'), ('queue-unknown','needs_review'), ('queue-receipt','done'), ('queue-retry','done'),
+])
+def test_durable_telegram_sdk_and_host_recovery(tmp_path, scenario, expected_state):
+    def reply_state():
+        path = tmp_path/'private_runtime/transport/queue.sqlite3'
+        if not path.exists():
+            return None
+        with sqlite3.connect(path) as db:
+            row = db.execute("SELECT state FROM jobs WHERE kind='bus:telegram'").fetchone()
+            return row[0] if row else None
+    process, log = launch(tmp_path, scenario)
+    try:
+        wait_for(lambda: host_status(tmp_path).get('state') == 'running', process, log)
+        (tmp_path/'inbound.json').write_text('{}')
+        if scenario == 'queue-retry':
+            wait_for(lambda: reply_state() == 'done', process, log)
+            assert sum(r['kind']=='rejected' for r in wire(tmp_path)) == 1
+            stop(process, tmp_path)
+        else:
+            assert process.wait(timeout=30) == 73, log.read_text(encoding='utf-8')[-4000:]
+        process, log = launch(tmp_path)
+        wait_for(lambda: host_status(tmp_path).get('state') == 'running', process, log)
+        wait_for(lambda: reply_state() == expected_state, process, log)
+        time.sleep(.5)
+        rows = wire(tmp_path)
+        assert sum(r['kind']=='model' and r['passive'] for r in rows) == 1
+        assert sum(r['kind']=='outbound' and r['text']=='host reply' for r in rows) == 1
+        with sqlite3.connect(tmp_path/'sessions.db') as db:
+            assert db.execute("SELECT count(*) FROM messages WHERE session_key='telegram:43'").fetchone()[0] == 2
+        with sqlite3.connect(tmp_path/'private_runtime/transport/queue.sqlite3') as db:
+            assert db.execute("SELECT count(*) FROM jobs WHERE kind='inbound'").fetchone()[0] == 1
+            assert db.execute('PRAGMA quick_check').fetchone()[0] == 'ok'
+    finally:
+        stop(process, tmp_path)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows terminate is a hard exit, not POSIX SIGTERM")

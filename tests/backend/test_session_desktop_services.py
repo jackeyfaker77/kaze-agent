@@ -945,6 +945,8 @@ async def test_cancel_journal_recovers_in_fresh_runtime_without_replaying_model(
     monkeypatch.setattr(manager, 'append_messages', append)
     monkeypatch.setattr(manager._store, 'insert_message', insert)
 
+    # A real restart relinquishes the transport owner's lease before its successor starts.
+    runtime.bus.transport.close()
     http = SharedHttpResources()
     restarted = build_core_runtime(Config(provider='openai', model='fake', api_key='fake'), manager.workspace, http)
     recovered = DesktopBridgeService(restarted)

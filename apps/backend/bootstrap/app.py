@@ -152,6 +152,8 @@ class AppRuntime:
                 ),
                 asyncio.create_task(self.scheduler.run(), name="scheduler"),
             ]
+            if getattr(self.bus, 'outbox', None) is not None:
+                self._background_tasks.append(asyncio.create_task(self.bus.outbox.run(), name='transport_outbox'))
             if self.features.enable_proactive and self.config.proactive.enabled:
                 from bootstrap.proactive import prepare_proactive_loop, run_proactive
 
@@ -191,6 +193,7 @@ class AppRuntime:
             "root_id": journal.root_id if journal else None,
             "epoch": journal.epoch if journal else None,
             "execution_contract_version": 1,
+            "transport_queues": self.bus.transport.counts() if self.bus and self.bus.transport else {},
         }
 
     async def run(self) -> None:

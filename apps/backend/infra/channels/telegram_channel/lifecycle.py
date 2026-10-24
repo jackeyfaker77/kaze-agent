@@ -35,11 +35,13 @@ from .inbound import _InboundMixin
 from .media import _MediaMixin
 from .outbound import _OutboundMixin
 from .streaming import _StreamingMixin
+from .durable import _DurableMixin, PersistentUpdateQueue
 
 logger = logging.getLogger("infra.channels.telegram_channel")
 
 
 class TelegramChannel(
+    _DurableMixin,
     _InboundMixin,
     _CommandMixin,
     _MediaMixin,
@@ -81,7 +83,14 @@ class TelegramChannel(
             metadata_key="username",
             normalizer=lambda value: value.lower(),
         )
-        self._app = Application.builder().token(token).build()
+        builder = Application.builder().token(token)
+        self._durable_updates = None
+        self._durable_task = None
+        if getattr(bus, 'transport', None) is not None:
+            self._durable_updates = PersistentUpdateQueue(bus.transport, channel_name+':'+token.split(':', 1)[0])
+            bus.outbox.accounts[channel_name] = token.split(':', 1)[0]
+            builder = builder.update_queue(self._durable_updates)
+        self._app = builder.build()
         self._bot_commands = bot_commands or []
         self._app.add_handler(CommandHandler("stop", self._on_stop_command))
         self._app.add_handler(
@@ -96,6 +105,10 @@ class TelegramChannel(
         self._app.add_handler(
             MessageHandler(filters.Document.ALL & ~filters.COMMAND, self._on_document)
         )
+        if self._durable_updates is not None:
+            from telegram.ext import TypeHandler
+            self._app.handlers.clear()
+            self._app.add_handler(TypeHandler(Update, self._on_durable_update))
         self._event_bus = event_bus
         self._outbound_bound = False
         self._events_bound = False
@@ -119,7 +132,8 @@ class TelegramChannel(
 
     @property
     def is_running(self) -> bool:
-        return bool(self._app.running and self._app.updater and self._app.updater.running)
+        return bool(self._app.running and self._app.updater and self._app.updater.running
+                    and (self._durable_updates is None or (not self._durable_updates.failed and self._durable_task and not self._durable_task.done())))
 
     async def start(self, ctx: ChannelContext | None = None) -> None:
         if ctx is not None:
@@ -133,11 +147,15 @@ class TelegramChannel(
                 file=self.send_file,
                 image=self.send_image,
                 target_resolver=self._resolve_chat_id,
+                durable_parts=self._durable_updates is not None,
             )
         self._bind_runtime()
         self._rebuild_user_map()
         await self._app.initialize()
         await self._app.start()
+        if self._durable_updates is not None:
+            self._bus.outbox.handlers['telegram:'+self._channel] = self._deliver_command
+            self._durable_task = asyncio.create_task(self._durable_updates.recover(self._app.bot), name='telegram_inbox')
         await self._register_bot_commands()
         updater = self._app.updater
         if updater is None:
@@ -150,9 +168,12 @@ class TelegramChannel(
 
     def _bind_runtime(self) -> None:
         if not self._outbound_bound:
-            self._bus.subscribe_outbound(self._channel, self._on_response)
+            if self._durable_updates is not None:
+                self._bus.subscribe_outbound(self._channel, self._on_response, durable_parts=True)
+            else:
+                self._bus.subscribe_outbound(self._channel, self._on_response)
             self._outbound_bound = True
-        if self._event_bus is not None and not self._events_bound:
+        if self._event_bus is not None and not self._events_bound and self._durable_updates is None:
             self._event_bus.on(TurnStarted, self._on_turn_started)
             self._event_bus.on(StreamDeltaReady, self._on_stream_delta)
             self._event_bus.on(ToolCallStarted, self._on_tool_call_started)
@@ -160,6 +181,9 @@ class TelegramChannel(
             self._events_bound = True
 
     async def stop(self) -> None:
+        if self._durable_task is not None:
+            self._durable_task.cancel()
+            await asyncio.gather(self._durable_task, return_exceptions=True)
         if self._polling_conflict_task and not self._polling_conflict_task.done():
             await self._polling_conflict_task
         if self._live_tasks:

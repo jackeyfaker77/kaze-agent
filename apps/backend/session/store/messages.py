@@ -484,6 +484,7 @@ class _MessageMixin:
         session_key: str,
         *,
         thread_id: str = "",
+        message_id: str | None = None,
         delivery_status: str,
         external_message_id: str = "",
     ) -> dict[str, Any] | None:
@@ -494,7 +495,12 @@ class _MessageMixin:
         if not clean_session_key or not clean_status:
             return None
         with self._lock:
-            if clean_thread_id:
+            if message_id is not None:
+                row = self._conn.execute(
+                    "SELECT id FROM messages WHERE id=? AND session_key=? AND role='assistant'",
+                    (message_id, clean_session_key),
+                ).fetchone()
+            elif clean_thread_id:
                 row = self._conn.execute(
                     """
                     SELECT id

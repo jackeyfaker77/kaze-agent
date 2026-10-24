@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import os
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -33,7 +34,16 @@ def _write(path: Path, data: dict) -> None:
             json.dump(data, stream, ensure_ascii=False)
             stream.flush()
             os.fsync(stream.fileno())
-        temporary.replace(path)
+        for attempt in range(5):
+            try:
+                temporary.replace(path)
+                break
+            except PermissionError as exc:
+                # Windows readers can briefly deny delete-sharing during an atomic
+                # replacement. Retain the previous complete status and retry briefly.
+                if getattr(exc, 'winerror', None) not in {5, 32, 33} or attempt == 4:
+                    raise
+                time.sleep(0.025 * (attempt + 1))
     finally:
         temporary.unlink(missing_ok=True)
 

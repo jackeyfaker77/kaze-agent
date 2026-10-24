@@ -67,7 +67,8 @@ SIGINT 和 SIGTERM，清理完成后返回 0。
 [远程桌面连接](remote-desktop-v1.md)，复用 Host 会话与 Calendar 待办，并提供认证、
 在线事件和重连快照。离线写入、Peer Mesh 和服务器部署仍需后续实施。
 
-执行日志不等于 Telegram 持久入站队列或 exactly-once 投递。崩溃后已接受的输入
+后续已加入[持久收发队列](durable-transport-v1.md)，覆盖 Telegram SDK 接收确认与统一发件。
+执行日志及收发队列仍不等于 exactly-once 投递。崩溃后已接受的输入
 和部分回复可查询，未确认副作用需核对，不自动重跑。桌面取消补存仍由原桌面桥
 恢复；无桌面 Host 不会假装恢复出未记录的回执。
 

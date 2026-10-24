@@ -20,6 +20,8 @@ from bus.events import (
     OutboundMessage,
 )
 from bus.processing import ProcessingState
+from bus.queue import inbound_job
+from core.execution.contracts import ExecutionUnavailable
 
 from typing import TYPE_CHECKING
 
@@ -42,16 +44,27 @@ class _ProcessingMixin:
                 continue
 
             key = item.session_key
+            transport_key = item.metadata.get('_transport_id')
+            token = inbound_job.set(transport_key)
             task = asyncio.create_task(self._process_session_scoped(item, key))
             try:
-                await task
+                result = await task
+                if transport_key and self.bus.transport.db.execute('SELECT 1 FROM jobs WHERE id=?', ('reply:'+transport_key,)).fetchone() is None:
+                    # Also closes the completed-execution -> enqueue crash gap on recovery.
+                    await self.bus.publish_outbound(result)
             except asyncio.CancelledError:
                 current = asyncio.current_task()
                 if current is not None and current.cancelling():
                     raise
                 logger.info(f"Turn cancelled for {key}")
+            except ExecutionUnavailable:
+                if not transport_key:
+                    raise
+                logger.warning('Durable input requires execution review: %s', transport_key)
             except Exception as e:
                 logger.error(f"处理消息出错: {e}", exc_info=True)
+                if transport_key:
+                    continue
                 error_metadata = dict(getattr(item, "metadata", {}) or {})
                 await self.bus.publish_outbound(
                     OutboundMessage(
@@ -66,6 +79,7 @@ class _ProcessingMixin:
                     self._active_tasks.pop(key, None)
                     self._active_turn_states.pop(key, None)
                 await self.bus.complete_inbound(item)
+                inbound_job.reset(token)
 
     @property
     def processing_state(self) -> ProcessingState | None:

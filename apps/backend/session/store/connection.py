@@ -145,6 +145,9 @@ class _SessionConnection:
             self._has_fts = False
 
     def close(self) -> None:
+        transport = getattr(self, 'transport_store', None)
+        if transport is not None:
+            transport.close()
         journal = getattr(self, "execution_journal", None)
         if journal is not None:
             journal.close()

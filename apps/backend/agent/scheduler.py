@@ -724,6 +724,10 @@ class SchedulerService:
             "session_key_override": job.session_key,
             "source": "scheduler",
             "request_id": job.id,
+            'delivery_id': f'schedule:{job.id}:{job.fire_at.isoformat()}',
+            'thread_id': job.thread_id,
+            'session_config_version': job.session_config_version,
+            'delivery_key': job.delivery_key,
         }
 
     async def _deliver(self, job: ScheduledJob, content: str) -> DeliveryReceipt:
@@ -738,6 +742,7 @@ class SchedulerService:
                 session_key=job.session_key,
                 commit_after_delivery=self._commit_delivery is not None,
                 _outbound_metadata=self._job_metadata(job),
+                delivery_id=f'schedule:{job.id}:{job.fire_at.isoformat()}',
             )
             if receipt.ok and self._commit_delivery is not None:
                 commit = asyncio.ensure_future(

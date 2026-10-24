@@ -47,6 +47,8 @@ class _OutboundMixin:
 
         返回 Telegram Message（带真实 message_id）或 None，供投递回执使用。
         """
+        if getattr(self._bus, 'outbox', None) is not None:
+            return await self._durable_send('text', chat_id, text=message)
         return await _call_send_markdown(
             self._app.bot,
             self._resolve_chat_id(chat_id),
@@ -59,6 +61,8 @@ class _OutboundMixin:
 
         返回带 message_id 的对象或 None，供投递回执使用。
         """
+        if getattr(self._bus, 'outbox', None) is not None:
+            return await self.send(chat_id, message)
         return await _call_send_stream_markdown(
             self._app.bot,
             self._resolve_chat_id(chat_id),
@@ -67,6 +71,8 @@ class _OutboundMixin:
         )
 
     def create_stream_sender(self, chat_id: str):
+        if getattr(self._bus, 'outbox', None) is not None:
+            return None
         cid = int(self._resolve_chat_id(chat_id))
         if cid <= 0:
             return None
@@ -87,6 +93,8 @@ class _OutboundMixin:
         caption: str | None = None,
     ) -> object | None:
         """发送文件，可附带说明文字；返回 Telegram Message 或 None。"""
+        if getattr(self._bus, 'outbox', None) is not None:
+            return await self._durable_send('file', chat_id, path=file_path, name=name, caption=caption)
         cid = int(self._resolve_chat_id(chat_id))
         return await self._telegram_outbound_limiter.run(
             cid,
@@ -97,6 +105,8 @@ class _OutboundMixin:
 
     async def send_image(self, chat_id: str, image: str) -> object | None:
         """发送图片（本地路径或 URL）；返回 Telegram Message 或 None。"""
+        if getattr(self._bus, 'outbox', None) is not None:
+            return await self._durable_send('image', chat_id, image=image)
         cid = int(self._resolve_chat_id(chat_id))
         if image.startswith(("http://", "https://")):
             return await self._telegram_outbound_limiter.run(
@@ -145,6 +155,12 @@ class _OutboundMixin:
         )
 
     async def _on_response(self, msg: OutboundMessage) -> None:
+        if getattr(self._bus, 'outbox', None) is not None:
+            sent = await self.send(msg.chat_id, msg.content) if msg.content.strip() else None
+            for image in msg.media:
+                await self.send_image(msg.chat_id, image)
+            self._record_delivery_status(msg, delivery_status='sent', external_message_id=str(getattr(sent, 'message_id', '') or ''))
+            return
         preview = msg.content[:60] + "..." if len(msg.content) > 60 else msg.content
         logger.info(f"[telegram] 发送回复  chat_id={msg.chat_id}  内容: {preview!r}")
         cid = int(self._resolve_chat_id(msg.chat_id))

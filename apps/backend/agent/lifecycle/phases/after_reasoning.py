@@ -297,6 +297,11 @@ class _BuildOutboundMessageModule:
         ctx = cast(AfterReasoningCtx, frame.slots[_CTX_SLOT])
         metadata = dict(ctx.outbound_metadata)
         metadata.update(collect_prefixed_slots(frame.slots, _OUTBOUND_METADATA_PREFIX))
+        state = frame.input.state
+        if state.msg.metadata.get('_transport_id') and state.session and not state.msg.metadata.get('skip_session_history'):
+            messages = state.session.messages
+            if messages and messages[-1].get('role') == 'assistant':
+                metadata['_delivery_message_id'] = str(messages[-1].get('id') or '')
         media = list(ctx.media)
         _append_media(media, collect_prefixed_slots(frame.slots, _OUTBOUND_MEDIA_PREFIX))
         frame.slots[_OUTBOUND_SLOT] = OutboundMessage(
