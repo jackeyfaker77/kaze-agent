@@ -8,6 +8,7 @@
 - [总体架构](knowledge/architecture/overview.md)：装配、执行入口、状态归属和运行协调
 - [项目知识库](knowledge/index.md)：能力地图、模块职责、执行流程和修改影响
 - [运行协调](runtime-coordination.md)：会话锁、忙状态、ChatLane 与发送后历史提交
+- [可重建会话投影](architecture/conversation-projection-v1.md)：Runtime Event Log、旧历史基线、幂等重放与崩溃恢复
 - [主动推送指南](_handbook/proactive-guide.md)：Default / Wake、源配置、规则和投递
 - [Feed 内容源](integrations/feed.md)：订阅采集、正文缓存、版本确认和投递协调
 - [Windows 设备上下文](integrations/device.md)：锁屏、空闲、前台应用、电源状态与有效期

@@ -15,7 +15,7 @@ class _PresenceMixin:
         last_proactive_at: str | None = None,
     ) -> None:
         now = datetime.now().astimezone().isoformat()
-        with self._lock:
+        with self._access():
             self._conn.execute(
                 """
                 INSERT INTO sessions (
@@ -35,10 +35,10 @@ class _PresenceMixin:
                 """,
                 (key, now, now, last_user_at, last_proactive_at),
             )
-            self._conn.commit()
+            self._commit_projection()
 
     def get_presence(self, key: str) -> dict[str, str | None] | None:
-        with self._lock:
+        with self._access():
             row = self._conn.execute(
                 """
                 SELECT last_user_at, last_proactive_at
@@ -55,7 +55,7 @@ class _PresenceMixin:
         }
 
     def list_presence(self) -> dict[str, dict[str, str | None]]:
-        with self._lock:
+        with self._access():
             rows = self._conn.execute("""
                 SELECT key, last_user_at, last_proactive_at
                 FROM sessions
@@ -70,7 +70,7 @@ class _PresenceMixin:
         }
 
     def most_recent_user_at(self) -> str | None:
-        with self._lock:
+        with self._access():
             row = self._conn.execute("""
                 SELECT MAX(last_user_at) AS last_user_at
                 FROM sessions
@@ -82,7 +82,7 @@ class _PresenceMixin:
 
     def get_channel_metadata(self, channel: str) -> list[dict[str, Any]]:
         like_key = f"{channel}:%"
-        with self._lock:
+        with self._access():
             rows = self._conn.execute(
                 "SELECT key, metadata FROM sessions WHERE key LIKE ?", (like_key,)
             ).fetchall()

@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-25",
+  "base_commit": "3e02a96c5a21a0d694420493e646be32a2e391b8",
+  "maka_reference_commit": "59f61cf7de665837630518aa204732107dcc2349",
+  "scope": "Versioned conversation facts in the shared Runtime Event Log; rebuildable session projection and explicit legacy baseline",
+  "validation": {
+    "backend_full_suite": {
+      "passed": 1974,
+      "skipped": 1,
+      "exit_code": 0,
+      "skip_reason": "POSIX SIGTERM unavailable on Windows",
+      "log": ".tmp/conversation-projection-full-final.log",
+      "note": "Collected before the final structured-content retry parameter was added; that final persistence adjustment was covered by the final affected suite and type checks"
+    },
+    "final_projection_suite": {
+      "passed": 20,
+      "command": ".venv/Scripts/python.exe -m pytest -q tests/backend/session/test_conversation_projection.py -o cache_dir=.tmp/conversation-pytest-cache-targeted"
+    },
+    "projection_cli_and_desktop_services": {
+      "passed": 84,
+      "log": ".tmp/conversation-projection-final-focused.log"
+    },
+    "hard_exit_boundaries": [
+      "Legacy baseline committed before projection application",
+      "Conversation fact committed before view commit",
+      "View and cursor staged before their atomic commit",
+      "View committed before process exit"
+    ],
+    "crash_method": "Real child process os._exit(73), followed by repeated opens and rebuilds",
+    "real_history_read_only_copy": {
+      "sessions": 18,
+      "messages": 235,
+      "legacy_migration_exact": true,
+      "three_rebuilds_exact": true,
+      "deleted_view_database_rebuilt_exactly": true,
+      "duplicate_source_events": false,
+      "log": ".tmp/conversation-real-history-audit.json"
+    },
+    "local_desktop_bridge": {
+      "passed": true,
+      "cases": ["queued cancellation", "partial input/reply persistence and retry", "restart SQLite reload"],
+      "log": ".tmp/conversation-projection-local.log"
+    },
+    "remote_runtime_host": {
+      "passed": true,
+      "cases": ["two clients", "accepted turn survives disconnect", "Host restart", "shared real Calendar MCP todo"],
+      "log": ".tmp/conversation-projection-remote.log"
+    },
+    "static_checks": {
+      "production_pyright": "0 errors, 0 warnings",
+      "test_pyright": "0 errors, 0 warnings",
+      "git_diff_check": "passed"
+    }
+  },
+  "configuration": {
+    "changed": false,
+    "files_checked": ["config.toml", "channels.json", "mcp_servers.json", "proactive_sources.json"],
+    "production_restart": false
+  },
+  "boundaries": [
+    "Existing configuration and production workspace were not migrated or restarted; real history was copied with SQLite backup into an isolated workspace",
+    "Local and remote probes use isolated real backend processes and deterministic model fixtures; no live Telegram messages sent in this phase",
+    "Rebuild performs no model, tool or delivery effects",
+    "Model-context projection, automatic continuation and recovery management UI remain out of scope",
+    "Uncommitted streaming fragments remain represented by the existing execution journal; this increment does not invent completed chat replies"
+  ]
+}

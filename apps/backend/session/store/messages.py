@@ -9,8 +9,16 @@ from typing import Any
 from .common import _MESSAGE_SELECT_COLUMNS
 
 class _MessageMixin:
+    def find_message_write(self, session_key: str, write_id: str) -> dict[str, Any] | None:
+        with self._access():
+            row = self._conn.execute(
+                'SELECT ' + _MESSAGE_SELECT_COLUMNS + " FROM messages WHERE session_key=? AND json_extract(extra, '$.session_write_id')=?",
+                (session_key, write_id),
+            ).fetchone()
+        return self._row_to_message(row) if row is not None else None
+
     def count_messages(self, session_key: str) -> int:
-        with self._lock:
+        with self._access():
             row = self._conn.execute(
                 "SELECT COUNT(1) AS c FROM messages WHERE session_key = ?",
                 (session_key,),
@@ -18,7 +26,7 @@ class _MessageMixin:
         return int((row["c"] if row else 0) or 0)
 
     def next_seq(self, session_key: str) -> int:
-        with self._lock:
+        with self._access():
             meta = self._conn.execute(
                 "SELECT next_seq FROM sessions WHERE key = ?",
                 (session_key,),
@@ -58,7 +66,7 @@ class _MessageMixin:
         media_payload = (
             json.dumps(list(media), ensure_ascii=False) if media else None
         )
-        with self._lock:
+        with self._access():
             self._conn.execute(
                 """
                 INSERT INTO messages (
@@ -91,7 +99,7 @@ class _MessageMixin:
                 """,
                 (int(seq) + 1, int(seq) + 1, session_key),
             )
-            self._conn.commit()
+            self._commit_projection()
         row = {
             "id": message_id,
             "session_key": session_key,
@@ -126,8 +134,7 @@ class _MessageMixin:
         next_seq: int,
     ) -> None:
         """Atomically replace one session's persisted message snapshot."""
-        with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+        with self._access():
             try:
                 self._conn.execute(
                     "DELETE FROM messages WHERE session_key = ?",
@@ -183,13 +190,13 @@ class _MessageMixin:
                         session_key,
                     ),
                 )
-                self._conn.commit()
+                self._commit_projection()
             except Exception:
                 self._conn.rollback()
                 raise
 
     def fetch_session_messages(self, session_key: str) -> list[dict[str, Any]]:
-        with self._lock:
+        with self._access():
             rows = self._conn.execute(
                 """
                 SELECT """ + _MESSAGE_SELECT_COLUMNS + """
@@ -216,7 +223,7 @@ class _MessageMixin:
         if clean_before is not None:
             where += " AND seq < ?"
             params.append(clean_before)
-        with self._lock:
+        with self._access():
             rows = self._conn.execute(
                 f"""
                 SELECT {_MESSAGE_SELECT_COLUMNS}
@@ -266,7 +273,7 @@ class _MessageMixin:
 
     def fetch_image_history(self, session_key: str) -> list[dict[str, Any]]:
         """Returns the lightweight media projection for every persisted message."""
-        with self._lock:
+        with self._access():
             rows = self._conn.execute(
                 """
                 SELECT id, seq, ts, media
@@ -335,7 +342,7 @@ class _MessageMixin:
             ORDER BY {safe_sort_by} {safe_sort}, seq {safe_sort}, id ASC
             LIMIT ? OFFSET ?
         """
-        with self._lock:
+        with self._access():
             count_row = self._conn.execute(count_sql, tuple(params)).fetchone()
             rows = self._conn.execute(
                 data_sql,
@@ -345,7 +352,7 @@ class _MessageMixin:
         return [self._row_to_message(row) for row in rows], total
 
     def get_message(self, message_id: str) -> dict[str, Any] | None:
-        with self._lock:
+        with self._access():
             row = self._conn.execute(
                 f"""
                 SELECT {_MESSAGE_SELECT_COLUMNS}
@@ -410,7 +417,7 @@ class _MessageMixin:
         if not set_parts:
             return self.get_message(message_id)
 
-        with self._lock:
+        with self._access():
             row = self._conn.execute(
                 "SELECT session_key FROM messages WHERE id = ?",
                 (message_id,),
@@ -427,7 +434,7 @@ class _MessageMixin:
                 "UPDATE sessions SET updated_at = ? WHERE key = ?",
                 (datetime.now().astimezone().isoformat(), session_key),
             )
-            self._conn.commit()
+            self._commit_projection()
         if cur.rowcount <= 0:
             return None
         return self.get_message(message_id)
@@ -443,8 +450,7 @@ class _MessageMixin:
     ) -> dict[str, Any]:
         """Atomically replace one media slot when its authoritative path is unchanged."""
 
-        with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+        with self._access():
             try:
                 row = self._conn.execute(
                     "SELECT session_key, media FROM messages WHERE id = ?",
@@ -470,7 +476,7 @@ class _MessageMixin:
                     "UPDATE sessions SET updated_at = ? WHERE key = ?",
                     (updated_at, session_key),
                 )
-                self._conn.commit()
+                self._commit_projection()
             except Exception:
                 self._conn.rollback()
                 raise
@@ -494,7 +500,7 @@ class _MessageMixin:
         clean_external_id = str(external_message_id or "").strip()
         if not clean_session_key or not clean_status:
             return None
-        with self._lock:
+        with self._access():
             if message_id is not None:
                 row = self._conn.execute(
                     "SELECT id FROM messages WHERE id=? AND session_key=? AND role='assistant'",
@@ -535,7 +541,7 @@ class _MessageMixin:
         )
 
     def delete_message(self, message_id: str) -> bool:
-        with self._lock:
+        with self._access():
             row = self._conn.execute(
                 "SELECT session_key FROM messages WHERE id = ?",
                 (message_id,),
@@ -551,7 +557,7 @@ class _MessageMixin:
                 "UPDATE sessions SET updated_at = ? WHERE key = ?",
                 (datetime.now().astimezone().isoformat(), session_key),
             )
-            self._conn.commit()
+            self._commit_projection()
         return cur.rowcount > 0
 
     def delete_messages_batch(self, ids: list[str]) -> int:
@@ -562,7 +568,7 @@ class _MessageMixin:
             return 0
         placeholders = ",".join("?" for _ in clean_ids)
         now = datetime.now().astimezone().isoformat()
-        with self._lock:
+        with self._access():
             rows = self._conn.execute(
                 f"SELECT DISTINCT session_key FROM messages WHERE id IN ({placeholders})",
                 tuple(clean_ids),
@@ -576,7 +582,7 @@ class _MessageMixin:
                     "UPDATE sessions SET updated_at = ? WHERE key = ?",
                     (now, str(row["session_key"])),
                 )
-            self._conn.commit()
+            self._commit_projection()
         return int(cur.rowcount or 0)
     def delete_session_messages_and_update_cursor(
         self,
@@ -592,8 +598,7 @@ class _MessageMixin:
             return 0
         placeholders = ",".join("?" for _ in clean_ids)
         now = datetime.now().astimezone().isoformat()
-        with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+        with self._access():
             try:
                 seq_rows = self._conn.execute(
                     f"""
@@ -623,7 +628,7 @@ class _MessageMixin:
                     """,
                     (int(last_consolidated), now, next_seq, next_seq, session_key),
                 )
-                self._conn.commit()
+                self._commit_projection()
             except Exception:
                 self._conn.rollback()
                 raise

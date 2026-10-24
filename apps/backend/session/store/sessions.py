@@ -8,7 +8,7 @@ from typing import Any
 
 class _SessionMixin:
     def session_exists(self, key: str) -> bool:
-        with self._lock:
+        with self._access():
             row = self._conn.execute(
                 "SELECT 1 FROM sessions WHERE key = ?", (key,)
             ).fetchone()
@@ -24,7 +24,7 @@ class _SessionMixin:
         metadata: dict[str, Any],
     ) -> None:
         payload = json.dumps(metadata or {}, ensure_ascii=False)
-        with self._lock:
+        with self._access():
             self._conn.execute(
                 """
                 INSERT INTO sessions (key, created_at, updated_at, last_consolidated, metadata)
@@ -36,11 +36,11 @@ class _SessionMixin:
                 """,
                 (key, created_at, updated_at, int(last_consolidated), payload),
             )
-            self._conn.commit()
+            self._commit_projection()
 
     def update_last_consolidated(self, key: str, last_consolidated: int) -> None:
         now = datetime.now().astimezone().isoformat()
-        with self._lock:
+        with self._access():
             self._conn.execute(
                 """
                 UPDATE sessions
@@ -49,10 +49,10 @@ class _SessionMixin:
                 """,
                 (int(last_consolidated), now, key),
             )
-            self._conn.commit()
+            self._commit_projection()
 
     def get_session_meta(self, key: str) -> dict[str, Any] | None:
-        with self._lock:
+        with self._access():
             row = self._conn.execute(
                 "SELECT key, created_at, updated_at, last_consolidated, metadata, last_user_at, last_proactive_at FROM sessions WHERE key = ?",
                 (key,),
@@ -70,7 +70,7 @@ class _SessionMixin:
         }
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        with self._lock:
+        with self._access():
             rows = self._conn.execute("""
                 SELECT key, created_at, updated_at, last_user_at, last_proactive_at
                 FROM sessions
@@ -163,7 +163,7 @@ class _SessionMixin:
             ORDER BY s.{safe_sort_by} {safe_sort_order}, s.key ASC
             LIMIT ? OFFSET ?
         """
-        with self._lock:
+        with self._access():
             count_row = self._conn.execute(count_sql, tuple(params)).fetchone()
             rows = self._conn.execute(
                 data_sql,
@@ -195,7 +195,7 @@ class _SessionMixin:
     ) -> dict[str, Any]:
         now = datetime.now().astimezone().isoformat()
         payload = json.dumps(metadata or {}, ensure_ascii=False)
-        with self._lock:
+        with self._access():
             self._conn.execute(
                 """
                 INSERT INTO sessions (
@@ -219,7 +219,7 @@ class _SessionMixin:
                     last_proactive_at,
                 ),
             )
-            self._conn.commit()
+            self._commit_projection()
         meta = self.get_session_meta(key)
         if meta is None:
             raise ValueError(f"session 创建失败: {key}")
@@ -249,18 +249,18 @@ class _SessionMixin:
             set_parts.append("last_proactive_at = ?")
             params.append(last_proactive_at)
         params.append(key)
-        with self._lock:
+        with self._access():
             cur = self._conn.execute(
                 f"UPDATE sessions SET {', '.join(set_parts)} WHERE key = ?",
                 tuple(params),
             )
-            self._conn.commit()
+            self._commit_projection()
         if cur.rowcount <= 0:
             return None
         return self.get_session_meta(key)
 
     def delete_session(self, key: str, *, cascade: bool = False) -> bool:
-        with self._lock:
+        with self._access():
             if not cascade:
                 row = self._conn.execute(
                     "SELECT COUNT(1) AS c FROM messages WHERE session_key = ?",
@@ -278,7 +278,7 @@ class _SessionMixin:
                 "DELETE FROM sessions WHERE key = ?",
                 (key,),
             )
-            self._conn.commit()
+            self._commit_projection()
         return cur.rowcount > 0
 
     def delete_sessions_batch(self, keys: list[str], *, cascade: bool = False) -> int:
@@ -286,7 +286,7 @@ class _SessionMixin:
         if not clean_keys:
             return 0
         placeholders = ",".join("?" for _ in clean_keys)
-        with self._lock:
+        with self._access():
             if not cascade:
                 row = self._conn.execute(
                     f"""
@@ -310,5 +310,5 @@ class _SessionMixin:
                 f"DELETE FROM sessions WHERE key IN ({placeholders})",
                 tuple(clean_keys),
             )
-            self._conn.commit()
+            self._commit_projection()
         return int(cur.rowcount or 0)

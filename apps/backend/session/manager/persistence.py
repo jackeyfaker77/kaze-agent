@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from .models import Session
 
@@ -211,10 +212,18 @@ class _PersistenceMixin:
         for msg in messages:
             if msg.get("id"):
                 continue
-            ts = str(msg.get("timestamp") or datetime.now().astimezone().isoformat())
             content = msg.get("content", "")
             if not isinstance(content, str):
                 content = json.dumps(content, ensure_ascii=False)
+            write_id = msg.setdefault('session_write_id', uuid4().hex)
+            existing = self._store.find_message_write(session.key, write_id)
+            if existing is not None:
+                if existing['role'] != str(msg.get('role') or 'assistant') or existing['content'] != content:
+                    raise ValueError('消息写入标识已用于不同内容')
+                msg.update(existing)
+                next_seq = max(next_seq, int(existing['seq']) + 1)
+                continue
+            ts = str(msg.get("timestamp") or datetime.now().astimezone().isoformat())
             row = self._store.insert_message(
                 session.key,
                 role=str(msg.get("role") or "assistant"),
@@ -238,6 +247,14 @@ class _PersistenceMixin:
 
     def save(self, session: Session) -> None:
         session.updated_at = datetime.now()
+        # An acceptance may be durable even when applying the view failed.
+        # Reconcile before deciding whether this is a full snapshot replacement.
+        for message in session.messages:
+            if not message.get('id') and message.get('session_write_id'):
+                saved = self._store.find_message_write(session.key, message['session_write_id'])
+                if saved is not None:
+                    message.update({'id': saved['id'], 'seq': saved['seq'],
+                                    'session_key': session.key, 'timestamp': saved['timestamp']})
         self._ensure_session_meta(session)
         if self._requires_full_message_sync(session):
             self._replace_persisted_messages(session)
