@@ -1,4 +1,4 @@
-import type { DesktopBridgeClient } from "../bridge/bridgeClient.js";
+import type { BridgeClient } from "../bridge/bridgeContract.js";
 import type { BridgeEvent } from "../bridge/shared.js";
 
 type SessionObservationBubbleTarget = {
@@ -7,7 +7,7 @@ type SessionObservationBubbleTarget = {
 
 /** Shows ordinary conversation replies on the application pet. */
 export function wireSessionReplyBubbles(
-  bridge: DesktopBridgeClient,
+  bridge: BridgeClient,
   target: SessionObservationBubbleTarget,
 ): void {
   bridge.on("event", (event: BridgeEvent) => {

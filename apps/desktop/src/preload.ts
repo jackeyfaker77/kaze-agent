@@ -65,7 +65,7 @@ const api: DesktopApi = {
     ipcRenderer.send("desktop:renderer-diagnostic", payload);
   },
   bridgeStatus() {
-    return ipcRenderer.invoke("desktop:bridge-status") as Promise<{ running: boolean; lastError: string | null }>;
+    return ipcRenderer.invoke("desktop:bridge-status") as Promise<{ running: boolean; lastError: string | null; mode?: "local" | "remote" }>;
   },
   restartBridge() {
     return ipcRenderer.invoke("desktop:bridge-restart") as Promise<{ ok: boolean; running: boolean; lastError: string | null }>;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { newDraftKey, rpc, type Entry, type Session } from "./api";
+import { BridgeRpcError, newDraftKey, rpc, type Entry, type Session } from "./api";
 import { recoverAttachments, recoverDraft } from "./recoverDraft";
 import { handleCommittedEvent } from "./committedEvent";
 
@@ -10,6 +10,7 @@ export function useConversation() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
   const [error, setError] = useState("");
+  const [mode, setMode] = useState<"local" | "remote" | null>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -28,11 +29,22 @@ export function useConversation() {
   }
   async function selectCurrent() {
     await rpc(saved.current ? "session.get" : "session.draft", { session_key: key.current });
+    if (alive.current) setReady(true);
   }
   useEffect(() => {
     alive.current = true;
-    void (async () => { await rpc("health"); await selectCurrent(); await refresh(); if (alive.current) setReady(true); })().catch(fail);
+    void (async () => { const status = await window.miraDesktop.bridgeStatus(); if (alive.current) setMode(status.mode ?? "local"); await rpc("health"); await selectCurrent(); await refresh(); if (alive.current) setReady(true); })().catch(fail);
+    const resync = async () => {
+      const selectedKey = key.current;
+      await refresh();
+      const result = await rpc<Session>("session.get", { session_key: selectedKey });
+      if (alive.current && key.current === selectedKey) { saved.current = result.messages.length > 0; setSession(saved.current ? result : null); setDelta(""); setTool(""); setReady(true); }
+    };
     const off = window.miraDesktop.onEvent(event => {
+      if (event.method === "bridge.exit") { setReady(false); return; }
+      if (event.method === "bridge.connected" || event.method === "sessions.changed") {
+        void resync().catch(fail); return;
+      }
       if (handleCommittedEvent(event, key.current, () => { void refresh().catch(fail); }, next => {
         if (next) { saved.current = true; setSession(next); }
         setDelta(""); setTool("");
@@ -85,9 +97,12 @@ export function useConversation() {
       await refresh().catch(fail);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
-      setError(`发送失败，输入和附件已恢复。${reason}`);
-      setDraft(current => recoverDraft(current, content));
-      setAttachments(current => recoverAttachments(current, media));
+      const uncertain = e instanceof BridgeRpcError && e.code === "remote_outcome_unknown";
+      setError(uncertain ? reason : `发送失败，输入和附件已恢复。${reason}`);
+      if (!uncertain) {
+        setDraft(current => recoverDraft(current, content));
+        setAttachments(current => recoverAttachments(current, media));
+      }
       try {
         const actual = await rpc<Session>("session.get", { session_key: currentKey });
         saved.current = actual.messages.length > 0; setSession(saved.current ? actual : null); await refresh();
@@ -100,6 +115,6 @@ export function useConversation() {
   async function remove() {
     await rpc("session.delete", { session_key: key.current }); await startNew(true); await refresh();
   }
-  return { entries, session, draft, setDraft, attachments, setAttachments, error, setError, ready, busy, loading, delta, tool, fail, refresh, selectCurrent, open, startNew, send, rename, remove,
+  return { mode, entries, session, draft, setDraft, attachments, setAttachments, error, setError, ready, busy, loading, delta, tool, fail, refresh, selectCurrent, open, startNew, send, rename, remove,
     cancel: () => rpc("chat.cancel", { session_key: key.current }) };
 }

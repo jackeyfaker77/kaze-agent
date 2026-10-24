@@ -157,6 +157,11 @@ class DesktopBridgeService:
             task.cancel()
         return True
 
+    def request_chat_shutdown(self):
+        """Capture partial output before the host cancels its request dispatcher."""
+        for key in tuple(self._chat_tasks):
+            self._cancel_chat(key)
+
     async def _persist_interrupted_turn(self, key, request_id, content, media, metadata, previous_message_ids):
         state = self._chat_interrupts.get(key)
         session = self.sessions.get_or_create(key)
