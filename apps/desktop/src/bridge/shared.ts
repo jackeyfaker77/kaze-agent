@@ -248,7 +248,7 @@ export type DesktopApi = {
   localAssetUrl(path: string): string;
   startAttachmentDrag(request: StartAttachmentDragRequest): void;
   reportRendererDiagnostic(payload: RendererDiagnosticPayload): void;
-  bridgeStatus(): Promise<{ running: boolean; lastError: string | null }>;
+  bridgeStatus(): Promise<{ running: boolean; lastError: string | null; mode?: "local" | "remote" }>;
   restartBridge(): Promise<{
     ok: boolean;
     running: boolean;

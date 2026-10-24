@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { IpcMainInvokeEvent } from "electron";
 import { logDesktopDiagnostic } from "../diagnostics.js";
 import { desktopDragFileIcon } from "../paths.js";
-import type { DesktopBridgeClient } from "./bridgeClient.js";
+import type { BridgeClient } from "./bridgeContract.js";
 import { importLocalAssets } from "../assets/localAssetImport.js";
 import type { LocalAssetRegistry } from "../assets/localAssetRegistry.js";
 import { maxLocalAssetBytes } from "../assets/localAssetContract.js";
@@ -28,7 +28,7 @@ import type {
 import type { WindowControlAction } from "./shared.js";
 
 type RegisterDesktopIpcOptions = {
-  bridge: DesktopBridgeClient;
+  bridge: BridgeClient;
   localAssets: LocalAssetRegistry;
   localAssetImportsRoot: string;
   openLocalAttachment: (value: string) => Promise<LocalAssetOpenResult>;
@@ -100,10 +100,10 @@ export function registerDesktopIpc({
     if (request.method.startsWith("observation.")) {
       throw new Error("observation bridge methods are restricted to the main process");
     }
-    // 下一步：bridge 是同目录 bridgeClient.ts 的 DesktopBridgeClient 实例；
-    // invoke() 会把 method + payload 编码成一行 JSON，并写入 Python 子进程 stdin。
+    // 本地传输写入 Python stdin；远程传输发送给 Host。
+    // 服务器返回的路径不能获得客户端本地文件权限。
     const response = await bridge.invoke(request);
-    return assetTransport(response, localAssets.grantTrustedPayload(response.payload));
+    return assetTransport(response, bridge.mode === "remote" ? [] : localAssets.grantTrustedPayload(response.payload));
   });
   ipcMain.on("desktop:start-attachment-drag", (event: IpcMainInvokeEvent, request?: { path?: unknown }) => {
     const filePath = String(request?.path ?? "").trim();
@@ -137,6 +137,7 @@ export function registerDesktopIpc({
   });
   ipcMain.handle("desktop:bridge-status", async () => {
     return {
+      mode: bridge.mode ?? "local",
       running: bridge.isRunning(),
       lastError: bridge.getLastError(),
     };
@@ -158,9 +159,11 @@ export function registerDesktopIpc({
     }
   });
   ipcMain.handle("desktop:settings-read", async () => {
+    if (bridge.mode === "remote") throw new Error("远程模式请在服务器管理配置");
     return loadSettingsData();
   });
   ipcMain.handle("desktop:settings-save", async (_event: IpcMainInvokeEvent, formData: SettingsFormData) => {
+    if (bridge.mode === "remote") throw new Error("远程模式请在服务器管理配置");
     const result = await saveSettings(
       formData,
       async () => {
@@ -207,6 +210,7 @@ export function registerDesktopIpc({
     };
   });
   ipcMain.handle("desktop:pick-images", async (_event: IpcMainInvokeEvent, options?: { multiple?: boolean }) => {
+    if (bridge.mode === "remote") throw new Error("远程模式暂不支持本地文件上传");
     const result = await dialog.showOpenDialog({
       properties: options?.multiple ? ["openFile", "multiSelections"] : ["openFile"],
       filters: [
@@ -284,6 +288,7 @@ export function registerDesktopIpc({
   });
   registerVoiceIpc({ desktopPet, voiceRecorder, voiceController, voicePlayback });
   ipcMain.handle("desktop:pick-chat-attachments", async (_event: IpcMainInvokeEvent, options?: { multiple?: boolean }) => {
+    if (bridge.mode === "remote") throw new Error("远程模式暂不支持本地文件上传");
     const result = await dialog.showOpenDialog({
       properties: options?.multiple ? ["openFile", "multiSelections"] : ["openFile"],
       filters: [
@@ -299,6 +304,7 @@ export function registerDesktopIpc({
     return await importPickerSelection(result.filePaths, localAssetImportsRoot, localAssets);
   });
   ipcMain.handle("desktop:pick-pet-package", async () => {
+    if (bridge.mode === "remote") throw new Error("远程模式暂不支持本地文件上传");
     const result = await dialog.showOpenDialog({
       properties: ["openFile"],
       filters: [{ name: "Codex Pet Package", extensions: ["zip"] }],

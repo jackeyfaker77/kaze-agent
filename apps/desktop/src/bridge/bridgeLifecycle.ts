@@ -1,10 +1,10 @@
 import { BrowserWindow } from "electron";
-import type { DesktopBridgeClient } from "./bridgeClient.js";
+import type { BridgeClient } from "./bridgeContract.js";
 import type { LocalAssetRegistry } from "../assets/localAssetRegistry.js";
 import type { BridgeEvent, LocalAssetTransport } from "./shared.js";
 
 /** Starts the Python bridge process and logs startup failures at the app boundary. */
-export async function startBridge(bridge: DesktopBridgeClient): Promise<void> {
+export async function startBridge(bridge: BridgeClient): Promise<void> {
   try {
     await bridge.start();
   } catch (error) {
@@ -14,7 +14,7 @@ export async function startBridge(bridge: DesktopBridgeClient): Promise<void> {
 
 /** Forwards bridge events to every open renderer window. */
 export function wireBridgeEvents(
-  bridge: DesktopBridgeClient,
+  bridge: BridgeClient,
   localAssets: LocalAssetRegistry,
   onEvent?: (event: BridgeEvent) => void,
 ): void {
@@ -22,7 +22,7 @@ export function wireBridgeEvents(
     onEvent?.(payload);
     const transport: LocalAssetTransport<BridgeEvent> = {
       value: payload,
-      assets: localAssets.grantTrustedPayload(payload.payload),
+      assets: bridge.mode === "remote" ? [] : localAssets.grantTrustedPayload(payload.payload),
     };
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send("desktop:event", transport);

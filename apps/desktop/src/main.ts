@@ -1,6 +1,8 @@
 import { resolve } from "node:path";
 import { app, BrowserWindow, Menu, powerMonitor, protocol, screen, session, shell } from "electron";
 import { localAssetSchemePrivileges, registerLocalAssetProtocol } from "./assets/assetProtocol.js";
+import { RemoteBridgeClient, remoteConnectionFromEnvironment } from "./bridge/remoteBridgeClient.js";
+import type { BridgeClient } from "./bridge/bridgeContract.js";
 import { DesktopBridgeClient } from "./bridge/bridgeClient.js";
 import { startBridge, wireBridgeEvents } from "./bridge/bridgeLifecycle.js";
 import { logDesktopDiagnostic } from "./diagnostics.js";
@@ -41,7 +43,8 @@ const runtimePaths = resolveDesktopRuntimePaths({
   workspacePath: process.env.HASAKI_WORKSPACE,
 });
 const hasSingleInstanceLock = configureApplicationIdentity(app, runtimePaths.workspacePath, process.env.HASAKI_DESKTOP_USER_DATA_DIR);
-const bridge = new DesktopBridgeClient(runtimePaths.bridge);
+const remoteConnection = remoteConnectionFromEnvironment(process.env);
+const bridge: BridgeClient = remoteConnection ? new RemoteBridgeClient(remoteConnection) : new DesktopBridgeClient(runtimePaths.bridge);
 const localAssets = new LocalAssetRegistry();
 const trayLifecycleEnabled = process.platform === "win32";
 let desktopWindow: BrowserWindow | null = null;
@@ -246,18 +249,20 @@ function showOrCreateDesktopWindow(): BrowserWindow {
 if (hasSingleInstanceLock) void app.whenReady().then(() => {
   logDesktopDiagnostic({ scope: "main", event: "runtime.paths", payload: {
     appPath: app.getAppPath(), workspace: runtimePaths.workspacePath,
-    backend: runtimePaths.bridge, userData: app.getPath("userData"), sessionData: app.getPath("sessionData"),
+    backend: remoteConnection ? { mode: "remote" } : runtimePaths.bridge, userData: app.getPath("userData"), sessionData: app.getPath("sessionData"),
   } });
-  ensureDesktopRuntimeConfig(runtimePaths);
-  configureSettingsConfigPath(runtimePaths.configPath);
-  reloadVoiceSettings();
+  if (!remoteConnection) {
+    ensureDesktopRuntimeConfig(runtimePaths);
+    configureSettingsConfigPath(runtimePaths.configPath);
+    reloadVoiceSettings();
+  }
   process.env.HASAKI_DESKTOP_USER_DATA_DIR = app.getPath("userData");
   desktopPetSettings = loadDesktopPetSettings(desktopPetSettingsPath());
   const activeVoiceRecorder = new BrowserVoiceRecorder(createVoiceCaptureWindow);
   voiceRecorder = activeVoiceRecorder;
   const privateWorkspaceRoot = runtimePaths.workspacePath;
   const localAssetImportsRoot = resolve(privateWorkspaceRoot, "private_runtime", "imports");
-  localAssets.addTrustedRoot(privateWorkspaceRoot);
+  if (!remoteConnection) localAssets.addTrustedRoot(privateWorkspaceRoot);
   registerDesktopContentSecurityPolicy(
     session.defaultSession.webRequest,
     process.env.HASAKI_RENDERER_DEV_SERVER_URL,
@@ -313,7 +318,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     createVoicePlaybackCallbacks(activeVoiceController),
   );
   voicePlayback = activeVoicePlayback;
-  if (process.platform === "win32") {
+  if (process.platform === "win32" && !remoteConnection) {
     voiceHotkey = new VoiceHotkeyController({
       onPress: (source) => activeVoiceController.startPress(source),
       onRelease: (source) => activeVoiceController.release(source),
@@ -369,7 +374,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
       onQuitRequested: requestAppQuit,
       getDesktopPetState: () => ({
         visible: desktopPetSettings.visible,
-        available: Boolean(desktopPetSettings.sessionKey && desktopPetSettings.packageId),
+        available: !remoteConnection && Boolean(desktopPetSettings.sessionKey && desktopPetSettings.packageId),
       }),
       onToggleDesktopPet: async () => {
         if (!desktopPet) return;
@@ -380,7 +385,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
         }
       },
     });
-    void desktopPet.restore().then(async () => {
+    if (!remoteConnection) void desktopPet.restore().then(async () => {
       syncDesktopPetRuntimeState();
       await desktopObservation?.restore();
     }).catch((error) => {

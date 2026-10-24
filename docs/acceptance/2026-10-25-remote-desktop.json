@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-25",
+  "branch": "codex/remote-runtime-desktop",
+  "scope": "Opt-in remote desktop transport to one persistent Runtime Host; existing local mode preserved",
+  "validation": {
+    "backend_full_suite": {
+      "passed": 1928,
+      "skipped": 1,
+      "note": "Full suite before final shutdown and handshake edge-case additions; final affected tests rerun separately",
+      "log": ".tmp/remote-full-tests.log"
+    },
+    "desktop_full_suite": {
+      "passed": 223,
+      "skipped": 1,
+      "log": ".tmp/remote-desktop-tests.log"
+    },
+    "final_remote_and_stdio_server_tests": {
+      "passed": 13,
+      "log": ".tmp/remote-host-final.log"
+    },
+    "final_remote_client_tests": {
+      "passed": 5,
+      "log": ".tmp/remote-client-final.log"
+    },
+    "runtime_host_compatibility": {
+      "passed": 23,
+      "skipped": 1,
+      "log": ".tmp/remote-targeted-final.log"
+    },
+    "local_desktop_lifecycle": {
+      "passed": true,
+      "log": ".tmp/remote-local-lifecycle.log"
+    },
+    "real_host_remote_client_calendar_mcp": {
+      "passed": true,
+      "log": ".tmp/remote-e2e-final.log",
+      "cases": [
+        "Two desktop clients share server session history",
+        "Accepted turn completes after requester disconnects; no automatic retransmission",
+        "Real Calendar MCP creates one todo on Host; second desktop reads it",
+        "Host restart preserves root identity, rotates epoch, and restores sessions and todos",
+        "Connected client automatically reconnects without replaying model calls"
+      ]
+    },
+    "real_electron": {
+      "passed": true,
+      "log": ".tmp/remote-ui-audit.json",
+      "cases": [
+        "Visible remote connection status, server model, local-only features disabled",
+        "Actual Electron composer invokes real Host and Calendar MCP",
+        "Host stop displays disconnection; restart restores connection and the selected history",
+        "Exactly one server execution and one todo after restart",
+        "No local Python child, config.toml, sessions.db, or execution database in remote desktop profile"
+      ]
+    },
+    "final_session_service_regression": {
+      "passed": 91,
+      "log": ".tmp/remote-session-regression.log"
+    },
+    "final_static_checks": {
+      "production_pyright": "0 errors, 0 warnings",
+      "test_pyright": "0 errors, 0 warnings",
+      "desktop_typecheck": "passed",
+      "desktop_lint": "passed",
+      "desktop_build": "passed",
+      "git_diff_check": "passed"
+    }
+  },
+  "configuration": {
+    "changed": false,
+    "verification": "config.toml, channels.json, mcp_servers.json and proactive_sources.json SHA-256 hashes match the pre-work snapshot",
+    "production_local_mode": "Existing Kaze bridge remains running and healthy; no production switch to remote mode"
+  },
+  "boundaries": [
+    "Real network transport is tested on loopback, including a visible Electron client; no public server/TLS proxy deployment",
+    "Model responses are deterministic offline fixtures; Calendar MCP, AgentLoop and persistence are real",
+    "No live Telegram test message in this phase; external channel commit propagation covered by regression",
+    "Remote mode supports text sessions, history, execution records, workbench and Host-side tools; local file upload, voice, pet and configuration editing are not exposed",
+    "Single-user shared token, no multi-tenant authorization or offline write queue",
+    "Host crash recovery uses the existing durable execution journal and does not automatically replay unfinished side effects"
+  ]
+}

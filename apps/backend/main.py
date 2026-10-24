@@ -26,7 +26,7 @@ from bootstrap.init_workspace import InitSummary, init_workspace
 from core.common.workspace import resolve_default_workspace
 from core.net.http import SharedHttpResources
 from bootstrap.host_state import WorkspaceInUse, host_status, request_host_stop
-from bootstrap.runtime_host import RuntimeHost
+from bootstrap.runtime_host import Attachment, RuntimeHost
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,8 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", default="config.toml", help="配置文件路径")
     parser.add_argument("--workspace", type=Path, help="工作区路径")
+    parser.add_argument("--remote-port", type=int, help="Host 的本机 WebSocket 端口；通过 TLS 代理或 SSH 隧道连接")
+    parser.add_argument("--remote-token-file", type=Path, help="远程连接认证 token 文件（至少 32 字符）")
     parser.add_argument("--force", action="store_true", help="初始化时覆盖现有文件")
     parser.add_argument(
         "--inspect-modules",
@@ -110,15 +112,30 @@ async def serve_bridge(
     await RuntimeHost(runtime, mode="bridge").run(attach)
 
 
-async def serve_host(config_path: str, workspace: Path | None = None) -> None:
+async def serve_host(config_path: str, workspace: Path | None = None, *, remote_port: int | None = None, remote_token_file: Path | None = None) -> None:
+    attachment: Attachment | None = None
+    if remote_port is not None:
+        from bootstrap.remote_host import RemoteHostServer, read_remote_token
+        if remote_token_file is None:
+            raise ValueError("--remote-port requires --remote-token-file")
+        token = read_remote_token(remote_token_file)
+        async def serve_remote(core):
+            await RemoteHostServer(core, token, port=remote_port).run()
+        attachment = serve_remote
     runtime = build_app_runtime(Config.load(config_path), workspace=workspace or resolve_default_workspace())
-    await RuntimeHost(runtime).run(handle_signals=True)
+    await RuntimeHost(runtime).run(attachment, handle_signals=True)
 
 
 def main(argv: list[str] | None = None) -> int:
     """解析命令行参数并执行对应的 runtime 入口。"""
     configure_logging_stream(sys.stderr)
-    args = _build_argument_parser().parse_args(argv)
+    parser = _build_argument_parser()
+    args = parser.parse_args(argv)
+    if args.remote_port is not None or args.remote_token_file is not None:
+        if args.command != "host" or args.remote_port is None or args.remote_token_file is None:
+            parser.error("远程监听参数只能用于 host，且端口与 token 文件必须同时提供")
+        if not 1 <= args.remote_port <= 65535:
+            parser.error("远程端口必须在 1–65535 之间")
     config_path = str(args.config)
     workspace = args.workspace
 
@@ -156,7 +173,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.inspect_modules:
             asyncio.run(inspect_modules(config_path, workspace))
         elif args.command == "host":
-            asyncio.run(serve_host(config_path, workspace))
+            if args.remote_port is None:
+                asyncio.run(serve_host(config_path, workspace))
+            else:
+                asyncio.run(serve_host(config_path, workspace, remote_port=args.remote_port, remote_token_file=args.remote_token_file))
         else:
             asyncio.run(serve_bridge(config_path, workspace))
     except WorkspaceInUse as exc:

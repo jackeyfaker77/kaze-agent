@@ -108,6 +108,10 @@ pnpm --filter kaze-desktop run test:package
 
 构建 Windows 安装包使用 `pnpm --filter kaze-desktop run package:win`。
 
+## 桌面远程连接
+
+桌面可通过 `KAZE_RUNTIME_URL` 与 `KAZE_RUNTIME_TOKEN_FILE` 连接独立 Runtime Host，共用服务器的会话、执行记录和 Calendar 待办。远程模式不启动本地后端；省略环境变量仍使用现有本地模式。启动、TLS/SSH 接入、断线恢复和功能边界见 [远程桌面说明](docs/architecture/remote-desktop-v1.md)。
+
 ## 启动隔离
 
 应用显示名为 Kaze。Windows App ID 为 `com.hasaki.agent`。在申请单实例锁之前设置独立的 `userData` 和 `sessionData`，缓存位于工作区 `.desktop/user-data/chromium/`，按工作区隔离缓存与实例。
