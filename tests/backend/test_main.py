@@ -16,6 +16,25 @@ def test_main_help_prints_usage(capsys: pytest.CaptureFixture[str]):
     assert "bridge" in capsys.readouterr().out
 
 
+def test_main_host_entrypoint(monkeypatch, tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("", encoding="utf-8")
+    serve = AsyncMock()
+    monkeypatch.setattr(app_main, "serve_host", serve)
+    assert app_main.main(["host", "--config", str(config), "--workspace", str(tmp_path)]) == 0
+    serve.assert_awaited_once_with(str(config), tmp_path)
+
+
+def test_host_control_commands_do_not_load_config(monkeypatch, tmp_path, capsys):
+    def forbidden(*args):
+        raise AssertionError("control commands must not load config or start a runtime")
+    monkeypatch.setattr(app_main.Config, "load", forbidden)
+    assert app_main.main(["host-status", "--workspace", str(tmp_path)]) == 0
+    assert '"running": false' in capsys.readouterr().out
+    assert app_main.main(["host-stop", "--workspace", str(tmp_path)]) == 0
+    assert '"requested": false' in capsys.readouterr().out
+
+
 def test_main_accepts_desktop_as_bridge_alias(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

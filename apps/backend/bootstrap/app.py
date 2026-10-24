@@ -101,6 +101,8 @@ class AppRuntime:
         self._started = False
 
     async def start(self) -> None:
+        if self._shutdown:
+            raise RuntimeError("A stopped runtime cannot be restarted; construct a new host")
         if self._started:
             return
         configure_default_shared_http_resources(self.http_resources)
@@ -163,9 +165,33 @@ class AppRuntime:
                         asyncio.create_task(run_proactive(self.core), name="proactive")
                     )
             self._started = True
-        except Exception:
+        except BaseException:
             await self.shutdown()
             raise
+
+    @property
+    def background_tasks(self) -> tuple[asyncio.Task[None], ...]:
+        return tuple(self._background_tasks)
+
+    def health(self) -> dict:
+        workers = {task.get_name(): not task.done() for task in self._background_tasks}
+        failures = self.channel_host.failures if self.channel_host else []
+        channels = self.channel_host.health() if self.channel_host else {}
+        proactive_requested = self.features.enable_proactive and self.config.proactive.enabled
+        proactive_running = workers.get("proactive", False)
+        journal = self.core.session_manager.execution_journal if self.core else None
+        return {
+            "healthy": self._started and not self._shutdown and all(workers.values())
+                       and not failures and all(channels.values()) and (not proactive_requested or proactive_running),
+            "workers": workers,
+            "channels": [channel.name for channel in self.channel_host.channels] if self.channel_host else [],
+            "channel_health": channels,
+            "channel_failures": [{"channel": f.channel, "phase": f.phase, "error_type": f.error_type} for f in failures],
+            "proactive": "running" if proactive_running else "unavailable" if proactive_requested else "disabled",
+            "root_id": journal.root_id if journal else None,
+            "epoch": journal.epoch if journal else None,
+            "execution_contract_version": 1,
+        }
 
     async def run(self) -> None:
         try:
@@ -190,22 +216,21 @@ class AppRuntime:
                 if task.done():
                     continue
                 task.cancel()
-            for task in self._background_tasks:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+            results = await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning("runtime worker failed during shutdown: %s", type(result).__name__)
             self._background_tasks = []
             await _run_cleanup_steps(
                 (
                     "scheduler.aclose",
                     self.scheduler.aclose if self.scheduler else _noop_async,
                 ),
-                ("core.stop", self.core.stop if self.core else _noop_async),
                 (
                     "channels.stop",
                     self.channel_host.stop_all if self.channel_host else _noop_async,
                 ),
+                ("core.stop", self.core.stop if self.core else _noop_async),
                 (
                     "memory_runtime.aclose",
                     self.memory_runtime.aclose if self.memory_runtime else _noop_async,

@@ -4,6 +4,7 @@
 正式模式（从仓库根目录执行）：
   uv run python apps/backend/main.py          启动桌面 bridge 主链
   uv run python apps/backend/main.py bridge   启动桌面 bridge 主链
+  uv run python apps/backend/main.py host     启动独立常驻后端，不依赖桌面或 stdin
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import json
 import sys
 from pathlib import Path
 
@@ -23,7 +25,8 @@ from bootstrap.app import (
 from bootstrap.init_workspace import InitSummary, init_workspace
 from core.common.workspace import resolve_default_workspace
 from core.net.http import SharedHttpResources
-from desktop_bridge import DesktopBridgeServer
+from bootstrap.host_state import WorkspaceInUse, host_status, request_host_stop
+from bootstrap.runtime_host import RuntimeHost
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("bridge", "desktop", "setup", "init"),
+        choices=("bridge", "desktop", "host", "host-status", "host-stop", "setup", "init"),
         help="运行命令；desktop 是 bridge 的兼容别名",
     )
     parser.add_argument("--config", default="config.toml", help="配置文件路径")
@@ -100,15 +103,16 @@ async def serve_bridge(
         workspace=workspace or resolve_default_workspace(),
         features=DESKTOP_RUNTIME_FEATURES,
     )
-    try:
-        await runtime.start()
-        core_runtime = runtime.core
-        if core_runtime is None:
-            raise RuntimeError("desktop bridge runtime 未正确初始化 core")
+    async def attach(core_runtime):
+        from desktop_bridge import DesktopBridgeServer
         server = DesktopBridgeServer(core_runtime)
         await server.serve_stdio()
-    finally:
-        await runtime.shutdown()
+    await RuntimeHost(runtime, mode="bridge").run(attach)
+
+
+async def serve_host(config_path: str, workspace: Path | None = None) -> None:
+    runtime = build_app_runtime(Config.load(config_path), workspace=workspace or resolve_default_workspace())
+    await RuntimeHost(runtime).run(handle_signals=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -117,6 +121,12 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_argument_parser().parse_args(argv)
     config_path = str(args.config)
     workspace = args.workspace
+
+    if args.command in {"host-status", "host-stop"}:
+        target = workspace or resolve_default_workspace()
+        result = host_status(target) if args.command == "host-status" else request_host_stop(target)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
 
     if args.command == "setup":
         from bootstrap.setup_wizard import run_setup_wizard
@@ -142,10 +152,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    if args.inspect_modules:
-        asyncio.run(inspect_modules(config_path, workspace))
-    else:
-        asyncio.run(serve_bridge(config_path, workspace))
+    try:
+        if args.inspect_modules:
+            asyncio.run(inspect_modules(config_path, workspace))
+        elif args.command == "host":
+            asyncio.run(serve_host(config_path, workspace))
+        else:
+            asyncio.run(serve_bridge(config_path, workspace))
+    except WorkspaceInUse as exc:
+        logger.error("%s", exc)
+        return 2
     return 0
 
 

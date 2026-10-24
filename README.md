@@ -68,6 +68,13 @@ pnpm start  # 先构建最新代码，再启动本仓库 Electron
 
 工作区包含个人对话及配置，不纳入版本控制。Codex 连接凭据单独保存在工作区 `.desktop/codex-auth.bin`，Windows 使用当前用户的 DPAPI 加密；迁移到其他 Windows 用户后需要重新授权。
 
+## 独立常驻后端
+
+使用 `python apps/backend/main.py host --workspace ./workspace --config ./workspace/config.toml`，
+无需启动桌面即可运行已配置的 Telegram 和主动提醒。现有桌面本地模式保持可用，
+同一工作区只能选择一种模式。启动、状态、停止及部署示例见
+[Runtime Host v1](docs/architecture/runtime-host-v1.md)。桌面远程连接将在后续阶段接入。
+
 ## 桌宠与品牌资源
 
 软件图标及助手头像使用坐姿小风鼬，顶部导航使用蓝色风纹图标。桌宠由用户通过界面手动导入 ZIP，不随源码自动导入或选中。

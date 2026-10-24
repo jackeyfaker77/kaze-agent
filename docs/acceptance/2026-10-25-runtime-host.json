@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-25",
+  "scope": "Standalone Runtime Host with preserved embedded desktop mode",
+  "branch": "codex/standalone-runtime-host",
+  "validation": {
+    "backend_full_suite": {"passed": 1922, "log": ".tmp/host-full-tests.log"},
+    "final_targeted_suite": {
+      "passed": 17,
+      "skipped": 1,
+      "skip_reason": "POSIX SIGTERM subprocess test is skipped on Windows; Windows host-stop cleanup is exercised",
+      "log": ".tmp/host-final-targeted.log"
+    },
+    "pyright": {"production": "0 errors, 0 warnings", "tests": "0 errors, 0 warnings"},
+    "desktop_lifecycle": {"passed": true, "log": ".tmp/host-desktop-lifecycle.log"},
+    "headless_process_cases": [
+      "Production CLI stays alive with stdin closed; status and stop work without a desktop",
+      "Real Telegram SDK polling and channel routing receive synthetic input and return a model-fixture response",
+      "Real proactive kernel sends one source alert and acknowledges delivery",
+      "Real scheduler sends a persisted one-time reminder",
+      "Competing desktop bridge is rejected before opening channels",
+      "Host restart preserves root_id and changes epoch without repeated model calls or reminder deliveries",
+      "Hard process exit retains accepted Telegram input and partial reply; restart classifies interruption without replay",
+      "Production desktop bridge still answers health and exits after stdin EOF"
+    ]
+  },
+  "configuration": {
+    "changed": false,
+    "hash_comparison": "All four existing files match the prior local restart snapshot",
+    "files": ["config.toml", "channels.json", "mcp_servers.json", "proactive_sources.json"]
+  },
+  "boundaries": [
+    "Process tests use temporary workspaces; model and Telegram network boundaries are offline fixtures",
+    "No actual server deployment, service installation, production desktop switch or real Telegram message",
+    "systemd unit is a deployment example; installation and POSIX service behavior are not verified on this Windows machine",
+    "Desktop local mode and standalone Host are mutually exclusive for the same workspace",
+    "Desktop remote attachment, remote authentication and Peer Mesh remain future work",
+    "Workspace locks do not coordinate copied workspaces, different machines or already running older releases",
+    "Execution recovery remains conservative; no durable Telegram inbox or exactly-once delivery claim"
+  ]
+}

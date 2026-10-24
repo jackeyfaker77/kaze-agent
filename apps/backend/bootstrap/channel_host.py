@@ -27,6 +27,7 @@ class ChannelHost:
         self._ctx_factory = ctx_factory
         self._channels: list[Channel] = []
         self._failures: list[ChannelFailure] = []
+        self._started: set[str] = set()
 
     def add(self, channel: Channel) -> None:
         self._channels.append(channel)
@@ -47,17 +48,23 @@ class ChannelHost:
         for channel in self._channels:
             try:
                 await channel.start(self._ctx_factory(channel))
+                self._started.add(channel.name)
                 logger.info("渠道已启动: %s", channel.name)
             except Exception as e:
                 self.record_failure(channel.name, phase="start", error=e)
                 logger.error("渠道启动失败 %s: %s", channel.name, e)
 
     async def stop_all(self) -> None:
+        self._started.clear()
         for channel in reversed(self._channels):
             try:
                 await channel.stop()
             except Exception as e:
                 logger.warning("渠道停止失败 %s: %s", channel.name, e)
+
+    def health(self) -> dict[str, bool]:
+        return {channel.name: channel.name in self._started and bool(getattr(channel, "is_running", True))
+                for channel in self._channels}
 
     @property
     def channels(self) -> list[Channel]:
