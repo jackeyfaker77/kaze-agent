@@ -117,6 +117,10 @@ class TelegramChannel(
     def bot(self):
         return self._app.bot
 
+    @property
+    def is_running(self) -> bool:
+        return bool(self._app.running and self._app.updater and self._app.updater.running)
+
     async def start(self, ctx: ChannelContext | None = None) -> None:
         if ctx is not None:
             self._bus = ctx.bus

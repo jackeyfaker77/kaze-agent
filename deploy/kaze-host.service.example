@@ -1,0 +1,20 @@
+# Review paths/user and provide the existing workspace/config before installing.
+[Unit]
+Description=Kaze Runtime Host
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=kaze
+WorkingDirectory=/opt/kaze-agent
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/kaze-agent/.venv/bin/python /opt/kaze-agent/apps/backend/main.py host --workspace /var/lib/kaze --config /var/lib/kaze/config.toml
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
