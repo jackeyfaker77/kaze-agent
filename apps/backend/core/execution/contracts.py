@@ -28,6 +28,17 @@ class ExecutionConflict(RuntimeError):
 class ExecutionUnavailable(RuntimeError):
     """Accepted work must be queried, not silently submitted a second time."""
 
+    def __init__(self, message: str, execution: dict | None = None):
+        super().__init__(message)
+        self.details = {} if execution is None else {
+            "turn_id": execution["turn_id"], "status": execution["status"],
+            "execution_request_id": execution["request_key"],
+        }
+
 
 class JournalWriteError(RuntimeError):
     """No further effects may start after a durable boundary fails."""
+
+
+class ExecutionNeedsReview(ExecutionUnavailable):
+    """An unknown external outcome must stop the model from retrying it."""

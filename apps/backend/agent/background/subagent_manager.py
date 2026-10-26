@@ -4,7 +4,8 @@ import asyncio
 import json
 import logging
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from contextvars import copy_context
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,6 +30,9 @@ from bus.events import SpawnCompletionItem
 from bus.queue import MessageBus
 from core.common.strategy_trace import build_strategy_trace_envelope
 from core.net.http import HttpRequester
+from core.execution.contracts import ExecutionNeedsReview, JournalWriteError
+from core.execution.journal import ExecutionJournal
+from core.execution.scope import ExecutionScope, current_execution, current_effect
 from prompts.background import build_spawn_subagent_prompt
 
 logger = logging.getLogger(__name__)
@@ -80,6 +84,7 @@ class SubagentManager:
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._running_jobs: dict[str, RunningSubagentJob] = {}
         self._cancel_announced: set[str] = set()
+        self.execution_journal: ExecutionJournal | None = None
 
     def add_tool_hooks(self, hooks: list[ToolHook]) -> None:
         object.__setattr__(self._runtime, "tool_hooks", list(hooks))
@@ -137,11 +142,17 @@ class SubagentManager:
                 return result, exit_reason
 
             result, exit_reason = await _run(None)
+        except (ExecutionNeedsReview, JournalWriteError):
+            raise
         except Exception as e:
             logger.exception("[spawn_sync] subagent failed job_id=%s err=%s", job_id, e)
             result = f"执行出错：{e}"
             exit_reason = "error"
 
+        scope, parent = current_execution.get(), current_effect.get()
+        if exit_reason != "completed" and scope is not None and parent is not None and parent[0] is scope:
+            if any(not effect["retry_safe"] for effect in scope.descendant_effects(parent[1])):
+                raise ExecutionNeedsReview("子任务未完成且已有外部操作，请核对执行记录，不能整轮重试")
         truncated = result
         if len(truncated) > _SYNC_RESULT_MAX_CHARS:
             original_len = len(truncated)
@@ -191,6 +202,9 @@ class SubagentManager:
             },
         )
         # 2. 再把真正执行逻辑放到后台 task 中，避免阻塞当前会话。
+        detached = copy_context()
+        detached.run(current_execution.set, None)
+        detached.run(current_effect.set, None)
         bg_task = asyncio.create_task(
             self._run_subagent(
                 job_id=job_id,
@@ -205,6 +219,7 @@ class SubagentManager:
                 retry_count=retry_count,
             ),
             name=f"spawn:{job_id}",
+            context=detached,
         )
         # 3. 最后登记运行中任务，并返回给主 agent 一段立即可回复用户的确认文本。
         self._running_tasks[job_id] = bg_task
@@ -250,9 +265,10 @@ class SubagentManager:
         job = self._running_jobs.get(job_id)
         if job is not None:
             self._cancel_announced.add(job_id)
-            await self._announce_cancelled_job(job)
         task.cancel()
-        await asyncio.sleep(0)
+        await asyncio.gather(task, return_exceptions=True)
+        if job is not None:
+            await self._announce_cancelled_job(job)
         logger.info("[spawn] cancel requested job_id=%s", job_id)
         return True
 
@@ -293,7 +309,7 @@ class SubagentManager:
 
                 job_runner = AgentBackgroundJobRunner(_build)
                 # 1. 先按统一 background job spec 执行 subagent，本层不直接碰 loop 细节。
-                return await job_runner.run(
+                return await self._run_background_recorded(job_runner,
                     AgentBackgroundJobSpec(
                         job_id=job_id,
                         job_kind="conversation_spawn",
@@ -310,7 +326,14 @@ class SubagentManager:
                 )
 
             result = await _run(None)
+        except (ExecutionNeedsReview, JournalWriteError) as exc:
+            await self._announce_result(job_id=job_id, label=label, task=task,
+                origin_channel=origin_channel, origin_chat_id=origin_chat_id, origin_session_key=origin_session_key,
+                status="error", exit_reason="needs_review", result=str(exc), decision=decision,
+                profile=profile, retry_count=retry_count)
+            return
         except asyncio.CancelledError:
+            cancelled_reason, cancelled_summary = self._cancel_outcome(job_id)
             if job_id not in self._cancel_announced:
                 await self._announce_result(
                     job_id=job_id,
@@ -319,9 +342,9 @@ class SubagentManager:
                     origin_channel=origin_channel,
                     origin_chat_id=origin_chat_id,
                     origin_session_key=origin_session_key,
-                    status="cancelled",
-                    exit_reason="cancelled",
-                    result="后台任务已按请求取消。",
+                    status="error" if cancelled_reason == "needs_review" else "cancelled",
+                    exit_reason=cancelled_reason,
+                    result=cancelled_summary,
                     decision=decision,
                     profile=profile,
                     retry_count=retry_count,
@@ -332,7 +355,7 @@ class SubagentManager:
                     "phase": "cancelled",
                     "task_dir": str(task_dir),
                     "status": "cancelled",
-                    "exit_reason": "cancelled",
+                    "exit_reason": cancelled_reason,
                     "profile": profile,
                     "retry_count": retry_count,
                     "decision": _decision_payload(decision),
@@ -374,6 +397,7 @@ class SubagentManager:
         )
 
     async def _announce_cancelled_job(self, job: RunningSubagentJob) -> None:
+        reason, summary = self._cancel_outcome(job.job_id)
         await self._announce_result(
             job_id=job.job_id,
             label=job.label,
@@ -381,13 +405,52 @@ class SubagentManager:
             origin_channel=job.origin_channel,
             origin_chat_id=job.origin_chat_id,
             origin_session_key=job.origin_session_key,
-            status="cancelled",
-            exit_reason="cancelled",
-            result="后台任务已按请求取消。",
+            status="error" if reason == "needs_review" else "cancelled",
+            exit_reason=reason,
+            result=summary,
             decision=None,
             profile=job.profile,
             retry_count=job.retry_count,
         )
+
+    def _cancel_outcome(self, job_id: str) -> tuple[str, str]:
+        if self.execution_journal is not None:
+            try:
+                row = self.execution_journal.find(f"subagent:{job_id}", "subagent", job_id)
+                if row and (row["status"] in {"accepted", "running", "needs_review"} or any(not e["retry_safe"] for e in row["effects"])):
+                    return "needs_review", f"后台任务已停止，但外部操作仍需核对。请在工作台查看执行 {row['turn_id']}，核对前不要重试。"
+            except Exception:
+                return "needs_review", f"后台任务 {job_id} 已停止，执行记录暂时不可读取；请先核对，不能自动重试。"
+        return "cancelled", "后台任务已按请求取消。"
+
+    async def _run_background_recorded(self, runner, spec, **kwargs):
+        journal = self.execution_journal
+        if journal is None:
+            return await runner.run(spec, **kwargs)
+        row, created = journal.admit(f"subagent:{spec.job_id}", "subagent", spec.job_id, asdict(spec))
+        if not created:
+            raise ExecutionNeedsReview("后台任务已接纳，请查看执行记录，不能自动重跑", row)
+        turn = row["turn_id"]
+        scope = ExecutionScope(journal, turn)
+        token = current_execution.set(scope)
+        try:
+            journal.start(turn)
+            result = await runner.run(spec, **kwargs)
+            if scope.broken:
+                raise JournalWriteError("子任务执行记录不完整，请核对执行记录")
+            journal.finish(turn, "completed" if result.status == "completed" else "failed", asdict(result))
+            state = journal.get(turn)
+            if state["status"] == "needs_review" or (result.status != "completed" and any(not e["retry_safe"] for e in state["effects"])):
+                return replace(result, status="error", exit_reason="needs_review",
+                    result_summary=f"子任务存在需核对的外部操作，已停止自动执行。请在工作台查看执行 {turn}，核对前不要重试。")
+            return result
+        except BaseException as exc:
+            if not scope.broken and journal.get(turn)["status"] in {"accepted", "running"}:
+                journal.finish(turn, "interrupted" if isinstance(exc, asyncio.CancelledError) else "failed")
+            raise
+        finally:
+            scope.active = False
+            current_execution.reset(token)
 
     def _build_subagent(
         self,

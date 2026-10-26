@@ -60,6 +60,7 @@ class SpawnToolsetProvider(ToolsetProvider):
             multimodal=config.multimodal,
         )
         if config.spawn_enabled:
+            subagent_manager.execution_journal = getattr(deps.session_store, "execution_journal", None)
             registry.register(
                 SpawnTool(subagent_manager, registry, policy=DelegationPolicy()),
                 always_on=True,

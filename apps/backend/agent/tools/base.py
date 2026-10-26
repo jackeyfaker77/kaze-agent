@@ -30,6 +30,13 @@ class Tool(ABC):
     description: str
     parameters: dict[str, Any]
     context_precedence: frozenset[str] = frozenset()
+    # Trusted implementation declaration, never inferred from a tool name or
+    # model-provided arguments. Unknown/MCP/shell/write tools require review.
+    retry_policy: str = "manual_review"
+
+    def execution_certainty(self, result: str | ToolResult) -> str:
+        """Classify our own return protocol, independently of model arguments."""
+        return "confirmed"
 
     # JSON Schema 类型 → Python 类型映射
     _TYPE_MAP = {

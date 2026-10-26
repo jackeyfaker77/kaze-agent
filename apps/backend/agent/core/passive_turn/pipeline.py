@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.execution.contracts import JournalWriteError
+from core.execution.contracts import JournalWriteError, ExecutionNeedsReview
 from core.execution.scope import current_execution
 
 import hashlib
@@ -407,7 +407,7 @@ class PassiveTurnPipeline:
                 )
             except MemoryConsolidationFailedError:
                 raise
-            except JournalWriteError:
+            except (JournalWriteError, ExecutionNeedsReview):
                 raise
             except Exception as exc:
                 execution = current_execution.get()

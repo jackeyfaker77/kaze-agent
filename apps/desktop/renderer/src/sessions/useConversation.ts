@@ -22,6 +22,7 @@ export function useConversation() {
   const navigating = useRef(false);
   const alive = useRef(true);
   const textSending = useRef(false);
+  const pendingSends = useRef(new Map<string, { id: string }>());
   const fail = useCallback((value: unknown) => setError(value instanceof Error ? value.message : String(value)), []);
   async function refresh() {
     const result = await rpc<{ sessions: Entry[] }>("sessions.list");
@@ -87,19 +88,27 @@ export function useConversation() {
     if (!ready || locked.current || navigating.current || (!draft.trim() && !attachments.length)) return;
     locked.current = true; textSending.current = true; setBusy(true); setError("");
     const content = draft, media = attachments, currentKey = key.current, previous = session;
+    const signature = JSON.stringify([currentKey, content, media]);
+    const attempt = pendingSends.current.get(signature) ?? { id: crypto.randomUUID() };
+    pendingSends.current.set(signature, attempt);
     setDraft(""); setAttachments([]); setDelta("");
     // Optimistic update：后端返回前先把用户消息写入本地 Session，让界面立即响应。
     setSession({ session_key: currentKey, title: previous?.title || content.slice(0, 60) || "附件会话", messages: [...(previous?.messages ?? []), { role: "user", content, media }] });
     try {
       // 下一步：调用同目录 api.ts 的 rpc()，把 session_key、content、media 发给 Electron 主进程。
-      const result = await rpc<{ session: Session }>("chat.send", { session_key: currentKey, content, media });
+      const result = await rpc<{ session: Session }>("chat.send", {
+        session_key: currentKey, content, media, execution_request_id: attempt.id,
+      });
+      if (pendingSends.current.get(signature) === attempt) pendingSends.current.delete(signature);
       saved.current = result.session.messages.length > 0; setSession(saved.current ? result.session : null);
       await refresh().catch(fail);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
-      const uncertain = e instanceof BridgeRpcError && e.code === "remote_outcome_unknown";
-      setError(uncertain ? reason : `发送失败，输入和附件已恢复。${reason}`);
+      const uncertain = !(e instanceof BridgeRpcError) || ["remote_outcome_unknown", "bridge_exit", "bridge_timeout", "bridge_write_failed", "internal_error", "execution_needs_review", "execution_unavailable", "execution_outcome_unknown"].includes(e.code);
+      const turn = e instanceof BridgeRpcError && typeof e.details?.turn_id === "string" ? ` 执行：${e.details.turn_id}` : "";
+      setError(uncertain ? `${reason}${turn} 请在工作台核对原执行；请求标识：${attempt.id}。` : `发送失败，输入和附件已恢复。${reason}`);
       if (!uncertain) {
+        pendingSends.current.delete(signature);
         setDraft(current => recoverDraft(current, content));
         setAttachments(current => recoverAttachments(current, media));
       }

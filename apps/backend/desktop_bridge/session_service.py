@@ -14,6 +14,7 @@ from uuid import uuid4
 from typing import Any
 
 from agent.looping.interrupt import TurnInterruptState
+from core.execution.contracts import ExecutionConflict, ExecutionNeedsReview, ExecutionUnavailable, JournalWriteError
 from bus.events import OutboundMessage
 from bus.events_lifecycle import StreamDeltaReady, ToolCallStarted, ToolCallCompleted, ProactiveMessageCommitted, TurnCommitted
 from desktop_bridge.models import BridgeError, BridgeResponse
@@ -259,11 +260,35 @@ class DesktopBridgeService:
             return BridgeResponse(id=request_id, type="response", method=method, payload=result)
         except asyncio.CancelledError:
             raise
+        except ExecutionNeedsReview as exc:
+            return BridgeResponse(id=request_id, type="response", method=method,
+                                  error=BridgeError(code="execution_needs_review", message=str(exc), details=exc.details))
+        except ExecutionUnavailable as exc:
+            return BridgeResponse(id=request_id, type="response", method=method,
+                                  error=BridgeError(code="execution_unavailable", message=str(exc), details=exc.details))
+        except JournalWriteError as exc:
+            return BridgeResponse(id=request_id, type="response", method=method,
+                                  error=BridgeError(code="execution_outcome_unknown", message=str(exc)))
         except Exception as exc:
             return BridgeResponse(id=request_id, type="response", method=method,
                                   error=BridgeError(code="request_failed", message=str(exc)))
 
-    async def _dispatch(self, method, payload, request_id, *, chat_admission: Callable[[], AbstractAsyncContextManager[None]] = nullcontext):
+    async def _dispatch(self, method, payload, request_id, *, chat_admission: Callable[[], AbstractAsyncContextManager[None]] = nullcontext, retry_request=None):
+        if method == "execution.review":
+            return self.sessions.execution_journal.review(str(payload.get("turn_id") or ""),
+                expected_seq=payload.get("expected_seq"), action_id=payload.get("action_id"),
+                decision=payload.get("decision"), note=payload.get("note"))
+        if method == "execution.retry":
+            original = self.sessions.execution_journal.get(str(payload.get("turn_id") or ""))
+            if original["source"] != "desktop" or original["input"].get("channel") != "desktop":
+                raise ValueError("此来源由原渠道队列管理，不能从桌面重发")
+            saved = original["input"]
+            result = await self._dispatch("chat.send", {"session_key": original["session_key"],
+                "content": saved["content"], "media": saved["media"]}, request_id,
+                chat_admission=chat_admission, retry_request={"original": original,
+                    "action": {"turn_id": original["turn_id"], "expected_seq": payload.get("expected_seq"),
+                               "action_id": payload.get("action_id")}})
+            return {**result, "execution": self.sessions.execution_journal.get(original["turn_id"])}
         if method == "execution.get":
             journal = self.sessions.execution_journal
             if payload.get("turn_id"):
@@ -276,8 +301,8 @@ class DesktopBridgeService:
             return self.sessions.execution_journal.events(str(payload.get("turn_id") or ""),
                 after=payload.get("after", 0), limit=payload.get("limit", 100))
         if method == "executions.list":
-            return self.sessions.execution_journal.list_executions(self._key(payload),
-                before=payload.get("before", 0), limit=payload.get("limit", 50))
+            return self.sessions.execution_journal.list_executions(str(payload.get("session_key") or ""),
+                before=payload.get("before", 0), limit=payload.get("limit", 50), status=payload.get("status", ""))
         if method.startswith("codex."):
             return await self.codex.handle(method, payload)
         if method == "health":
@@ -385,8 +410,12 @@ class DesktopBridgeService:
             if voice_turn:
                 self._voice_turns[voice_turn] = key
             metadata = {"request_id": request_id, "input_method": payload.get("input_method", "text")}
+            metadata["execution_request_id"] = uuid4().hex
             if "execution_request_id" in payload:
                 metadata["execution_request_id"] = payload["execution_request_id"]
+            if retry_request is not None:
+                metadata = {**retry_request["original"]["input"]["metadata"], "request_id": request_id,
+                            "_execution_retry": retry_request["action"]}
             async with AsyncExitStack() as turn_context:
                 try:
                     # Keep passive priority through cancellation persistence, including
@@ -416,6 +445,19 @@ class DesktopBridgeService:
                 except asyncio.CancelledError:
                     await self._persist_interrupted_turn(key, request_id, content, media, metadata, previous_message_ids)
                     return {"session_key": key, "cancelled": True, "session": self._snapshot(key)}
+                except Exception as exc:
+                    # A committed run can outlive its reply stream.
+                    if isinstance(exc, (ExecutionConflict, ExecutionUnavailable, JournalWriteError)):
+                        raise
+                    journal = self.sessions.execution_journal
+                    if retry_request is not None:
+                        parent = journal.get(retry_request["action"]["turn_id"])
+                        accepted = journal.get(parent["retry_turn_id"]) if parent["retry_turn_id"] else None
+                    else:
+                        accepted = journal.find(key, "desktop", metadata["execution_request_id"])
+                    if accepted is not None and accepted["status"] == "completed":
+                        raise ExecutionUnavailable("执行已完成，但回复未成功返回；请查看执行记录，勿重新执行", accepted) from exc
+                    raise
                 finally:
                     self._requests.pop(key, None)
                     self._chat_tasks.pop(key, None)

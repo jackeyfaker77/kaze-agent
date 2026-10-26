@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, cast
 from uuid import uuid4
 
-from agent.tools.base import Tool
+from agent.tools.base import Tool, ToolResult
 
 from .background import (
     _BG_REGISTRY,
@@ -38,6 +38,11 @@ logger = logging.getLogger("agent.tools.shell")
 
 
 class ShellTool(Tool):
+    def execution_certainty(self, result: str | ToolResult) -> str:
+        # Killing a timed-out command cannot undo effects it already performed.
+        outcome = json.loads(result.text if isinstance(result, ToolResult) else result)
+        return "unknown" if outcome.get("interrupted") is True else "confirmed"
+
     """在 bash 中执行命令，返回结构化结果"""
 
     name = "shell"
@@ -323,6 +328,7 @@ class ShellTool(Tool):
             except (ProcessLookupError, PermissionError):
                 pass
             pump.cancel()
+            await asyncio.gather(pump, return_exceptions=True)
             try:
                 os.unlink(log_path)
             except OSError:

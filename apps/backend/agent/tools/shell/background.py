@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from agent.tools.base import Tool
+from agent.tools.base import Tool, ToolResult
 
 from .constants import (
     _BG_EVICT_DELAY_S,
@@ -20,7 +20,7 @@ from .constants import (
     _STREAM_CHUNK_SIZE,
     _STREAM_DRAIN_GRACE_S,
 )
-from .output import _err, _truncate
+from .output import _truncate
 from .runner import _invoke_kill_process_tree
 
 
@@ -71,19 +71,26 @@ async def _bg_pump(
         stdout_task = asyncio.create_task(_drain_stream(proc.stdout))
         stderr_task = asyncio.create_task(_drain_stream(proc.stderr))
 
-        # 等主进程本体退出（不等子孙进程关 fd）
-        await proc.wait()
-
-        # 短暂排水：捕获最后几帧输出；超时后强制取消
         try:
+            await proc.wait()
             await asyncio.wait_for(
                 asyncio.gather(stdout_task, stderr_task),
                 timeout=_STREAM_DRAIN_GRACE_S,
             )
         except asyncio.TimeoutError:
+            pass
+        finally:
+            # The foreground timeout may cancel the pump while proc.wait is
+            # still waiting for inherited pipe handles. Always reap readers.
             stdout_task.cancel()
             stderr_task.cancel()
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            # Process has no public close API. Retained descendant pipe handles
+            # must not outlive the pump, including Windows timeout cancellation.
+            transport = getattr(proc, "_transport", None)
+            if transport is not None:
+                transport.close()
+                await proc.wait()
 
 
 def _schedule_eviction(task_id: str, log_path: str) -> None:
@@ -137,6 +144,14 @@ def _bg_timeout(task_id: str) -> None:
 
 class ShellTaskOutputTool(Tool):
     """读取后台 shell 任务的当前输出，可选择阻塞等待完成。"""
+
+    def execution_certainty(self, result: str | ToolResult) -> str:
+        outcome = json.loads(result.text if isinstance(result, ToolResult) else result)
+        return "unknown" if outcome.get("outcome_unknown") is True else "confirmed"
+
+    @staticmethod
+    def _unknown(task_id: str, message: str) -> str:
+        return json.dumps({"task_id": task_id, "error": message, "outcome_unknown": True}, ensure_ascii=False)
 
     name = "task_output"
 
@@ -194,14 +209,14 @@ class ShellTaskOutputTool(Tool):
 
         task = _BG_REGISTRY.get(task_id)
         if task is None:
-            return _err(f"任务 {task_id!r} 不存在或已清理")
+            return self._unknown(task_id, f"任务 {task_id!r} 不存在或已清理，无法确认执行结果")
 
         pump_task = task.pump_task
         if pump_task is None:
-            return _err(f"任务 {task_id!r} 状态异常：缺少输出泵")
+            return self._unknown(task_id, f"任务 {task_id!r} 状态异常：缺少输出泵")
         if _is_background_timeout(task):
             _bg_timeout(task_id)
-            return _err(f"任务 {task_id!r} 已超时（{task.timeout_s}s），已自动终止")
+            return self._unknown(task_id, f"任务 {task_id!r} 已超时（{task.timeout_s}s），已自动终止")
 
         if block and not pump_task.done():
             if task.timeout_s is not None:
@@ -223,7 +238,7 @@ class ShellTaskOutputTool(Tool):
 
         if task.finish_reason == "timeout" or _is_background_timeout(task):
             _bg_timeout(task_id)
-            return _err(f"任务 {task_id!r} 已超时（{task.timeout_s}s），已自动终止")
+            return self._unknown(task_id, f"任务 {task_id!r} 已超时（{task.timeout_s}s），已自动终止")
 
         done = pump_task.done()
         if done and time.monotonic() - task.started_at > _BG_TTL_S:
@@ -235,7 +250,7 @@ class ShellTaskOutputTool(Tool):
                 os.unlink(task.log_path)
             except OSError:
                 pass
-            return _err(f"任务 {task_id!r} 已超出 TTL（{_BG_TTL_S}s），已清理")
+            return self._unknown(task_id, f"任务 {task_id!r} 已超出 TTL（{_BG_TTL_S}s），已清理")
 
         exit_code = task.proc.returncode if done else None
         status = "done" if done else "running"

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Callable, Literal
 
 from agent.subagent import SubAgent
+from core.execution.contracts import ExecutionNeedsReview, JournalWriteError
 
 AgentBackgroundJobKind = Literal["conversation_spawn"]
 AgentBackgroundCompletionMode = Literal["message_bus", "direct_notify"]
@@ -64,7 +65,7 @@ class AgentBackgroundJobRunner:
                 if error_result_summary is not None
                 else f"后台任务执行失败：{e}"
             )
-            exit_reason = "error"
+            exit_reason = "needs_review" if isinstance(e, (ExecutionNeedsReview, JournalWriteError)) else "error"
             status = "error"
         finished_at = datetime.now(timezone.utc)
         return AgentBackgroundJobResult(

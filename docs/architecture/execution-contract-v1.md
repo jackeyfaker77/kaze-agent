@@ -1,5 +1,9 @@
 # Execution contract v1 (local runtime foundation)
 
+Later increment: [execution projection and disposition](execution-projection-v1.md)
+now rebuilds execution state from facts and adds explicit guarded retry/review.
+Its linked attempts and read-only tool policy amend the v1 boundaries below.
+
 Later increment: [rebuildable conversation projection](conversation-projection-v1.md)
 now writes versioned conversation facts into the same event table. Session rows are
 rebuildable from those facts plus an explicitly imported legacy baseline. The

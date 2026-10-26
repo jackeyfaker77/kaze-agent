@@ -36,7 +36,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("bridge", "desktop", "host", "host-status", "host-stop", "conversation-rebuild", "setup", "init"),
+        choices=("bridge", "desktop", "host", "host-status", "host-stop", "conversation-rebuild", "execution-rebuild", "setup", "init"),
         help="运行命令；desktop 是 bridge 的兼容别名",
     )
     parser.add_argument("--config", default="config.toml", help="配置文件路径")
@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     config_path = str(args.config)
     workspace = args.workspace
 
-    if args.command == 'conversation-rebuild':
+    if args.command in {'conversation-rebuild', 'execution-rebuild'}:
         from bootstrap.host_state import WorkspaceOwner
         from session.store import SessionStore
         target = (workspace or resolve_default_workspace()).resolve()
@@ -151,6 +151,14 @@ def main(argv: list[str] | None = None) -> int:
             logger.error('%s', exc)
             return 2
         try:
+            if args.command == 'execution-rebuild':
+                from core.execution.journal import ExecutionJournal
+                journal = ExecutionJournal(target)
+                try:
+                    print(json.dumps({'rebuilt': True, 'executions': journal._conn.execute('SELECT COUNT(*) FROM executions').fetchone()[0]}))
+                finally:
+                    journal.close()
+                return 0
             store = SessionStore(target / 'sessions.db')
             try:
                 store.rebuild_projection()

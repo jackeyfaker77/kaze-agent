@@ -2,13 +2,13 @@ export type Message = { id?: string; session_key?: string; seq?: number; role: s
 export type Session = { session_key: string; title: string; messages: Message[] };
 export type Entry = { key: string; metadata?: { title?: string }; updated_at?: string; message_count: number };
 export class BridgeRpcError extends Error {
-  constructor(message: string, readonly code: string) { super(message); }
+  constructor(message: string, readonly code: string, readonly details?: Record<string, unknown>) { super(message); }
 }
 export async function rpc<T>(method: string, payload: Record<string, unknown> = {}): Promise<T> {
   // [消息链路 2/6] miraDesktop.invoke 经 preload 进入 Electron 主进程的
   // apps/desktop/src/bridge/ipc.ts → ipcMain.handle("desktop:invoke")。
   const result = await window.miraDesktop.invoke({ method, payload });
-  if (result.error) throw new BridgeRpcError(result.error.message, result.error.code);
+  if (result.error) throw new BridgeRpcError(result.error.message, result.error.code, result.error.details);
   return result.payload as T;
 }
 export const newDraftKey = () => `desktop:${crypto.randomUUID().replaceAll("-", "")}`;
