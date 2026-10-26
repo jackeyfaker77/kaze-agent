@@ -5,6 +5,7 @@ from datetime import datetime
 from contextvars import ContextVar
 
 from bus.durable import TransportStore, Outbox
+from bus.transport_review import inbound_account
 from bus.events import InboundMessage
 
 inbound_job: ContextVar[str | None] = ContextVar('inbound_job', default=None)
@@ -54,10 +55,15 @@ class MessageBus:
                 rows = self.transport.pending('inbound')
                 if rows:
                     row = rows[0]
+                    account = inbound_account(row)
+                    if account is not None and (self.outbox is None or account != self.outbox.accounts.get(row['payload'].get('channel'))):
+                        self.transport.state(row['id'], 'needs_review', error='Channel account changed')
+                        continue
                     payload = dict(row['payload'])
                     payload['timestamp'] = datetime.fromisoformat(payload['timestamp'])
                     msg = InboundMessage(**payload)
                     self.transport.attempt(row['id'])
+                    self.transport.active.add(row['id'])
                     await self.chat_lane.mark_passive_pending(msg.channel, msg.chat_id)
                     return msg
             try:
@@ -85,9 +91,12 @@ class MessageBus:
                 'SELECT 1 FROM jobs WHERE id=?', ('reply:'+key,),
             ).fetchone() is None:
                 state = 'pending'  # Completed execution still needs its durable reply intent.
-            if state == 'pending' and self.transport.get(key)['attempts'] >= 5:
+            if record:
+                self.transport.link_execution(key, record['turn_id'])
+            if state == 'pending' and self.transport.get(key)['attempts'] >= self.transport.get(key)['attempt_limit']:
                 state = 'failed'
             self.transport.state(key, state, delay=2)
+            self.transport.active.discard(key)
         await self.chat_lane.mark_passive_done(msg.channel, msg.chat_id)
 
     def subscribe_outbound(

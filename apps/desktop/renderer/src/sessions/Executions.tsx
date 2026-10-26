@@ -11,7 +11,7 @@ export type Execution = {
 type Fact = { seq: number; kind: string; created_at: string; payload: unknown };
 const labels: Record<string, string> = { failed: "失败", interrupted: "已中断", needs_review: "待核对", accepted: "已接纳", running: "执行中", completed: "已完成" };
 
-export function Executions({ sessionKey }: { sessionKey: string }) {
+export function Executions({ sessionKey, initialTurnId = "", onQueue }: { sessionKey: string; initialTurnId?: string; onQueue?: (id: string) => void }) {
   const [status, setStatus] = useState("attention");
   const [rows, setRows] = useState<Execution[]>([]);
   const [cursor, setCursor] = useState(0);
@@ -35,11 +35,11 @@ export function Executions({ sessionKey }: { sessionKey: string }) {
     ++requests.current.selection;
     setLoading(true); setError(""); setRows([]); setDetail(null); setEvents([]); setCursor(0); setMore(false);
     void rpc<{ executions: Execution[]; next_cursor: number }>("executions.list", { session_key: sessionKey, status, limit: 25 })
-      .then(data => { if (requests.current.generation === current) { setRows(data.executions); setCursor(data.next_cursor); setMore(data.executions.length === 25); } })
+      .then(data => { if (requests.current.generation === current) { setRows(data.executions); setCursor(data.next_cursor); setMore(data.executions.length === 25); if (initialTurnId) void open(initialTurnId); } })
       .catch(e => { if (requests.current.generation === current) setError(String(e)); })
       .finally(() => { if (requests.current.generation === current) setLoading(false); });
     return () => { ++counters.generation; ++counters.selection; };
-  }, [sessionKey, status, refresh]);
+  }, [sessionKey, status, refresh, initialTurnId]);
 
   async function loadMore() {
     const current = requests.current.generation;
@@ -95,6 +95,7 @@ export function Executions({ sessionKey }: { sessionKey: string }) {
       {more && <button disabled={loading || busy} onClick={() => void loadMore()}>加载更多执行</button>}
     </div>{detail && <article className="execution-detail" aria-label="执行详情">
       <h3>{labels[detail.status] ?? detail.status} · {detail.status}</h3><p className="mono">{detail.turn_id}</p>
+      {onQueue && <button disabled={busy} onClick={() => onQueue(detail.turn_id)}>查看关联收发队列</button>}
       {detail.error_type && <p>错误类型：{detail.error_type}</p>}
       {detail.retry_of && <button disabled={busy} onClick={() => void open(detail.retry_of!)}>查看原执行</button>}
       {detail.retry_turn_id && <button disabled={busy} onClick={() => void open(detail.retry_turn_id!)}>查看关联重试</button>}

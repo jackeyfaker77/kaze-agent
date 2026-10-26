@@ -32,6 +32,8 @@ Linux 中将 `.venv/Scripts/` 换为 `.venv/bin/`。Pyright 测试配置仍保�
 | 真实同步/后台 spawn 安全停止、写入后取消、完成回复丢失重放、撤销许可与接纳重试竞争 | `backend/test_execution_followup_regressions.py` |
 | 后台子任务写入后硬退出、已完成回复丢失后的新进程恢复与原请求重放 | `backend/test_execution_process_recovery.py`、`e2e/execution_recovery_crash.py` |
 | 认证远程执行处置、重试中断线与重复请求去重 | `backend/bootstrap/test_remote_execution_disposition.py` |
+| 队列分段核对、原回执保留、过期/重复操作、账户隔离、旧库升级和处置提交前后硬退出 | `backend/test_transport_review.py`、`e2e/transport_review_crash.py` |
+| 双远程客户端队列处置竞争、断线后重复提交 | `backend/bootstrap/test_remote_transport_review.py` |
 | 渠道白名单、传输路由和送达状态 | `backend/core/channels/test_hub.py`、`backend/infra/channels/test_clients.py` |
 | 心跳配置与忙碌状态、跳过无动作回复 | `backend/bootstrap/test_proactive*.py` |
 | 全局桌宠导入、动作校验与并发限流 | `backend/core/pets/test_packages.py`、`backend/plugins/desktop_pet/test_tool.py` |
@@ -52,3 +54,8 @@ node apps/desktop/node_modules/electron/cli.js tests/e2e/execution_workbench.cjs
 同时验证待核对错误不恢复已提交输入或附件、显示执行编号，以及更换请求标识仍不能重发。
 后续回归还覆盖撤销未使用的重试许可，以及连接退出/超时丢失完成回复后复用原请求标识。
 截图和检查结果位于 `.tmp/execution-workbench-*`，不修改生产工作区或配置。
+
+收发队列界面回归：`node apps/desktop/node_modules/electron/cli.js tests/e2e/transport_workbench.cjs`。
+隐藏离屏窗口使用真实桥接与隔离 Python 后端，验证未知分段逐项确认、成功回执保留、
+重新排队、撤回未执行的重试、关联执行跳转和窄窗口布局。报告与截图在
+`.tmp/transport-workbench*`，不会发送真实 Telegram 消息或调用真实模型。

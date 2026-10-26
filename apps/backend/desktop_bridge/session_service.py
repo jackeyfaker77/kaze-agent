@@ -274,12 +274,35 @@ class DesktopBridgeService:
                                   error=BridgeError(code="request_failed", message=str(exc)))
 
     async def _dispatch(self, method, payload, request_id, *, chat_admission: Callable[[], AbstractAsyncContextManager[None]] = nullcontext, retry_request=None):
+        if method in {'transport.list', 'transport.get', 'transport.review'}:
+            store = self.runtime.bus.transport
+            if store is None:
+                raise ValueError('持久收发队列未启用')
+            journal = self.sessions.execution_journal
+            if method == 'transport.list':
+                return store.list_jobs(journal=journal, session_key=str(payload.get('session_key') or ''),
+                    turn_id=str(payload.get('turn_id') or ''), status=payload.get('status', 'attention'),
+                    before=payload.get('before', 0), limit=payload.get('limit', 25))
+            box = self.runtime.bus.outbox
+            options = dict(journal=journal, accounts=box.accounts if box else {}, handlers=box.handlers if box else {})
+            key = str(payload.get('job_id') or '')
+            if method == 'transport.get':
+                return store.detail(key, **options)
+            return store.review_job(key, expected_revision=payload.get('expected_revision'),
+                action_id=payload.get('action_id'), decision=payload.get('decision'), note=payload.get('note'),
+                absent_parts=payload.get('absent_parts'), **options)
         if method == "execution.review":
+            store = getattr(self.runtime.bus, 'transport', None)
+            if store is not None and payload.get('decision') == 'no_effect':
+                store.require_execution_retry_clearance(str(payload.get('turn_id') or ''), self.sessions.execution_journal)
             return self.sessions.execution_journal.review(str(payload.get("turn_id") or ""),
                 expected_seq=payload.get("expected_seq"), action_id=payload.get("action_id"),
                 decision=payload.get("decision"), note=payload.get("note"))
         if method == "execution.retry":
             original = self.sessions.execution_journal.get(str(payload.get("turn_id") or ""))
+            store = getattr(self.runtime.bus, 'transport', None)
+            if store is not None and not original['retry_turn_id']:
+                store.require_execution_retry_clearance(original['turn_id'], self.sessions.execution_journal)
             if original["source"] != "desktop" or original["input"].get("channel") != "desktop":
                 raise ValueError("此来源由原渠道队列管理，不能从桌面重发")
             saved = original["input"]

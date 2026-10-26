@@ -10,6 +10,7 @@
 - [运行协调](runtime-coordination.md)：会话锁、忙状态、ChatLane 与发送后历史提交
 - [可重建会话投影](architecture/conversation-projection-v1.md)：Runtime Event Log、旧历史基线、幂等重放与崩溃恢复
 - [可重建执行状态与处置](architecture/execution-projection-v1.md)：执行事实投影、失败与中断查看、副作用核对及显式安全重试
+- [收发队列关联与处置](architecture/transport-review-v1.md)：队列与执行双向查看、分段核对、关闭与受限重新排队
 - [主动推送指南](_handbook/proactive-guide.md)：Default / Wake、源配置、规则和投递
 - [Feed 内容源](integrations/feed.md)：订阅采集、正文缓存、版本确认和投递协调
 - [Windows 设备上下文](integrations/device.md)：锁屏、空闲、前台应用、电源状态与有效期

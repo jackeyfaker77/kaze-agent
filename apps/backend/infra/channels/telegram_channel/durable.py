@@ -38,6 +38,7 @@ class PersistentUpdateQueue(asyncio.Queue):
 
         if (
             row["state"] == "pending"
+            and not row['review_closed']
             and row["due"] <= time.time()
             and key not in self.queued
         ):
@@ -56,6 +57,10 @@ class _DurableMixin:
     async def _on_durable_update(self, update, context):
         queue = self._durable_updates
         raw_key = queue.key(update)
+        if queue.store.get(raw_key)['review_closed']:
+            queue.queued.discard(raw_key)
+            return
+        queue.store.active.add(raw_key)
         msg = update.effective_message
         identity = (
             f"in:{queue.namespace}:{msg.chat_id}:{msg.message_id}" if msg else raw_key
@@ -91,6 +96,7 @@ class _DurableMixin:
                 delay=min(2 ** row["attempts"], 60),
             )
         finally:
+            queue.store.active.discard(raw_key)
             current_update.reset(token)
             queue.queued.discard(raw_key)
 

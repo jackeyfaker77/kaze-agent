@@ -17,6 +17,10 @@ async def record_delivery(journal: ExecutionJournal | None, session_key: str, pa
         return await operation()
     effect_id = uuid4().hex
     try:
+        from bus.durable import delivery_scope
+        queued = delivery_scope.get()
+        if queued is not None:
+            queued.queue.store.link_execution(queued.key, scope.turn_id)
         scope.record("delivery.dispatched", {**payload, "effect_id": effect_id})
         message_id, error = await operation()
         scope.record("delivery.returned", {"effect_id": effect_id,
