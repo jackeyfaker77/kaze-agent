@@ -259,6 +259,8 @@ class ProactiveFlowRuntime:
                 )
             )
             gate = self._gate_check(ctx)
+            from core.execution.proactive import observe
+            observe('gate', blocked=gate.blocked, reason=gate.reason)
             if gate.blocked:
                 logger.info(
                     diagnostic_line(
@@ -366,6 +368,14 @@ class ProactiveFlowRuntime:
             return
         ctx = state.ctx
         if state.feed.messages and ctx.terminal_action is None:
+            from core.execution.proactive import claim_candidates
+            gw = state.gateway
+            if gw is not None and not claim_candidates('default', [*gw.alerts, *gw.content_meta]):
+                ctx.terminal_action = 'skip'
+                ctx.skip_reason = 'candidate_already_admitted'
+                # No ACK or other callbacks for an attempt owned by another tick.
+                state.finished = True
+                return
             with diagnostic_context(phase="agent_loop"):
                 await self._judge_evaluate(ctx, state.feed.messages)
 
@@ -499,6 +509,9 @@ class ProactiveFlowRuntime:
             content_limit=gateway_deps.content_limit,
         )
         gw_result = await gw.run()
+        from core.execution.proactive import available_candidates
+        gw_result.alerts = available_candidates('default', gw_result.alerts)
+        gw_result.content_meta = available_candidates('default', gw_result.content_meta)
         self._last_gateway_result = gw_result
         _log_content_candidates(gw_result)
         logger.info(

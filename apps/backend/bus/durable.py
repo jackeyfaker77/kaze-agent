@@ -170,6 +170,8 @@ class Outbox:
         self.tasks: set[asyncio.Task] = set()
 
     def enqueue(self, kind: str, payload: dict, key: str | None = None) -> str:
+        from core.execution.proactive import check_proactive, observe
+        check_proactive()
         key = key or uuid4().hex
         account = self.accounts.get(payload.get("channel", ""))
         if account:
@@ -177,6 +179,7 @@ class Outbox:
         from core.execution.scope import active_execution
         scope = active_execution()
         self.store.put(key, kind, payload, turn_id=scope.turn_id if scope is not None else None)
+        observe("queue.enqueued", job_id=key, kind=kind)
         return key
 
     async def deliver(self, key: str):

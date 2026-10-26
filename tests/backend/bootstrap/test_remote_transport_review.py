@@ -79,3 +79,34 @@ async def test_execution_clearance_requires_queue_closed_and_no_successful_part(
         assert not remote.calls
     finally:
         await socket.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_proactive_facts_and_queue_links_share_local_projection(remote):
+    from core.execution.proactive import run_proactive_recorded, observe, stage
+    runtime = remote.server.service.runtime
+    journal, box = runtime.session_manager.execution_journal, runtime.bus.outbox
+    async def operation():
+        with stage('resolve'):
+            observe('resolve', decision='reply', evidence=['calendar:one'])
+        box.enqueue('push:fixture', {'channel': 'fixture', 'chat_id': '7'}, 'proactive-linked')
+        raise ValueError('stopped before delivery')
+    with pytest.raises(ValueError):
+        await run_proactive_recorded(journal, 'telegram:7', 'tick', {}, operation)
+    row = journal.find('telegram:7', 'proactive', 'tick')
+    socket = await authenticate(remote.url)
+    try:
+        detail = (await rpc(socket, 'execution.get', {'turn_id': row['turn_id']}))['payload']
+        assert detail['proactive'] == row['proactive'] and not detail['retry']['allowed']
+        jobs = (await rpc(socket, 'transport.list', {'turn_id': row['turn_id'], 'status': ''}))['payload']['jobs']
+        assert [job['id'] for job in jobs] == ['proactive-linked']
+        event_page = (await rpc(socket, 'execution.events', {'turn_id': row['turn_id']}))['payload']
+        assert any(e['kind'] == 'proactive.observed' for e in event_page['events'])
+        review = dict(turn_id=row['turn_id'], expected_seq=row['last_seq'], action_id='proactive-close',
+                      decision='close', note='verified; queue remains separately owned')
+        assert not (await rpc(socket, 'execution.review', review)).get('error')
+        assert not (await rpc(socket, 'execution.review', review)).get('error')
+        assert runtime.bus.transport.get('proactive-linked')['state'] == 'pending'
+        assert not remote.calls
+    finally:
+        await socket.close()

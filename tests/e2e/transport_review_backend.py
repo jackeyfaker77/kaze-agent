@@ -20,8 +20,13 @@ async def main():
     runtime.provider.chat = no_model
     store, box = runtime.bus.transport, runtime.bus.outbox
     journal = runtime.session_manager.execution_journal
-    row, _ = journal.admit('desktop:queue-ui', 'desktop', 'queue-ui', {})
+    proactive = '--proactive' in sys.argv
+    row, _ = journal.admit('desktop:queue-ui', 'proactive' if proactive else 'desktop', 'queue-ui', {})
     journal.start(row['turn_id'])
+    if proactive:
+        journal.append(row['turn_id'], 'proactive.stage.started', {'stage_id': 'judge', 'name': 'Judge'})
+        journal.append(row['turn_id'], 'proactive.observed', {'stage': 'resolve', 'detail': {'decision': 'reply', 'evidence': ['calendar:one']}})
+        journal.append(row['turn_id'], 'proactive.stage.completed', {'stage_id': 'judge'})
     journal.append(row['turn_id'], 'delivery.dispatched', {'effect_id': 'uncertain'})
     journal.finish(row['turn_id'], 'failed')
     box.accounts['fixture'] = 'original'

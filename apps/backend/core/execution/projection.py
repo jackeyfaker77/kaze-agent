@@ -43,6 +43,11 @@ def project_event(previous: dict | None, event: dict, root_id: str) -> dict:
     elif kind in {"run.ended", "run.recovered"}:
         require(state["status"] in ACTIVE and payload.get("status") in TERMINAL)
         require(not unresolved(state) or payload["status"] == "needs_review")
+        if payload['status'] == 'completed' and 'proactive' in state:
+            require(all(s['status'] == 'completed' for s in state['proactive']['stages'].values()),
+                    'Completed proactive attempt has unfinished stages')
+            require(all(c['status'] == 'returned' for c in state['proactive']['models'].values()),
+                    'Completed proactive attempt has unfinished model calls')
         state.update(status=payload["status"], result=payload.get("result"))
     elif kind == "execution.reviewed":
         require(state["status"] in TERMINAL and state["status"] != "completed")
@@ -79,6 +84,50 @@ def project_event(previous: dict | None, event: dict, root_id: str) -> dict:
         # Adapter proof of rejection is different from a generic tool return.
         if kind == "delivery.returned" and payload["certainty"] == "confirmed" and payload.get("ok") is False:
             effect["retry_safe"] = True
+    elif kind.startswith("proactive."):
+        require(state["source"] == "proactive" and state["status"] == "running")
+        proactive = state.setdefault("proactive", {"stages": {}, "models": {}, "observations": []})
+        if kind == "proactive.candidates.claimed":
+            require(isinstance(payload.get("candidates"), list) and bool(payload["candidates"]))
+            require(all(isinstance(c, str) and bool(c) for c in payload["candidates"]))
+            require(len(payload['candidates']) == len(set(payload['candidates'])))
+            proactive.setdefault("candidates", []).extend(payload["candidates"])
+        elif kind == "proactive.candidates.released":
+            require(payload.get('reason') == 'user_activity_before_delivery')
+            candidates = payload.get('candidates')
+            require(isinstance(candidates, list) and bool(candidates))
+            require(len(candidates) == len(set(candidates)))
+            require(all(c in proactive.get('candidates', []) and
+                        c not in proactive.get('released_candidates', []) for c in candidates))
+            # Only a known pre-dispatch gate can release claims. A queue intent or
+            # physical delivery may already be running independently of this turn.
+            require(not any(e['kind'] == 'delivery' for e in state['effects'].values()))
+            require(not any(o['stage'] in {'queue.enqueued', 'queue.linked'}
+                            for o in proactive['observations']))
+            proactive.setdefault('released_candidates', []).extend(candidates)
+        elif kind == "proactive.stage.started":
+            key = payload.get("stage_id")
+            require(isinstance(key, str) and bool(key) and key not in proactive["stages"])
+            require(isinstance(payload.get("name"), str) and bool(payload["name"]))
+            proactive["stages"][key] = {**payload, "status": "started", "start_seq": event["seq"]}
+        elif kind == "proactive.stage.completed":
+            step = proactive["stages"].get(payload.get("stage_id"))
+            require(step is not None and step["status"] == "started")
+            step.update(status="completed", end_seq=event["seq"])
+        elif kind == "proactive.model.requested":
+            key = payload.get("call_id")
+            require(isinstance(key, str) and bool(key) and key not in proactive["models"])
+            proactive["models"][key] = {**payload, "status": "requested", "start_seq": event["seq"]}
+        elif kind == "proactive.model.returned":
+            call = proactive["models"].get(payload.get("call_id"))
+            require(call is not None and call["status"] == "requested")
+            require(("response" in payload) != ("error_type" in payload))
+            call.update(status="returned", outcome=payload, end_seq=event["seq"])
+        elif kind == "proactive.observed":
+            require(isinstance(payload.get("stage"), str) and isinstance(payload.get("detail"), dict))
+            proactive["observations"].append({**payload, "seq": event["seq"]})
+        else:
+            raise ExecutionProjectionError(f"Unsupported proactive event kind: {kind}")
     elif kind in {"reply.delta", "messages.committed", "run.error"}:
         require(state["status"] == "running")
         if kind == "run.error":

@@ -41,6 +41,24 @@ class TurnOrchestrator:
         self._delivery_scope = deps.delivery_scope
 
     async def handle_proactive_turn(
+        self, *, result: TurnResult, session_key: str, channel: str, chat_id: str,
+    ) -> bool:
+        from core.execution.proactive import observe, stage, proactive_scope
+        observe("resolve", decision=result.decision, evidence=list(result.evidence),
+                content=result.outbound.content if result.outbound else None,
+                media=list(result.outbound.media or []) if result.outbound else [],
+                channel=channel, chat_id=chat_id,
+                trace=result.trace.extra if result.trace else {})
+        with stage("deliver"):
+            sent = await self._handle_proactive_turn(result=result, session_key=session_key,
+                                                    channel=channel, chat_id=chat_id)
+            observe("deliver", sent=sent, decision=result.decision)
+            scope = proactive_scope()
+            if scope is not None and result.decision == "reply" and not sent:
+                scope.failed = True
+            return sent
+
+    async def _handle_proactive_turn(
         self,
         *,
         result: TurnResult,
@@ -69,6 +87,9 @@ class TurnOrchestrator:
             source_metadata['delivery_id'] = 'proactive:' + hashlib.sha256(json.dumps([channel, chat_id, session_key, sorted(result.evidence)]).encode()).hexdigest()
         else:
             source_metadata["delivery_id"] = uuid4().hex
+        from core.execution.proactive import observe
+        observe("delivery.intent", delivery_id=source_metadata["delivery_id"],
+                channel=channel, chat_id=chat_id, evidence=list(result.evidence))
         # Persist only the data needed to reconstruct conversation history, never callbacks.
         source_metadata['_delivery_projection'] = json.dumps({
             'evidence': result.evidence,
@@ -210,11 +231,22 @@ class TurnOrchestrator:
         await self._run_effects(result.side_effects)
 
     async def _run_effects(self, effects: list[Any]) -> None:
+        from core.execution.proactive import proactive_scope, check_proactive
+        from core.execution.contracts import JournalWriteError, ExecutionNeedsReview
         for effect in effects:
             try:
-                maybe = effect.run()
-                if inspect.isawaitable(maybe):
-                    await maybe
+                async def run():
+                    maybe = effect.run()
+                    return await maybe if inspect.isawaitable(maybe) else maybe
+                scope = proactive_scope()
+                if scope is not None:
+                    await scope.effect("tool", {"name": type(effect).__name__, "arguments": {},
+                                               "retry_policy": "unknown"}, run)
+                else:
+                    await run()
+                check_proactive()
+            except (JournalWriteError, ExecutionNeedsReview):
+                raise
             except Exception as e:
                 logger.warning("turn side effect failed: %s", e)
 

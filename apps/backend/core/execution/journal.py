@@ -45,10 +45,15 @@ class ExecutionJournal:
                     epoch TEXT NOT NULL, session_key TEXT NOT NULL, source TEXT NOT NULL,
                     request_key TEXT NOT NULL, input TEXT NOT NULL, status TEXT NOT NULL,
                     result TEXT, UNIQUE(source, session_key, request_key));
-                CREATE UNIQUE INDEX IF NOT EXISTS one_active_execution ON executions(session_key)
-                    WHERE status IN ('accepted', 'running');
+                CREATE UNIQUE INDEX IF NOT EXISTS one_active_ordinary ON executions(session_key)
+                    WHERE status IN ('accepted', 'running') AND source!='proactive';
+                DROP INDEX IF EXISTS one_active_execution;
+                CREATE UNIQUE INDEX IF NOT EXISTS one_active_proactive ON executions(session_key)
+                    WHERE status IN ('accepted', 'running') AND source='proactive';
                 CREATE TABLE IF NOT EXISTS execution_views (turn_id TEXT PRIMARY KEY, state TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS execution_checkpoint (id INTEGER PRIMARY KEY CHECK(id=1), seq INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS proactive_claims (session_key TEXT, candidate TEXT, turn_id TEXT,
+                    PRIMARY KEY(session_key,candidate));
             """)
             with self._transaction():
                 self._conn.execute("INSERT OR IGNORE INTO identity VALUES (1, ?, ?)", (uuid4().hex, CONTRACT_VERSION))
@@ -101,6 +106,23 @@ class ExecutionJournal:
                                       {**dict(event), "payload": json.loads(event["payload"])}, self.root_id)
                 self._conn.execute("INSERT INTO execution_views VALUES (?,?) ON CONFLICT(turn_id) DO UPDATE SET state=excluded.state",
                                    (state["turn_id"], encode(state)))
+                if event['kind'] == 'proactive.candidates.claimed':
+                    for candidate in json.loads(event['payload'])['candidates']:
+                        prior = self._conn.execute('SELECT turn_id FROM proactive_claims WHERE session_key=? AND candidate=?',
+                                                   (state['session_key'], candidate)).fetchone()
+                        if prior:
+                            owner = self._state(prior['turn_id'])
+                            if not (owner['status'] in TERMINAL and owner['status'] != 'completed' and
+                                    owner['review'] and owner['review']['decision'] == 'close'):
+                                raise ExecutionProjectionError('Candidate already belongs to an unclosed proactive attempt')
+                        self._conn.execute('INSERT INTO proactive_claims VALUES (?,?,?) ON CONFLICT(session_key,candidate) DO UPDATE SET turn_id=excluded.turn_id',
+                                           (state['session_key'], candidate, state['turn_id']))
+                elif event['kind'] == 'proactive.candidates.released':
+                    for candidate in json.loads(event['payload'])['candidates']:
+                        deleted = self._conn.execute('DELETE FROM proactive_claims WHERE session_key=? AND candidate=? AND turn_id=?',
+                                                     (state['session_key'], candidate, state['turn_id']))
+                        if deleted.rowcount != 1:
+                            raise ExecutionProjectionError('Released candidate does not belong to this attempt')
                 self._conn.execute("""INSERT INTO executions(rowid,turn_id,run_id,epoch,session_key,source,request_key,input,status,result)
                     VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(turn_id) DO UPDATE SET status=excluded.status,result=excluded.result""",
                     (state["cursor"], state["turn_id"], state["run_id"], state["epoch"], state["session_key"],
@@ -118,6 +140,7 @@ class ExecutionJournal:
                 self._conn.execute("DELETE FROM executions")
                 self._conn.execute("DELETE FROM execution_views")
                 self._conn.execute("DELETE FROM execution_checkpoint")
+                self._conn.execute("DELETE FROM proactive_claims")
                 self._sync_projection()
                 # Retry links are atomic facts; a missing successor is corruption.
                 for row in self._conn.execute("SELECT state FROM execution_views"):
@@ -157,7 +180,7 @@ class ExecutionJournal:
                         raise error("同一输入已有外部操作，请在工作台核对执行记录并处置；请勿直接重发", state)
             identity = ExecutionIdentity(self.root_id, self.epoch, session_key, source, request_key, uuid4().hex, uuid4().hex)
             row = asdict(identity)
-            if self._conn.execute("SELECT 1 FROM executions WHERE session_key=? AND status IN ('accepted','running')", (session_key,)).fetchone():
+            if self._conn.execute("SELECT 1 FROM executions WHERE session_key=? AND status IN ('accepted','running') AND (source='proactive')=?", (session_key, source == 'proactive')).fetchone():
                 raise ExecutionConflict("此会话已有接纳的执行，请查询其状态")
             self._event(row, "request.accepted", {"identity": row, "input": payload})
             return {**row, "input": payload, "status": "accepted", "result": None}, True
@@ -175,8 +198,53 @@ class ExecutionJournal:
                 raise ExecutionConflict("Execution cannot start")
             self._event(row, "run.started", {})
 
+    def claim_proactive(self, turn_id: str, candidates: list[str]) -> bool:
+        """Claim canonical candidates before model work; rebuilt entirely from facts.
+
+        A failed/interrupted attempt requires explicit close before another tick can
+        evaluate its candidates. Completed candidates stay consumed by this index.
+        """
+        if not candidates or any(not isinstance(c, str) or not c for c in candidates):
+            raise ValueError('Nonempty proactive candidate identities required')
+        with self._transaction():
+            row = self._row(turn_id)
+            if row['source'] != 'proactive' or row['status'] != 'running' or row['epoch'] != self.epoch:
+                raise ExecutionConflict('Proactive attempt is not running')
+            for candidate in candidates:
+                claim = self._conn.execute('SELECT turn_id FROM proactive_claims WHERE session_key=? AND candidate=?',
+                                           (row['session_key'], candidate)).fetchone()
+                if claim:
+                    prior = self._state(claim['turn_id'])
+                    if not (prior['status'] in TERMINAL and prior['status'] != 'completed' and
+                            prior['review'] and prior['review']['decision'] == 'close'):
+                        return False
+            self._event(row, 'proactive.candidates.claimed', {'candidates': sorted(set(candidates))})
+            return True
+
+    def available_proactive_candidates(self, session_key: str, candidates: list[str]) -> list[bool]:
+        with self._transaction():
+            available = []
+            for candidate in candidates:
+                claim = self._conn.execute('SELECT turn_id FROM proactive_claims WHERE session_key=? AND candidate=?',
+                                           (session_key, candidate)).fetchone()
+                prior = self._state(claim['turn_id']) if claim else None
+                available.append(prior is None or bool(prior['status'] in TERMINAL and
+                    prior['status'] != 'completed' and prior['review'] and prior['review']['decision'] == 'close'))
+            return available
+
+    def proactive_blocker(self, session_key: str) -> dict | None:
+        with self._transaction():
+            for row in self._conn.execute("SELECT turn_id FROM executions WHERE session_key=? AND source='proactive' AND status IN ('interrupted','needs_review') ORDER BY rowid", (session_key,)):
+                state = self._state(row['turn_id'])
+                if not (state['review'] and state['review']['decision'] == 'close'):
+                    return public_state(state)
+        return None
+
     def append(self, turn_id: str, kind: str, payload: dict):
-        if kind not in {"tool.dispatched", "tool.returned", "delivery.dispatched", "delivery.returned", "reply.delta", "messages.committed", "run.error"}:
+        if kind not in {"tool.dispatched", "tool.returned", "delivery.dispatched", "delivery.returned", "reply.delta", "messages.committed", "run.error",
+                        "proactive.stage.started", "proactive.stage.completed", "proactive.observed",
+                        "proactive.candidates.released",
+                        "proactive.model.requested", "proactive.model.returned"}:
             raise ValueError("Unknown execution event")
         with self._transaction():
             row = self._row(turn_id)
