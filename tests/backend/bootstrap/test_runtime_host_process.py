@@ -25,7 +25,25 @@ def wait_for(predicate, process, log, timeout=45):
     pytest.fail(log.read_text(encoding="utf-8", errors="replace")[-7000:])
 
 
+def is_ready(workspace, process):
+    # A new process may hold owner.lock before replacing the previous owner's
+    # status.json. Wait for a new owner: Windows venv launchers can have a different PID.
+    status = host_status(workspace)
+    return (status.get("running") and status.get("owner_id")
+            and status["owner_id"] != process._previous_owner_id and status.get("state") == "running")
+
+
+def test_readiness_does_not_accept_previous_process_status(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    status = {"running": True, "state": "running", "owner_id": "old"}
+    monkeypatch.setattr(sys.modules[__name__], "host_status", lambda _: status)
+    assert not is_ready(tmp_path, SimpleNamespace(_previous_owner_id="old"))
+    status["owner_id"] = "new"
+    assert is_ready(tmp_path, SimpleNamespace(_previous_owner_id="old"))
+
+
 def launch(tmp_path, scenario="run", *, production=False):
+    previous_owner = host_status(tmp_path).get("owner_id")
     env = {**os.environ, "PYTHONPATH": str(ROOT / "apps/backend"), "PYTHONIOENCODING": "utf-8"}
     log = tmp_path / f"process-{time.time_ns()}.log"
     args = [str(ROOT / "tests/e2e/runtime_host_backend.py"), str(tmp_path), scenario]
@@ -45,6 +63,7 @@ memory_optimizer_enabled = false
     with log.open("w", encoding="utf-8") as output:
         process = subprocess.Popen([sys.executable, *args], cwd=ROOT, env=env,
                                    stdin=subprocess.DEVNULL, stdout=output, stderr=output)
+    process._previous_owner_id = previous_owner
     return process, log
 
 
@@ -75,7 +94,7 @@ def wire(tmp_path):
 def test_real_cli_survives_closed_stdin_and_stops_without_desktop(tmp_path):
     process, log = launch(tmp_path, production=True)
     try:
-        wait_for(lambda: host_status(tmp_path).get("state") == "running", process, log)
+        wait_for(lambda: is_ready(tmp_path, process), process, log)
         status = host_status(tmp_path)
         assert status["healthy"] and status["mode"] == "host"
         assert status["workers"] == {"agent_loop": True, "bus_dispatch_outbound": True, "scheduler": True, "transport_outbox": True}
@@ -89,7 +108,7 @@ def test_real_cli_survives_closed_stdin_and_stops_without_desktop(tmp_path):
 def test_headless_telegram_and_proactive_delivery_survive_host_restart(tmp_path):
     process, log = launch(tmp_path)
     try:
-        wait_for(lambda: host_status(tmp_path).get("state") == "running", process, log)
+        wait_for(lambda: is_ready(tmp_path, process), process, log)
         first = host_status(tmp_path)
         assert first["healthy"] and first["proactive"] == "running"
         (tmp_path / "inbound.json").write_text("{}")
@@ -106,7 +125,7 @@ def test_headless_telegram_and_proactive_delivery_survive_host_restart(tmp_path)
         before = wire(tmp_path)
         (tmp_path / "inbound.json").unlink()
         process, log = launch(tmp_path)
-        wait_for(lambda: host_status(tmp_path).get("state") == "running", process, log)
+        wait_for(lambda: is_ready(tmp_path, process), process, log)
         wait_for(lambda: sum(r["kind"] == "fetch" for r in wire(tmp_path)) > sum(r["kind"] == "fetch" for r in before), process, log)
         # Let the real polling/scheduler/proactive loops run again with no UI.
         time.sleep(2)
@@ -127,13 +146,13 @@ def test_headless_telegram_and_proactive_delivery_survive_host_restart(tmp_path)
 def test_headless_crash_recovers_execution_without_replaying_input(tmp_path):
     process, log = launch(tmp_path, "crash")
     try:
-        wait_for(lambda: host_status(tmp_path).get("state") == "running", process, log)
+        wait_for(lambda: is_ready(tmp_path, process), process, log)
         (tmp_path / "inbound.json").write_text("{}")
         assert process.wait(timeout=30) == 73
         assert not host_status(tmp_path)["running"]
         (tmp_path / "inbound.json").unlink()
         process, log = launch(tmp_path)
-        wait_for(lambda: host_status(tmp_path).get("state") == "running", process, log)
+        wait_for(lambda: is_ready(tmp_path, process), process, log)
         with sqlite3.connect(tmp_path / "private_runtime/execution/events.sqlite3") as db:
             row = db.execute("SELECT turn_id,status,input FROM executions WHERE session_key='telegram:43'").fetchone()
             assert row and row[1] == "interrupted" and json.loads(row[2])["content"] == "host input"
@@ -148,7 +167,7 @@ def test_production_desktop_bridge_still_answers_health_and_exits_on_eof(tmp_pat
     # Start and stop a host first; its stale stop request must not affect bridge.
     process, log = launch(tmp_path, production=True)
     try:
-        wait_for(lambda: host_status(tmp_path).get("state") == "running", process, log)
+        wait_for(lambda: is_ready(tmp_path, process), process, log)
         stop(process, tmp_path)
     finally:
         stop(process, tmp_path)
@@ -177,7 +196,7 @@ def test_durable_telegram_sdk_and_host_recovery(tmp_path, scenario, expected_sta
             return row[0] if row else None
     process, log = launch(tmp_path, scenario)
     try:
-        wait_for(lambda: host_status(tmp_path).get('state') == 'running', process, log)
+        wait_for(lambda: is_ready(tmp_path, process), process, log)
         (tmp_path/'inbound.json').write_text('{}')
         if scenario == 'queue-retry':
             wait_for(lambda: reply_state() == 'done', process, log)
@@ -186,7 +205,7 @@ def test_durable_telegram_sdk_and_host_recovery(tmp_path, scenario, expected_sta
         else:
             assert process.wait(timeout=30) == 73, log.read_text(encoding='utf-8')[-4000:]
         process, log = launch(tmp_path)
-        wait_for(lambda: host_status(tmp_path).get('state') == 'running', process, log)
+        wait_for(lambda: is_ready(tmp_path, process), process, log)
         wait_for(lambda: reply_state() == expected_state, process, log)
         time.sleep(.5)
         rows = wire(tmp_path)
@@ -205,7 +224,7 @@ def test_durable_telegram_sdk_and_host_recovery(tmp_path, scenario, expected_sta
 def test_service_sigterm_runs_normal_shutdown(tmp_path):
     process, log = launch(tmp_path, production=True)
     try:
-        wait_for(lambda: host_status(tmp_path).get("state") == "running", process, log)
+        wait_for(lambda: is_ready(tmp_path, process), process, log)
         process.send_signal(signal.SIGTERM)
         assert process.wait(timeout=20) == 0
         assert host_status(tmp_path)["state"] == "stopped"

@@ -259,7 +259,7 @@ class ToolRegistry:
         raise_errors: bool = False,
         execution_timeout: float | None = None,
     ) -> str | ToolResult:
-        from core.execution.contracts import JournalWriteError
+        from core.execution.contracts import JournalWriteError, ExecutionNeedsReview
         from core.execution.scope import active_execution
         tool = self._tools.get(name)
         if tool is None:
@@ -286,9 +286,11 @@ class ToolRegistry:
                 return await tool.execute(**merged)
             scope = active_execution()
             if scope is not None:
-                return await scope.effect("tool", {"name": name, "arguments": merged, "context": execution_context}, invoke)
+                return await scope.effect("tool", {"name": name, "arguments": merged, "context": execution_context,
+                                                  "retry_policy": tool.retry_policy}, invoke,
+                                          certainty=tool.execution_certainty)
             return await invoke()
-        except JournalWriteError:
+        except (JournalWriteError, ExecutionNeedsReview):
             raise
         except Exception as e:
             if raise_errors:

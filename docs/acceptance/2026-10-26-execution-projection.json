@@ -1,0 +1,221 @@
+{
+  "date": "2026-10-26",
+  "base_commit": "6df1a67495b92511e8a39edb7346bf5404a9b7d8",
+  "remote_master_verified": true,
+  "initial_worktree_clean": true,
+  "maka_reference_commit": "59f61cf7de665837630518aa204732107dcc2349",
+  "scope": "Rebuildable execution state, guarded linked retry, operator review and execution workbench using the existing event store and local/remote Host",
+  "review_fixes": {
+    "resolved": [
+      "Foreground Shell timeout is an unknown external result and stops the model loop",
+      "Background task_output timeout or lost state uses a trusted unknown result protocol",
+      "Unknown nested delivery propagates to its wrapper; confirmed successful parts still prohibit whole-turn retry",
+      "Typed execution errors preserve execution identity and prevent restoring submitted composer input/attachments",
+      "Fresh identities cannot resubmit the same unresolved unsafe input, including confirmed writes followed by model failure",
+      "Cancelled Shell output pumps reap readers and Windows subprocess transports"
+    ],
+    "targeted_tests": {
+      "passed": 49,
+      "warnings_as_errors": true,
+      "log": ".tmp/execution-review-targeted-v2.log"
+    },
+    "independent_review": {
+      "remaining_major_findings": 0,
+      "regression_tests_passed": 7,
+      "warnings_as_errors": true
+    },
+    "legacy_facts": "Existing confirmed facts are preserved; missing historical nesting is not guessed"
+  },
+  "followup_review_fixes": {
+    "resolved": [
+      "Synchronous subagent tools enter the parent durable scope and propagate safety stops",
+      "Incomplete synchronous subagents with confirmed external effects cannot be repeated by the parent model",
+      "Background subagents have detached execution contexts and independent durable records",
+      "Background cancellation waits for execution and pipe cleanup before publishing the final safety status",
+      "Needs-review background completion bypasses the main model tool loop",
+      "Completed executions with lost replies return their original identity; local exit/timeout resends reuse the pending identity",
+      "Explicit safe errors release pending identities and preserve draft recovery",
+      "Unused no-effect clearance can be revoked with an appended close decision; retry/revoke races have one winner",
+      "Conflicting input under an existing request identity retains the original conflict semantics"
+    ],
+    "targeted_tests": {
+      "passed": 33,
+      "warnings_as_errors": true,
+      "log": ".tmp/execution-followup-targeted-v2.log"
+    },
+    "conflict_and_followup_tests": {
+      "passed": 9,
+      "warnings_as_errors": true,
+      "log": ".tmp/execution-followup-conflict-check.log"
+    },
+    "independent_review": {
+      "confirmed_remaining_findings": 0,
+      "regression_tests_passed": 8,
+      "warnings_as_errors": true
+    },
+    "electron": {
+      "passed": true,
+      "clearance_revocation": true,
+      "lost_completed_response_reuses_identity": true,
+      "log": ".tmp/execution-followup-ui.log"
+    },
+    "background_hard_crash_probe": {
+      "hard_exit_code": 73,
+      "recoveries": 2,
+      "rebuilds": 4,
+      "effect_count": 1,
+      "recovery_model_calls": 0,
+      "parent_status": "completed",
+      "child_status": "needs_review",
+      "report": ".tmp/execution-followup-spawn-crash.json"
+    },
+    "full_suite_triage": "The first full follow-up run found that response-loss classification masked ExecutionConflict for different input under the same request identity. Preserved conflict semantics and verified 9 focused tests. A run that had loaded older code was stopped; the final complete suite passes 2020 tests with one existing Windows skip."
+  },
+  "validation": {
+    "backend_full_suite": {
+      "passed": 2020,
+      "skipped": 1,
+      "exit_code": 0,
+      "seconds": 408.47,
+      "command": ".venv/Scripts/python.exe -m pytest -q -W error tests/",
+      "log": ".tmp/execution-followup-verified.log",
+      "skip_reason": "Existing POSIX SIGTERM test is unavailable on Windows",
+      "scope": "Last complete run before four test-only crash-recovery additions; production code is unchanged by the hardening phase."
+    },
+    "desktop_unit_tests": {
+      "passed": 224,
+      "skipped": 1,
+      "failed": 0,
+      "log": ".tmp/execution-followup-desktop.log"
+    },
+    "package_tests": {
+      "passed": 5,
+      "failed": 0
+    },
+    "static_checks": {
+      "production_pyright": "0 errors, 0 warnings",
+      "test_pyright": "0 errors, 0 warnings",
+      "typescript": "passed",
+      "eslint": "passed without warnings",
+      "desktop_build": "passed",
+      "git_diff_check": "passed"
+    },
+    "hard_exit_boundaries": [
+      "Retry parent link written before transaction commit",
+      "Linked retry accepted before execution starts",
+      "Retry external effect happened before result persistence",
+      "Retry completion committed",
+      "Execution projection replaced before transaction commit",
+      "Human review committed before response"
+    ],
+    "crash_method": "Real child process os._exit(73), followed by repeated recovery and projection rebuild; effect count remains unchanged",
+    "retry_and_review": [
+      "Two journal connections admit the same retry only once",
+      "Failed child admission rolls back the parent retry link",
+      "Stale expected_seq and conflicting action_id are rejected",
+      "Unknown external tool failure stops the model loop and further effects",
+      "Confirmed external effect cannot be marked absent or replayed as a whole turn",
+      "Legacy tools without recorded retry policy remain conservative",
+      "Authenticated remote retry survives disconnect; repeated request reads the completed result"
+    ],
+    "real_history_read_only_copy": {
+      "events": 976,
+      "executions": 9,
+      "terminal_rows_preserved": 9,
+      "rebuilds_identical": 3,
+      "model_tool_or_delivery_invocations": 0,
+      "log": ".tmp/execution-real-history-audit.json"
+    },
+    "local_desktop_bridge": {
+      "passed": true,
+      "log": ".tmp/execution-followup-local-e2e.log"
+    },
+    "remote_runtime_host": {
+      "passed": true,
+      "two_clients": true,
+      "disconnect_and_restart": true,
+      "optional_calendar_mcp_probe": false,
+      "log": ".tmp/execution-followup-remote-e2e.log"
+    },
+    "electron_workbench": {
+      "passed": true,
+      "real_preload_rpc_and_python_backend": true,
+      "hidden_window": true,
+      "isolated_workspace": true,
+      "unsafe_retry_blocked": true,
+      "keyboard_review_input": true,
+      "safe_retry_model_calls": 1,
+      "event_pagination": true,
+      "light_and_dark_visual_review": true,
+      "narrow_layout": true,
+      "uncertain_draft_not_restored": true,
+      "uncertain_attachments_not_restored": true,
+      "fresh_identity_resend_blocked": true,
+      "clearance_revocation": true,
+      "lost_completed_response_reuses_identity": true,
+      "log": ".tmp/execution-followup-ui.log",
+      "report": ".tmp/execution-workbench.json"
+    },
+    "regression_triage": "The first full run exposed an existing startup-test race reading the previous Host's running status. Preserved logs/database confirmed run.recovered and interrupted. The test now requires a new owner_id and a running OS lease; a regression assertion covers stale ownership. A PID-based intermediate test attempt was discarded because Windows venv launchers use a separate child PID. Final Host subset: 9 passed, 1 skipped. Final full suite passes."
+  },
+  "configuration_changed": false,
+  "production_workspace_migrated_or_restarted": false,
+  "server_deployment_performed": false,
+  "boundaries": [
+    "Explicit new attempts use the original input and current session context; this is not model-context continuation",
+    "Rebuild and duplicate replay perform no model/tool/delivery effects",
+    "Whole-turn retry is enabled only for desktop-source executions; external channels retain their existing inbox/outbox ownership",
+    "Operator review is retained separately from physical receipts; unknown effects are never fabricated as successful",
+    "Human no-effect decisions require a stopped executor and verification of target systems and relevant queues",
+    "No generic MCP/shell/write retry safety or external exactly-once guarantee",
+    "Startup currently performs a full execution projection rebuild; no new snapshot/compaction scheme",
+    "All network and model probes use deterministic fixtures; no live Telegram messages or new configuration"
+  ],
+  "recovery_test_hardening": {
+    "production_code_changed": false,
+    "new_crash_scenarios": [
+      "Detached child effect committed before its return, after parent completion",
+      "Completed execution before chat.done/RPC reply delivery",
+      "Clearance revocation written before transaction commit",
+      "Clearance revocation committed before response"
+    ],
+    "permanent_tests": [
+      "tests/backend/test_execution_process_recovery.py",
+      "tests/backend/test_execution_projection.py"
+    ],
+    "subprocess_helpers": [
+      "tests/e2e/execution_recovery_crash.py",
+      "tests/e2e/execution_projection_crash.py"
+    ],
+    "targeted_suite": {
+      "passed": 36,
+      "warnings_as_errors": true,
+      "seconds": 37.47,
+      "log": ".tmp/execution-hardening-targeted.log"
+    },
+    "strengthened_message_assertions": {
+      "passed": 2,
+      "warnings_as_errors": true,
+      "log": ".tmp/execution-hardening-messages.log",
+      "checks": [
+        "Exactly one original user message",
+        "Exactly one final assistant reply",
+        "Nonempty unique message IDs",
+        "Identical messages, execution projections and event count across fresh-process recoveries"
+      ]
+    },
+    "independent_review": {
+      "tests_passed": 28,
+      "message_assertion_gap": "Fixed and confirmed closed by the review agent",
+      "remaining_findings": 0
+    },
+    "test_pyright": "0 errors, 0 warnings",
+    "default_collection": {
+      "tests": 2025,
+      "new_cases": 4,
+      "log": ".tmp/execution-hardening-collection.log"
+    },
+    "full_suite_note": "The prior full run remains 2020 passed / 1 skipped. This test-only phase adds four cases; the affected 36-test suite and final two strengthened cases were run, not a new full suite."
+  },
+  "committed_or_merged_at_validation": false
+}

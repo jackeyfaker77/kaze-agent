@@ -23,9 +23,9 @@ REMOTE_METHODS = frozenset({
     "health", "sessions.list", "session.get", "session.draft", "session.create",
     "session.rename", "session.delete", "messages.list", "chat.send", "chat.cancel",
     "tasks.list", "memory.get", "memory.save", "runtime.catalog", "document.get",
-    "execution.get", "execution.events", "executions.list",
+    "execution.get", "execution.events", "executions.list", "execution.review", "execution.retry",
 })
-MUTATIONS = frozenset({"session.create", "session.rename", "session.delete", "chat.send", "chat.cancel"})
+MUTATIONS = frozenset({"session.create", "session.rename", "session.delete", "chat.send", "chat.cancel", "execution.review", "execution.retry"})
 
 
 def read_remote_token(path: Path) -> str:

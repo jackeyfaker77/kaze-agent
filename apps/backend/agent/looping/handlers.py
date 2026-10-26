@@ -39,6 +39,16 @@ async def process_spawn_completion_event(
     result = event.result.strip()
     exit_reason = event.exit_reason.strip()
     retry_count = event.retry_count
+    if exit_reason == "needs_review":
+        # Safety stops are notifications, not prompts for another tool loop.
+        return await pipeline.post_reasoning(
+            msg=InboundMessage(channel=item.channel, sender="spawn", chat_id=item.chat_id,
+                content=f"[后台任务待核对] {label}", timestamp=item.timestamp, media=[],
+                metadata={**item.metadata, "skip_post_memory": True}),
+            session_key=key,
+            turn_result=TurnRunResult(reply=result or "后台任务存在未知外部结果，请先核对执行记录。", tools_used=[], tool_chain=[]),
+            dispatch_outbound=dispatch_outbound,
+        )
 
     _EXIT_LABELS: dict[str, str] = {
         "completed": "正常完成",

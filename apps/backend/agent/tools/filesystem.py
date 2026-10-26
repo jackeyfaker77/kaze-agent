@@ -265,6 +265,7 @@ def _truncate_numbered_lines(
 
 
 class ReadFileTool(Tool):
+    retry_policy = "read_only"
     """读取文件内容，支持按行分页，超大文件自动截断。"""
 
     def __init__(
@@ -537,6 +538,7 @@ class EditFileTool(Tool):
 
 
 class ListDirTool(Tool):
+    retry_policy = "read_only"
     """列举目录内容。"""
 
     def __init__(self, allowed_dir: Path | None = None):

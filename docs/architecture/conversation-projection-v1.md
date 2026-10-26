@@ -1,5 +1,8 @@
 # 事件事实 → 可重建会话投影
 
+后续增量：[可重建执行状态与人工处置](execution-projection-v1.md) 已补齐终态投影、
+工作台异常执行入口和显式重试边界。本文保留会话投影阶段的范围记录。
+
 本阶段把会话历史的权威来源移到既有
 `private_runtime/execution/events.sqlite3` 的 `events` 表。
 执行事实和会话事实共享 root_id、全局 seq 和追加写保护；`sessions.db`

@@ -68,3 +68,21 @@
 /* Kaze: transparent sitting wind-ferret, shared across light/dark surfaces. */
 .kaze-avatar{display:block;object-fit:contain;flex-shrink:0;user-select:none}
 .chat-message.assistant>small{display:flex;align-items:center;gap:8px}
+
+.execution-browser{padding:16px;overflow:auto;min-height:0}
+.execution-browser .table-toolbar{padding:0;flex-wrap:wrap;gap:12px}
+.execution-browser h2{margin:0;font-size:18px}
+.execution-browser p{line-height:1.7;overflow-wrap:anywhere}
+.execution-columns{display:grid;grid-template-columns:minmax(180px,1fr) minmax(0,2fr);gap:20px}
+.execution-list,.execution-detail{min-width:0}
+.execution-list small{display:block;overflow-wrap:anywhere}
+.execution-browser button,.execution-browser select,.execution-browser textarea{border:1px solid var(--line);border-radius:6px;padding:8px;background:var(--container);color:var(--ink)}
+.execution-browser button{min-height:36px}
+.execution-browser button:disabled{opacity:.5;cursor:not-allowed}
+.execution-browser button[aria-current]{border-color:var(--ink)}
+.execution-detail details{border-bottom:1px solid var(--line);padding:10px 0}
+.execution-detail summary{cursor:pointer;overflow-wrap:anywhere;line-height:1.7}
+.execution-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:400px;overflow:auto}
+.execution-detail form,.execution-detail label{display:grid;gap:8px;margin-top:12px}
+.execution-detail textarea{min-height:100px;width:100%;resize:vertical}
+@media(max-width:900px){.execution-columns{grid-template-columns:minmax(0,1fr)}}

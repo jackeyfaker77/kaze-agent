@@ -38,7 +38,8 @@ async def main():
                 assert retry.error is None and retry.payload["reply"] == "complete answer"
                 assert len(retry.payload["session"]["messages"]) == 2
             else:
-                assert retry.error is not None and "不能自动重跑" in retry.error.message
+                assert retry.error is not None and retry.error.code == "execution_unavailable"
+                assert retry.error.details["turn_id"] == row["turn_id"]
             events = runtime.session_manager.execution_journal.events(row["turn_id"])["events"]
             print(json.dumps({"status": row["status"], "input": row["input"],
                 "deltas": [e["payload"] for e in events if e["kind"] == "reply.delta"]}))

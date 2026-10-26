@@ -18,7 +18,7 @@ const imageGenerationMethods = new Set([
 
 /** Returns the deadline for one bridge request method. */
 export function bridgeRequestTimeoutMs(method: string): number {
-  if (method === "chat.send") return 15 * 60_000;
+  if (method === "chat.send" || method === "execution.retry") return 15 * 60_000;
   if (method === "health") return bridgeTimeoutPolicy.health;
   if (method === "codex.models") return bridgeTimeoutPolicy.modelCatalog;
   if (imageGenerationMethods.has(method)) return bridgeTimeoutPolicy.imageGeneration;

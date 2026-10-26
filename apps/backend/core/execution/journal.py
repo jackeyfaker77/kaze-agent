@@ -15,9 +15,10 @@ import threading
 from typing import Any
 from uuid import uuid4
 
-from .contracts import ACTIVE, CONTRACT_VERSION, TERMINAL, ExecutionConflict, ExecutionIdentity
+from .contracts import ACTIVE, CONTRACT_VERSION, TERMINAL, ExecutionConflict, ExecutionIdentity, ExecutionNeedsReview, ExecutionUnavailable
 from .lease import EpochLease
 from .schema import ensure_event_schema
+from .projection import project_event, public_state, retry_policy, unresolved, unsafe_effects, ExecutionProjectionError
 
 
 def encode(value: Any) -> str:
@@ -46,6 +47,8 @@ class ExecutionJournal:
                     result TEXT, UNIQUE(source, session_key, request_key));
                 CREATE UNIQUE INDEX IF NOT EXISTS one_active_execution ON executions(session_key)
                     WHERE status IN ('accepted', 'running');
+                CREATE TABLE IF NOT EXISTS execution_views (turn_id TEXT PRIMARY KEY, state TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS execution_checkpoint (id INTEGER PRIMARY KEY CHECK(id=1), seq INTEGER NOT NULL);
             """)
             with self._transaction():
                 self._conn.execute("INSERT OR IGNORE INTO identity VALUES (1, ?, ?)", (uuid4().hex, CONTRACT_VERSION))
@@ -53,6 +56,7 @@ class ExecutionJournal:
                 if identity["version"] != CONTRACT_VERSION:
                     raise RuntimeError("Unsupported execution journal version")
                 self.root_id = identity["root_id"]
+            self.rebuild_projection()
             self.recover_abandoned()
         except BaseException:
             self._conn.close()
@@ -65,6 +69,8 @@ class ExecutionJournal:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
+                if hasattr(self, "root_id"):
+                    self._sync_projection()
                 yield
                 self._conn.commit()
             except BaseException:
@@ -76,6 +82,54 @@ class ExecutionJournal:
             "INSERT INTO events(turn_id,run_id,epoch,version,kind,payload,created_at) VALUES (?,?,?,?,?,?,?)",
             (row["turn_id"], row["run_id"], row["epoch"], CONTRACT_VERSION, kind, encode(payload), datetime.now(timezone.utc).isoformat()),
         )
+        self._sync_projection()
+
+    def _state(self, turn_id: str) -> dict:
+        row = self._conn.execute("SELECT state FROM execution_views WHERE turn_id=?", (turn_id,)).fetchone()
+        if row is None:
+            raise KeyError("Unknown execution")
+        return json.loads(row[0])
+
+    def _sync_projection(self):
+        checkpoint = self._conn.execute("SELECT seq FROM execution_checkpoint WHERE id=1").fetchone()
+        after = checkpoint[0] if checkpoint else 0
+        for event in self._conn.execute("SELECT * FROM events WHERE seq>? ORDER BY seq", (after,)).fetchall():
+            # Conversation facts have their own strict projection and identities.
+            if event["kind"] not in {"conversation.baseline", "conversation.changed"}:
+                old = self._conn.execute("SELECT state FROM execution_views WHERE turn_id=?", (event["turn_id"],)).fetchone()
+                state = project_event(json.loads(old[0]) if old else None,
+                                      {**dict(event), "payload": json.loads(event["payload"])}, self.root_id)
+                self._conn.execute("INSERT INTO execution_views VALUES (?,?) ON CONFLICT(turn_id) DO UPDATE SET state=excluded.state",
+                                   (state["turn_id"], encode(state)))
+                self._conn.execute("""INSERT INTO executions(rowid,turn_id,run_id,epoch,session_key,source,request_key,input,status,result)
+                    VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(turn_id) DO UPDATE SET status=excluded.status,result=excluded.result""",
+                    (state["cursor"], state["turn_id"], state["run_id"], state["epoch"], state["session_key"],
+                     state["source"], state["request_key"], encode(state["input"]), state["status"],
+                     encode(state["result"]) if state["result"] is not None else None))
+            after = event["seq"]
+        self._conn.execute("INSERT INTO execution_checkpoint VALUES (1,?) ON CONFLICT(id) DO UPDATE SET seq=excluded.seq", (after,))
+
+    def rebuild_projection(self):
+        # One transaction: interruption leaves either the previous view or the
+        # complete replacement, never a half rebuilt admission index.
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute("DELETE FROM executions")
+                self._conn.execute("DELETE FROM execution_views")
+                self._conn.execute("DELETE FROM execution_checkpoint")
+                self._sync_projection()
+                # Retry links are atomic facts; a missing successor is corruption.
+                for row in self._conn.execute("SELECT state FROM execution_views"):
+                    state = json.loads(row[0])
+                    if state["retry_turn_id"]:
+                        child = self._state(state["retry_turn_id"])
+                        if child["retry_of"] != state["turn_id"]:
+                            raise ExecutionProjectionError("Invalid retry lineage")
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
 
     def admit(self, session_key: str, source: str, request_key: str, payload: dict) -> tuple[dict, bool]:
         if not all(isinstance(s, str) and s.strip() for s in (session_key, source, request_key)):
@@ -88,13 +142,23 @@ class ExecutionJournal:
                 if old["input"] != serialized:
                     raise ExecutionConflict("执行请求标识已用于不同内容")
                 return self._decode(old), False
+            # A fresh transport/request id must not bypass pending human review.
+            # Only the exact same desktop input is held; distinct requests and
+            # external transports retain their existing admission semantics.
+            if source == "desktop":
+                pending = self._conn.execute(
+                    "SELECT turn_id FROM executions WHERE source=? AND session_key=? AND input=? AND status IN ('failed','interrupted','needs_review')",
+                    (source, session_key, serialized),
+                ).fetchall()
+                for candidate in pending:
+                    state = self._state(candidate["turn_id"])
+                    if unsafe_effects(state) and not state["retry_turn_id"] and not (state["review"] and state["review"]["decision"] == "close"):
+                        error = ExecutionNeedsReview if state["status"] == "needs_review" else ExecutionUnavailable
+                        raise error("同一输入已有外部操作，请在工作台核对执行记录并处置；请勿直接重发", state)
             identity = ExecutionIdentity(self.root_id, self.epoch, session_key, source, request_key, uuid4().hex, uuid4().hex)
             row = asdict(identity)
-            try:
-                self._conn.execute("INSERT INTO executions VALUES (?,?,?,?,?,?,?,?,NULL)",
-                    (identity.turn_id, identity.run_id, self.epoch, session_key, source, request_key, serialized, "accepted"))
-            except sqlite3.IntegrityError as exc:
-                raise ExecutionConflict("此会话已有接纳的执行，请查询其状态") from exc
+            if self._conn.execute("SELECT 1 FROM executions WHERE session_key=? AND status IN ('accepted','running')", (session_key,)).fetchone():
+                raise ExecutionConflict("此会话已有接纳的执行，请查询其状态")
             self._event(row, "request.accepted", {"identity": row, "input": payload})
             return {**row, "input": payload, "status": "accepted", "result": None}, True
 
@@ -110,7 +174,6 @@ class ExecutionJournal:
             if row["status"] != "accepted" or row["epoch"] != self.epoch:
                 raise ExecutionConflict("Execution cannot start")
             self._event(row, "run.started", {})
-            self._conn.execute("UPDATE executions SET status='running' WHERE turn_id=?", (turn_id,))
 
     def append(self, turn_id: str, kind: str, payload: dict):
         if kind not in {"tool.dispatched", "tool.returned", "delivery.dispatched", "delivery.returned", "reply.delta", "messages.committed", "run.error"}:
@@ -122,14 +185,7 @@ class ExecutionJournal:
             self._event(row, kind, payload)
 
     def _unresolved(self, turn_id: str) -> bool:
-        pending: set[str] = set()
-        for row in self._conn.execute("SELECT kind,payload FROM events WHERE turn_id=? ORDER BY seq", (turn_id,)):
-            payload = json.loads(row["payload"])
-            if row["kind"].endswith(".dispatched"):
-                pending.add(payload["effect_id"])
-            elif row["kind"].endswith(".returned") and payload.get("certainty") == "confirmed":
-                pending.discard(payload["effect_id"])
-        return bool(pending)
+        return unresolved(self._state(turn_id))
 
     def finish(self, turn_id: str, status: str, result: dict | None = None):
         if status not in TERMINAL:
@@ -140,11 +196,9 @@ class ExecutionJournal:
                 raise ExecutionConflict("Execution already ended or belongs to another epoch")
             status = "needs_review" if self._unresolved(turn_id) else status
             self._event(row, "run.ended", {"status": status, "result": result})
-            self._conn.execute("UPDATE executions SET status=?,result=? WHERE turn_id=?",
-                               (status, encode(result) if result is not None else None, turn_id))
 
     def recover_abandoned(self):
-        with self._lock:
+        with self._transaction():
             epochs = [r[0] for r in self._conn.execute("SELECT DISTINCT epoch FROM executions WHERE status IN ('accepted','running') AND epoch<>?", (self.epoch,))]
         for epoch in epochs:
             try:
@@ -156,7 +210,6 @@ class ExecutionJournal:
                     for row in self._conn.execute("SELECT * FROM executions WHERE epoch=? AND status IN ('accepted','running')", (epoch,)).fetchall():
                         status = "needs_review" if self._unresolved(row["turn_id"]) else "interrupted"
                         self._event(row, "run.recovered", {"status": status, "recovered_by_epoch": self.epoch, "automatic_retry": False})
-                        self._conn.execute("UPDATE executions SET status=? WHERE turn_id=?", (status, row["turn_id"]))
             finally:
                 lease.close()
 
@@ -165,34 +218,79 @@ class ExecutionJournal:
                 "result": json.loads(row["result"]) if row["result"] else None}
 
     def get(self, turn_id: str) -> dict:
-        with self._lock:
-            return self._decode(self._row(turn_id))
+        with self._transaction():
+            return public_state(self._state(turn_id))
 
     def find(self, session_key: str, source: str, request_key: str) -> dict | None:
-        with self._lock:
+        with self._transaction():
             row = self._conn.execute("SELECT * FROM executions WHERE session_key=? AND source=? AND request_key=?",
                                      (session_key, source, request_key)).fetchone()
-            return self._decode(row) if row else None
+            return public_state(self._state(row["turn_id"])) if row else None
 
-    def list_executions(self, session_key: str, *, before: int = 0, limit: int = 50) -> dict:
+    def list_executions(self, session_key: str = "", *, before: int = 0, limit: int = 50, status: str = "") -> dict:
         if type(before) is not int or before < 0 or type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("Invalid execution page")
-        with self._lock:
+        if status and status not in (*ACTIVE, *TERMINAL, "attention"):
+            raise ValueError("Invalid execution status")
+        with self._transaction():
             rows = self._conn.execute(
                 "SELECT rowid AS cursor,turn_id,run_id,epoch,source,request_key,status FROM executions "
-                "WHERE session_key=? AND (?=0 OR rowid<?) ORDER BY rowid DESC LIMIT ?",
-                (session_key, before, before, limit),
+                "WHERE (?='' OR session_key=?) AND (?=0 OR rowid<?) "
+                "AND (?='' OR status=? OR (?='attention' AND status IN ('failed','interrupted','needs_review'))) "
+                "ORDER BY rowid DESC LIMIT ?",
+                (session_key, session_key, before, before, status, status, status, limit),
             ).fetchall()
-            return {"executions": [dict(r) for r in rows], "next_cursor": rows[-1]["cursor"] if rows else before}
+            items = [public_state(self._state(r["turn_id"])) for r in rows]
+            return {"executions": items, "next_cursor": rows[-1]["cursor"] if rows else before}
 
     def events(self, turn_id: str, *, after: int = 0, limit: int = 100) -> dict:
         if type(after) is not int or after < 0 or type(limit) is not int or not 1 <= limit <= 500:
             raise ValueError("Invalid event page")
-        with self._lock:
+        with self._transaction():
             self._row(turn_id)
             rows = self._conn.execute("SELECT * FROM events WHERE turn_id=? AND seq>? ORDER BY seq LIMIT ?", (turn_id, after, limit)).fetchall()
             events = [{**dict(r), "payload": json.loads(r["payload"])} for r in rows]
             return {"events": events, "next_cursor": events[-1]["seq"] if events else after}
+
+    @staticmethod
+    def _check_action(state: dict, expected_seq: int, action_id: str):
+        if not isinstance(action_id, str) or not action_id.strip() or len(action_id) > 200:
+            raise ValueError("处置标识必须是 1–200 字符的非空字符串")
+        if type(expected_seq) is not int or state["last_seq"] != expected_seq:
+            raise ExecutionConflict("执行记录已变化，请刷新后再处置")
+
+    def review(self, turn_id: str, *, expected_seq: int, action_id: str, decision: str, note: str) -> dict:
+        if decision not in {"close", "no_effect"} or not isinstance(note, str) or not note.strip() or len(note) > 4000:
+            raise ValueError("请选择处置结论并填写核对依据（1–4000 字符）")
+        payload = {"action_id": action_id, "decision": decision, "note": note.strip()}
+        with self._transaction():
+            state = self._state(turn_id)
+            old = state["actions"].get(action_id)
+            if old:
+                if old != payload:
+                    raise ExecutionConflict("处置标识已用于不同结论")
+                return public_state(state)
+            self._check_action(state, expected_seq, action_id)
+            self._event(state, "execution.reviewed", payload)
+            return public_state(self._state(turn_id))
+
+    def admit_retry(self, turn_id: str, *, expected_seq: int, action_id: str) -> tuple[dict, bool]:
+        with self._transaction():
+            state = self._state(turn_id)
+            old = state["actions"].get(action_id)
+            if old:
+                if "retry_turn_id" not in old:
+                    raise ExecutionConflict("处置标识已用于不同操作")
+                return public_state(self._state(old["retry_turn_id"])), False
+            self._check_action(state, expected_seq, action_id)
+            policy = retry_policy(state)
+            if not policy["allowed"]:
+                raise ExecutionConflict(policy["reason"])
+            identity = asdict(ExecutionIdentity(self.root_id, self.epoch, state["session_key"], state["source"],
+                              f"retry:{turn_id}", uuid4().hex, uuid4().hex))
+            self._event(state, "execution.retried", {"action_id": action_id, "retry_turn_id": identity["turn_id"]})
+            self._event(identity, "request.accepted", {"identity": identity, "input": state["input"], "retry_of": turn_id})
+            return public_state(self._state(identity["turn_id"])), True
 
     def close(self):
         if self._closed:

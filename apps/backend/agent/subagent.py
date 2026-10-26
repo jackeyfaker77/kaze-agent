@@ -400,7 +400,25 @@ class SubAgent:
             )
 
         async def _invoke(name: str, kwargs: dict[str, Any]):
-            return await tool.execute(**kwargs)
+            from core.execution.scope import active_execution
+            from core.execution.contracts import ExecutionNeedsReview
+            async def operation():
+                return await tool.execute(**kwargs)
+            scope = active_execution()
+            if scope is not None:
+                return await scope.effect("tool", {"name": name, "arguments": kwargs,
+                    "context": {"session_key": session_key, "source": "subagent"},
+                    "retry_policy": tool.retry_policy}, operation, certainty=tool.execution_certainty)
+            try:
+                result = await operation()
+            except Exception as exc:
+                if tool.retry_policy != "read_only":
+                    raise ExecutionNeedsReview("子任务外部操作结果未知，请核对后处置，不能自动重试") from exc
+                raise
+            # Standalone subagents still stop on a trusted unknown result.
+            if tool.retry_policy != "read_only" and tool.execution_certainty(result) != "confirmed":
+                raise ExecutionNeedsReview("子任务外部操作结果未知，请核对后处置，不能自动重试")
+            return result
 
         return await self._tool_executor.execute(
             ToolExecutionRequest(

@@ -62,7 +62,7 @@ class BridgeRequestDispatcher:
     async def _run(self, method: str, operation: RequestOperation) -> None:
         # chat.send registers its cancellation handle before acquiring integration_slot
         # inside the service. Waiting here would make queued requests uncancellable.
-        if method in {"chat.send", "chat.cancel", "voice.turn.cancel", "voice.synthesize.cancel"}:
+        if method in {"chat.send", "execution.retry", "chat.cancel", "voice.turn.cancel", "voice.synthesize.cancel"}:
             await operation()
             return
         if method in _INTEGRATION_METHODS:
