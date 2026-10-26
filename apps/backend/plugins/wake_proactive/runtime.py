@@ -263,7 +263,8 @@ class WakeRuntime:
             for index, event in enumerate(state.alerts):
                 if not await self._validate_alert(state, event):
                     continue
-                await self._decide_event(state, "alert", event, prevalidated=True)
+                if not await self._decide_event(state, "alert", event, prevalidated=True):
+                    continue
                 state.next_interval_seconds = (
                     1 if index < len(state.alerts) - 1 else self._tick_interval_seconds
                 )
@@ -402,6 +403,15 @@ class WakeRuntime:
 
     async def _run_content_tools(self, ctx: WakeContext) -> None:
         """依次完成标题初筛、候选调查和最终内容决策。"""
+        from core.execution.proactive import claim_candidates, available_candidates
+        original_candidates = ctx.content_events
+        ctx.content_events = available_candidates('content', ctx.content_events)
+        if original_candidates and not ctx.content_events:
+            ctx.terminal_action = 'skip'
+            return
+        if not claim_candidates('content', ctx.content_events):
+            ctx.terminal_action = 'skip'
+            return
 
         # 1. 固定本轮规则和对话快照；短期设备上下文在各阶段使用前检查有效期。
         memory_text = self._read_memory()
@@ -673,18 +683,22 @@ class WakeRuntime:
         event: dict[str, Any],
         *,
         prevalidated: bool = False,
-    ) -> None:
+    ) -> bool:
         """让 LLM 独立处理一条 alert 或 context，并提交发送结果。"""
 
         if kind == "context":
             event = current_context_snapshot(event, now=self._clock.now())
             if event.get("available") is False:
                 state.ctx.terminal_action = "skip"
-                return
+                return False
         elif not prevalidated and not await self._validate_alert(state, event):
-            return
+            return False
 
         # 1. 用统一 prompt 渲染单条事件并在调用前落审计
+        from core.execution.proactive import claim_candidates
+        if not claim_candidates(kind, [event]):
+            state.ctx.terminal_action = "skip"
+            return False
         messages = self._build_event_messages(state, kind, event)
         item_id = str(event.get("id") or event.get("event_id") or "")
         self._record_event_observation(state, kind, event, item_id, messages)
@@ -704,7 +718,7 @@ class WakeRuntime:
         )
         decision = execute_event_tool(call.name, call.arguments)
         if kind == "alert" and not await self._validate_alert(state, event):
-            return
+            return True
         await self._commit_event_decision(state, kind, event, item_id, decision)
         logger.info(
             "[wake.event] llm done kind=%s event_id=%s decision=%s message=%r",
@@ -713,6 +727,7 @@ class WakeRuntime:
             decision.decision,
             decision.message[:160],
         )
+        return True
 
     async def _validate_alert(self, state: WakeRunState, event: dict[str, Any]) -> bool:
         status = await mcp_sources.validate_alert_async(

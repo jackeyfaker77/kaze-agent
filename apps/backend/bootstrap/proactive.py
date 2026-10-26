@@ -28,6 +28,7 @@ from agent.turns.outbound import (
     sanitize_user_visible_content,
 )
 from core.common.timekit import utcnow
+from core.execution.proactive import RecordedProactiveProvider, run_proactive_recorded, stage, observe, check_proactive
 from proactive_v2.loop import ProactiveLoop
 from proactive_v2.interaction_embeddings import InteractionEmbeddingCache
 from proactive_v2.legacy_history import classify_legacy_deliveries
@@ -35,6 +36,7 @@ from proactive_v2.mcp_sources import SharedMcpGateway
 from proactive_v2.source_catalog import workspace_sources
 from proactive_v2.source_refresh import SourceRefresher
 from proactive_v2.state import ProactiveStateStore
+from proactive_v2.frame import ProactiveTickResult
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +59,11 @@ class _PushPort:
         )
 
     async def _dispatch_now(self, outbound: OutboundDispatch) -> bool:
+        check_proactive()
         if not self.loop.can_send():
+            from core.execution.proactive import defer_before_delivery
+            defer_before_delivery()
+            observe('deliver.deferred', reason='user_activity_before_delivery')
             return False
         push = self.runtime.push_tool
         if hasattr(push, "send"):
@@ -70,6 +76,11 @@ class _PushPort:
                 except KeyError:
                     pass
             if previous is not None:
+                from core.execution.proactive import proactive_scope
+                scope = proactive_scope()
+                if scope is not None:
+                    outbox.store.link_execution(previous['id'], scope.turn_id)
+                observe("queue.linked", job_id=previous['id'], state=previous['state'])
                 # A later tick may word the same evidence differently. Resume the
                 # original immutable intent, then acknowledge that evidence normally.
                 payload = previous['payload']
@@ -183,6 +194,7 @@ class KazeProactiveLoop(ProactiveLoop):
         snapshot = get_current_runtime_snapshot()
         return replace(
             scope,
+            provider=RecordedProactiveProvider(scope.provider),
             shared_tools=snapshot.tool_registry if snapshot else scope.shared_tools,
             interaction_embeddings_fn=lambda now: self._interaction_embeddings.refresh(
                 getattr(self._memory, "embedding_api", None),
@@ -204,9 +216,32 @@ class KazeProactiveLoop(ProactiveLoop):
             text += f"\n\n【插件触发】\n{self._activation.reason}\n{dict(self._activation.metadata)}"
         return text
 
-    async def _tick_bound(self) -> float | None:
+    async def _tick_bound(self, request_key: str | None = None) -> float | None:
+        journal = self._sessions.execution_journal
+        key = self._target_session_key()
+        if self._cfg.lifecycle == 'wake':
+            # A blocked/recovered tick must not inherit a previous backlog's 1s wakeup.
+            self._proactive_kernel._last_result = ProactiveTickResult(next_interval_seconds=300)
+        if request_key is None and journal.proactive_blocker(key) is not None:
+            logger.warning('主动执行尚待核对，保持轮询但不再调用模型或发送；请查看执行记录与关联队列')
+            return None
+
+        from core.execution.contracts import ExecutionNeedsReview
+        try:
+            return await run_proactive_recorded(journal, key, request_key or uuid4().hex,
+                {"lifecycle": self._cfg.lifecycle, "channel": self._cfg.default_channel,
+                 "chat_id": self._cfg.default_chat_id}, self._run_proactive_attempt)
+        except ExecutionNeedsReview:
+            logger.warning('主动执行已停止，外部操作结果需要在工作台核对')
+            return None
+
+    def _next_interval(self, base_score: float | None = None) -> int:
+        return 300 if self._cfg.lifecycle == 'wake' else super()._next_interval(base_score)
+
+    async def _run_proactive_attempt(self) -> float | None:
         key = self._target_session_key()
         if self._busy():
+            observe('gate', blocked=True, reason='passive_busy')
             return None
         self.delivered = False
         self._tick_last_user_at = (
@@ -214,16 +249,16 @@ class KazeProactiveLoop(ProactiveLoop):
         )
         manager = getattr(self.runtime, "plugin_manager", None)
         gates = ProactiveGateChain(manager.proactive_gates if manager else [])
-        result = gates.evaluate(
-            ProactiveGateContext(
-                tick_id=uuid4().hex,
-                session_key=key,
-                now_utc=utcnow(),
-                target_transports=(
-                    (self._cfg.default_channel, self._cfg.default_chat_id),
-                ),
+        with stage("gate.plugins"):
+            result = gates.evaluate(
+                ProactiveGateContext(
+                    tick_id=uuid4().hex,
+                    session_key=key,
+                    now_utc=utcnow(),
+                    target_transports=((self._cfg.default_channel, self._cfg.default_chat_id),),
+                )
             )
-        )
+            observe("gate", blocked=result.blocked, reason=result.reason)
         if result.blocked:
             logger.info(
                 "[proactive] 插件门控拦截 session=%s reason=%s", key, result.reason
@@ -240,16 +275,19 @@ class KazeProactiveLoop(ProactiveLoop):
             raise
         finally:
             self._activation = None
-            if result.activation:
-                gates.finalize(
-                    ProactiveGateCompletion(
-                        activation=result.activation,
-                        session_key=key,
-                        occurred_at=utcnow(),
-                        outcome="delivered" if self.delivered else "closed",
-                        reason=reason,
+            from core.execution.proactive import proactive_scope
+            execution = proactive_scope()
+            if result.activation and not (execution and (execution.broken or execution.review_required)):
+                with stage('gate.finalize'):
+                    gates.finalize(
+                        ProactiveGateCompletion(
+                            activation=result.activation,
+                            session_key=key,
+                            occurred_at=utcnow(),
+                            outcome="delivered" if self.delivered else "closed",
+                            reason=reason,
+                        )
                     )
-                )
 
 
 def _builtin_contributions() -> dict[str, list]:

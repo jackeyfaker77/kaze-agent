@@ -14,7 +14,8 @@ let client;
 const deadline = setTimeout(() => { console.error('execution UI timeout'); app.exit(1); }, 60000);
 app.whenReady().then(async () => {
   const { DesktopBridgeClient } = await import(pathToFileURL(resolve('apps/desktop/dist/bridge/bridgeClient.js')).href);
-  client = new DesktopBridgeClient({ executable: resolve('.venv/Scripts/python.exe'), args: [resolve('tests/e2e/transport_review_backend.py'), workspace], cwd: process.cwd() });
+  const proactive = process.argv.includes('--proactive');
+  client = new DesktopBridgeClient({ executable: resolve('.venv/Scripts/python.exe'), args: [resolve('tests/e2e/transport_review_backend.py'), workspace, ...(proactive ? ['--proactive'] : [])], cwd: process.cwd() });
   await client.start();
   ipcMain.handle('desktop:invoke', async (_event, request) => ({ value: await client.invoke(request), assets: [] }));
   ipcMain.handle('desktop:settings-read', () => ({ formData: { models: { registrations: [] } } }));
@@ -57,6 +58,10 @@ app.whenReady().then(async () => {
   writeFileSync(resolve('.tmp/transport-workbench-light.png'), (await window.webContents.capturePage()).toPNG());
   await evaluate("Array.from(document.querySelectorAll('button')).find(b => b.textContent.startsWith('查看执行 ')).click()");
   await until("document.querySelector('.execution-detail')?.textContent.includes('needs_review')");
+  if (proactive) {
+    await until("document.querySelector('.execution-detail')?.textContent.includes('proactive.observed')");
+    assert.equal(await evaluate("Array.from(document.querySelectorAll('button')).find(b => b.textContent === '按原输入重试').disabled"), true);
+  }
   await click('查看关联收发队列');
   await until("document.querySelectorAll('.execution-list button').length === 1");
   await evaluate("document.querySelector('.execution-list button').click()");
@@ -67,7 +72,7 @@ app.whenReady().then(async () => {
   window.setSize(640, 900); await delay(200);
   assert.equal(await evaluate("document.documentElement.scrollWidth <= window.innerWidth"), true);
   await client.stop();
-  writeFileSync(resolve('.tmp/transport-workbench.json'), JSON.stringify({ reviewed: true, partial_receipts_preserved: true, unknown_part_confirmation_required: true, retry_revoked_before_worker: true, execution_links: true, narrow_reflow: true, workspace }, null, 2));
+  writeFileSync(resolve(proactive ? '.tmp/proactive-workbench.json' : '.tmp/transport-workbench.json'), JSON.stringify({ proactive_facts_visible: proactive, reviewed: true, partial_receipts_preserved: true, unknown_part_confirmation_required: true, retry_revoked_before_worker: true, execution_links: true, narrow_reflow: true, workspace }, null, 2));
   console.log('Transport workbench verified.');
   clearTimeout(deadline); app.exit(0);
 }).catch(async error => { console.error(error); clearTimeout(deadline); if (client) await client.stop(); app.exit(1); });

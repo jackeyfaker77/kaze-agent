@@ -204,6 +204,35 @@ async def test_failed_delivery_keeps_alert_unread_and_no_visible_history(
         state.close()
     setup.sender.return_value = DeliveryReceipt(True, "telegram", "42", "sent", "100")
     await loop._tick()
+    assert not setup.sessions.get_or_create(KEY).messages
+    assert setup.runtime.provider.chat.await_count == 1
+    assert loop._proactive_kernel.last_result.next_interval_seconds == 300
+    assert loop._next_interval() == 300
+    journal = setup.sessions.execution_journal
+    record = next(r for r in journal.list_executions()['executions'] if r['status'] != 'completed')
+    journal.review(record['turn_id'], expected_seq=record['last_seq'], action_id='checked',
+                   decision='close', note='Test sender confirmed no delivery; explicitly allow future evaluation')
+    await loop._tick()
+    assert len(setup.sessions.get_or_create(KEY).messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_wake_same_trigger_and_projection_rebuild_never_rerun_model(proactive_setup):
+    setup = proactive_setup
+    loop = await setup.start()
+    await loop._tick_bound('stable-trigger')
+    journal = setup.sessions.execution_journal
+    original = journal.find(KEY, 'proactive', 'stable-trigger')
+    assert original['status'] == 'completed'
+    assert len(original['proactive']['models']) == 1
+    assert original['proactive']['candidates']
+    stages = {s['name'] for s in original['proactive']['stages'].values()}
+    assert {'gate.plugins', 'wake.ingest', 'wake.content.decide', 'deliver', 'wake.schedule'} <= stages
+    for _ in range(2):
+        journal.rebuild_projection()
+        await loop._tick_bound('stable-trigger')
+        assert journal.get(original['turn_id']) == original
+    assert setup.sender.await_count == setup.runtime.provider.chat.await_count == 1
     assert len(setup.sessions.get_or_create(KEY).messages) == 1
 
 
@@ -215,6 +244,11 @@ async def test_ack_failure_survives_restart_without_resending(proactive_setup):
     await first._tick()
     assert setup.sender.await_count == 1
     await setup.stop(first)
+    journal = setup.sessions.execution_journal
+    record = journal.proactive_blocker(KEY)
+    assert record is not None and record['status'] == 'needs_review'
+    journal.review(record['turn_id'], expected_seq=record['last_seq'], action_id='ack-reviewed',
+                   decision='close', note='Delivery succeeded, consumption committed; only pending idempotent ACK remains')
     setup.ack.side_effect = None
     second = await setup.start()
     await second._tick()
@@ -244,6 +278,21 @@ async def test_user_reply_during_model_work_suppresses_send_and_consumption(
     setup.sender.assert_not_awaited()
     setup.ack.assert_not_awaited()
     assert not setup.sessions.get_or_create(KEY).messages
+
+    # The known pre-send activity gate must not permanently claim this alert.
+    # Rebuild first, then allow a genuinely new quiet tick to handle it.
+    journal = setup.sessions.execution_journal
+    journal.rebuild_projection()
+    assert journal._conn.execute('SELECT count(*) FROM proactive_claims').fetchone()[0] == 0
+    setup.runtime.provider.chat.side_effect = None
+    setup.runtime.presence.record_user_message(KEY, NOW - timedelta(days=1))
+    await loop._tick()
+    setup.sender.assert_awaited_once()
+    setup.ack.assert_awaited_once()
+    assert setup.runtime.provider.chat.await_count == 2
+    await loop._tick()
+    setup.sender.assert_awaited_once()
+    assert setup.runtime.provider.chat.await_count == 2
 
 
 @pytest.mark.asyncio

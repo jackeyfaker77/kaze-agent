@@ -149,8 +149,11 @@ class CompiledProactiveLifecycle:
             _raise_lifecycle_errors("主动 Lifecycle 停止失败", errors)
 
     async def run(self, frame: ProactiveFrame) -> ProactiveFrame:
+        from core.execution.proactive import stage, observe, frame_summary
         for binding in self._modules:
-            frame = await binding.run(frame)
+            with stage(binding.slot):
+                frame = await binding.run(frame)
+                observe(binding.slot, **frame_summary(frame))
         return frame
 
     def inspect(self) -> str:
