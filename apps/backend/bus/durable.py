@@ -15,6 +15,7 @@ from uuid import uuid4
 from weakref import WeakValueDictionary
 
 from core.execution.lease import EpochLease
+from bus.transport_review import TransportReview
 
 
 def encode(value):
@@ -36,7 +37,7 @@ class PermanentDelivery(Exception):
     pass
 
 
-class TransportStore:
+class TransportStore(TransportReview):
     def __init__(self, workspace: Path):
         self.directory = workspace / "private_runtime" / "transport"
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -55,14 +56,16 @@ class TransportStore:
                 job TEXT NOT NULL, part TEXT NOT NULL, payload TEXT NOT NULL,
                 state TEXT NOT NULL, result TEXT, PRIMARY KEY(job,part));
         """)
+        self.active: set[str] = set()
+        self.init_review()
         with self.db:
             self.db.execute(
-                "UPDATE jobs SET state='needs_review',error='Interrupted physical send' WHERE id IN (SELECT job FROM parts WHERE state='sending')"
+                "UPDATE jobs SET state='needs_review',error='Interrupted physical send' WHERE state!='needs_review' AND id IN (SELECT job FROM parts WHERE state='sending')"
             )
             self.db.execute("UPDATE jobs SET state='pending' WHERE state='running'")
         self.closed = False
 
-    def put(self, key: str, kind: str, payload: dict) -> dict:
+    def put(self, key: str, kind: str, payload: dict, *, turn_id: str | None = None) -> dict:
         serialized = encode(payload)
         with self.db:
             self.db.execute(
@@ -72,6 +75,8 @@ class TransportStore:
             row = self.get(key)
             if row["kind"] != kind or row["payload"] != payload:
                 raise ValueError("Transport id reused with different content")
+            if turn_id:
+                self.db.execute('INSERT OR IGNORE INTO transport_execution_links VALUES (?,?)', (key, turn_id))
         return row
 
     def get(self, key: str) -> dict:
@@ -86,7 +91,7 @@ class TransportStore:
 
     def pending(self, kind: str | None = None) -> list[dict]:
         rows = self.db.execute(
-            "SELECT id FROM jobs WHERE state='pending' AND due<=? AND (? IS NULL OR kind=?) ORDER BY rowid LIMIT 100",
+            "SELECT id FROM jobs WHERE state='pending' AND review_closed=0 AND due<=? AND (? IS NULL OR kind=?) ORDER BY rowid LIMIT 100",
             (time.time(), kind, kind),
         ).fetchall()
         return [self.get(r["id"]) for r in rows]
@@ -169,7 +174,9 @@ class Outbox:
         account = self.accounts.get(payload.get("channel", ""))
         if account:
             payload = {**payload, "_transport_account": account}
-        self.store.put(key, kind, payload)
+        from core.execution.scope import active_execution
+        scope = active_execution()
+        self.store.put(key, kind, payload, turn_id=scope.turn_id if scope is not None else None)
         return key
 
     async def deliver(self, key: str):
@@ -177,14 +184,18 @@ class Outbox:
         lock = self.locks.setdefault(key, asyncio.Lock())
         async with lock:
             self.active.add(key)
+            self.store.active.add(key)
             try:
                 return await self._deliver(key)
             finally:
                 self.active.discard(key)
+                self.store.active.discard(key)
 
     async def _deliver(self, key):
         while True:
             row = self.store.get(key)
+            if row['review_closed']:
+                raise DeliveryStopped('closed')
             if row["state"] == "done":
                 return row["result"]
             if row["state"] in {"needs_review", "failed"}:
@@ -198,6 +209,7 @@ class Outbox:
                 raise DeliveryStopped("needs_review")
             if row["due"] > time.time():
                 await asyncio.sleep(row["due"] - time.time())
+                continue  # Re-read after waiting; account/state may have changed.
             self.store.attempt(key)
             token = delivery_scope.set(DeliveryScope(self, key))
             try:
@@ -212,7 +224,7 @@ class Outbox:
                 return result
             except RetryDelivery as exc:
                 attempts = self.store.get(key)["attempts"]
-                state = "failed" if attempts >= 5 else "pending"
+                state = "failed" if attempts >= row['attempt_limit'] else "pending"
                 self.store.state(
                     key,
                     state,
@@ -232,7 +244,7 @@ class Outbox:
                     if uncertain
                     else (
                         "pending"
-                        if isinstance(exc, asyncio.CancelledError) or attempts < 5
+                        if isinstance(exc, asyncio.CancelledError) or attempts < row['attempt_limit']
                         else "failed"
                     )
                 )

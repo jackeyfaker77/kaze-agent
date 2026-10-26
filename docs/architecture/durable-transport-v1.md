@@ -1,5 +1,8 @@
 # 持久收件与统一发件队列
 
+后续增量：[收发队列关联查看与人工处置](transport-review-v1.md) 已增加工作台入口、
+分段核对、独立关闭和受限重新排队。下文保留持久队列最初阶段的范围记录。
+
 本地 bridge 与独立 Runtime Host 共用 `private_runtime/transport/queue.sqlite3`。
 使用 SQLite WAL、FULL synchronous 和工作区内的 OS 排他锁；不新增配置项，
 不改变主动提醒的 300 秒周期。队列轮询只做本地 I/O，不调用模型。

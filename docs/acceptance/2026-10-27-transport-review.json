@@ -1,0 +1,77 @@
+{
+  "date": "2026-10-27",
+  "base_commit": "0f209ff",
+  "initial_worktree_clean": true,
+  "scope": "Execution and transport queue correlation, operator close and guarded requeue in local and authenticated remote workbenches",
+  "implemented": [
+    "Queue filters, pagination, payloads, physical parts and receipts, immutable review audit and bidirectional execution navigation",
+    "Compare-and-set revisions and stable action identities; repeated RPCs do not repeat queue transitions",
+    "Audit evidence and queue changes commit together; closing preserves physical state and prevents worker or direct delivery",
+    "Successful parts are preserved; unknown parts require explicit per-part confirmation of non-delivery before requeue",
+    "Accepted incomplete inbound executions cannot be rerun via queue controls",
+    "Active work, changed outbound accounts and unready senders block review retry",
+    "Structured Telegram inbound account identities are checked during consumption and operator retry",
+    "Open linked outbound work or successful receipts prohibit execution-level no-effect clearance and first whole-turn retry"
+  ],
+  "validation": {
+    "backend_full_suite": {
+      "passed": 2037,
+      "skipped": 1,
+      "seconds": 501.93,
+      "command": ".venv/Scripts/python.exe -m pytest -q -W error tests/",
+      "log": ".tmp/transport-review-full-tests.log",
+      "scope": "Complete run before the final inbound-account guard and three added regression cases. The changed paths were then verified by the targeted suite below; no claim of a new full run after that guard."
+    },
+    "final_targeted_suite": {
+      "passed": 40,
+      "skipped": 1,
+      "seconds": 96.34,
+      "command": ".venv/Scripts/python.exe -m pytest -q -W error tests/backend/test_transport_review.py tests/backend/bootstrap/test_remote_transport_review.py tests/backend/test_durable_transport.py tests/backend/bootstrap/test_runtime_host_process.py",
+      "log": ".tmp/transport-review-targeted.log",
+      "skip_reason": "Existing POSIX SIGTERM process test is unavailable on Windows"
+    },
+    "desktop_unit_tests": { "passed": 224, "skipped": 1, "failed": 0 },
+    "static_checks": {
+      "production_pyright_level_error": "0 errors, 0 warnings",
+      "test_pyright_level_error": "0 errors, 0 warnings",
+      "typescript": "passed",
+      "eslint": "passed without warnings",
+      "desktop_build": "passed",
+      "git_diff_check": "passed"
+    },
+    "process_crash": {
+      "method": "Child process os._exit(73)",
+      "boundaries": ["close before commit", "close after commit", "requeue before commit", "requeue after commit"],
+      "store_reopens_after_child_crash_per_case": 2,
+      "assertions": ["no half-committed audit/queue transition", "successful receipts unchanged", "unknown parts not silently marked delivered", "repeated recovery produces identical snapshots"]
+    },
+    "remote": ["authenticated shared API", "repeat close after reconnect is idempotent", "two-client retry/close race has one winner", "queue receipts prevent false execution clearance"],
+    "electron": {
+      "real_renderer_preload_rpc_backend": true,
+      "isolated_workspace": true,
+      "offscreen_queue_visual_review": true,
+      "unknown_part_check_required": true,
+      "successful_receipt_preserved": true,
+      "pending_retry_can_be_closed": true,
+      "execution_navigation_both_directions": true,
+      "narrow_window": true,
+      "queue_report": ".tmp/transport-workbench.json",
+      "queue_log": ".tmp/transport-review-ui.log",
+      "existing_execution_workbench_regression": ".tmp/transport-review-execution-ui.log"
+    }
+  },
+  "configuration_changed": false,
+  "production_workspace_migrated_or_restarted": false,
+  "live_telegram_messages_sent": false,
+  "real_model_calls": false,
+  "server_deployment_performed": false,
+  "committed_or_merged": false,
+  "boundaries": [
+    "The queue database remains an independent mutable authority; audit evidence is not a complete event-sourced transport runtime",
+    "Original Telegram updates may contain commands and are inspect/close only in this phase",
+    "Operator confirmation is not a physical receipt and cannot guarantee external exactly-once delivery",
+    "Closing an execution or queue job does not silently close other linked records",
+    "Historical correlations without stable identities are not inferred from text or timestamps",
+    "Active-flow event sourcing, model-context projection and controlled continuation remain subsequent phases"
+  ]
+}
