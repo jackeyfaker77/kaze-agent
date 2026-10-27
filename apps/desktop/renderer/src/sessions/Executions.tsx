@@ -6,9 +6,11 @@ export type Execution = {
   input: unknown; result: unknown; error_type: string | null; retry_of: string | null;
   retry_turn_id: string | null; retry: { allowed: boolean; reason: string };
   review: { decision: string; note: string } | null; can_review_no_effect: boolean;
+  continuation_turn_id?: string | null; continuation?: { source_turn_id: string };
   effects: { effect_id: string; name?: string; kind: string; certainty: string; retry_safe: boolean; arguments?: unknown; outcome?: unknown }[];
 };
 type Fact = { seq: number; kind: string; created_at: string; payload: unknown };
+type RecoveryPlan = { turn_id: string; allowed: boolean; plan_digest: string; source_seq: number; explanations: string[]; completed_model_calls: number; completed_tools: number; completed_deliveries: number; continuation_turn_id?: string | null };
 const labels: Record<string, string> = { failed: "失败", interrupted: "已中断", needs_review: "待核对", accepted: "已接纳", running: "执行中", completed: "已完成" };
 
 export function Executions({ sessionKey, initialTurnId = "", onQueue }: { sessionKey: string; initialTurnId?: string; onQueue?: (id: string) => void }) {
@@ -17,6 +19,7 @@ export function Executions({ sessionKey, initialTurnId = "", onQueue }: { sessio
   const [cursor, setCursor] = useState(0);
   const [more, setMore] = useState(false);
   const [detail, setDetail] = useState<Execution | null>(null);
+  const [plan, setPlan] = useState<RecoveryPlan | null>(null);
   const [events, setEvents] = useState<Fact[]>([]);
   const [eventCursor, setEventCursor] = useState(0);
   const [moreEvents, setMoreEvents] = useState(false);
@@ -52,7 +55,7 @@ export function Executions({ sessionKey, initialTurnId = "", onQueue }: { sessio
   }
   async function open(turnId: string) {
     const current = ++requests.current.selection;
-    setDetail(null); setEvents([]); setNote(""); setDecision("close");
+    setDetail(null); setPlan(null); setEvents([]); setNote(""); setDecision("close");
     try {
       const [record, page] = await Promise.all([
         rpc<Execution>("execution.get", { turn_id: turnId }),
@@ -84,13 +87,30 @@ export function Executions({ sessionKey, initialTurnId = "", onQueue }: { sessio
     } catch (e) { setError(`${String(e)}。请重新查看执行记录，确认是否已接纳。`); }
     finally { actionLock.current = false; setBusy(false); if (requests.current.generation === current) await open(detail.turn_id); }
   }
-  const canReview = detail && ["failed", "interrupted", "needs_review"].includes(detail.status) && (!detail.review || detail.review.decision === "no_effect") && !detail.retry_turn_id;
+  async function recover(confirm: boolean) {
+    if (!detail || actionLock.current || (confirm && (!plan?.allowed || plan.turn_id !== detail.turn_id))) return;
+    const selected = requests.current.selection;
+    const turnId = detail.turn_id;
+    actionLock.current = true; setBusy(true); setError(""); setMessage("");
+    try {
+      if (!confirm) {
+        const next = await rpc<RecoveryPlan>("execution.plan", { turn_id: turnId });
+        if (requests.current.selection === selected) setPlan(next);
+      } else {
+        const result = await rpc<{ execution: Execution; created: boolean }>("execution.continue", { turn_id: turnId, plan_digest: plan!.plan_digest, action_id: crypto.randomUUID(), confirmed: true });
+        setMessage(result.created ? "续跑已返回，请查看新执行的状态和结果。" : "该边界已接纳续跑，已打开关联执行。");
+        await open(result.execution.turn_id);
+      }
+    } catch (e) { setPlan(null); setError(`${String(e)}。请刷新执行记录并重新生成计划。`); }
+    finally { actionLock.current = false; setBusy(false); }
+  }
+  const canReview = detail && ["failed", "interrupted", "needs_review"].includes(detail.status) && (!detail.review || detail.review.decision === "no_effect") && !detail.retry_turn_id && !detail.continuation_turn_id;
   return <section className="execution-browser" aria-label="执行记录" aria-busy={busy || loading}>
     <header className="table-toolbar"><h2>执行记录</h2><label>状态 <select disabled={busy} value={status} onChange={e => setStatus(e.target.value)}><option value="attention">异常执行</option><option value="">全部</option>{Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label} · {key}</option>)}</select></label><button disabled={busy || loading} onClick={() => setRefresh(n => n + 1)}>刷新记录</button></header>
     <p>重试使用原输入和当前会话上下文创建新尝试。外部操作结果未知时，先核对目标系统；结束处置不会重发或改写回执。</p>
     <p role="status">{message}</p>{error && <p role="alert" className="inline-error">{error}</p>}
     <div className="execution-columns"><div className="execution-list">
-      {rows.map(row => <button className="workbench-session" key={row.turn_id} disabled={busy} aria-current={detail?.turn_id === row.turn_id ? "true" : undefined} onClick={() => { setError(""); void open(row.turn_id); }}><span>{labels[row.status] ?? row.status} · {row.review ? "已核对" : row.retry_turn_id ? "已有重试" : "未处置"}<small>{row.session_key}</small><small className="mono">{row.turn_id}</small></span></button>)}
+      {rows.map(row => <button className="workbench-session" key={row.turn_id} disabled={busy} aria-current={detail?.turn_id === row.turn_id ? "true" : undefined} onClick={() => { setError(""); void open(row.turn_id); }}><span>{labels[row.status] ?? row.status} · {row.continuation_turn_id ? "已有续跑" : row.review ? "已核对" : row.retry_turn_id ? "已有重试" : "未处置"}<small>{row.session_key}</small><small className="mono">{row.turn_id}</small></span></button>)}
       {!rows.length && <p>{loading ? "正在读取执行记录…" : "没有符合条件的执行。可切换状态或刷新记录。"}</p>}
       {more && <button disabled={loading || busy} onClick={() => void loadMore()}>加载更多执行</button>}
     </div>{detail && <article className="execution-detail" aria-label="执行详情">
@@ -99,12 +119,20 @@ export function Executions({ sessionKey, initialTurnId = "", onQueue }: { sessio
       {detail.error_type && <p>错误类型：{detail.error_type}</p>}
       {detail.retry_of && <button disabled={busy} onClick={() => void open(detail.retry_of!)}>查看原执行</button>}
       {detail.retry_turn_id && <button disabled={busy} onClick={() => void open(detail.retry_turn_id!)}>查看关联重试</button>}
+      {detail.continuation && <button disabled={busy} onClick={() => void open(detail.continuation!.source_turn_id)}>查看续跑来源</button>}
+      {detail.continuation_turn_id && <button disabled={busy} onClick={() => void open(detail.continuation_turn_id!)}>查看关联续跑</button>}
+      <section aria-label="恢复计划">
+        <button disabled={busy} onClick={() => void recover(false)}>查看恢复计划</button>
+        {plan && plan.turn_id === detail.turn_id && <div role="status">
+          {plan.allowed ? <><p>可从已保存的边界继续。将复用已完成的 {plan.completed_model_calls} 次模型调用、{plan.completed_tools} 次工具操作和 {plan.completed_deliveries} 次发送的结果。</p><p>确认后创建关联新执行，并调用模型生成下一步；不会再次提交原用户消息。执行前会重新检查条件。</p><button disabled={busy} onClick={() => void recover(true)}>确认创建续跑</button><button disabled={busy} onClick={() => setPlan(null)}>取消续跑</button></> : <><p>当前不能安全续跑。</p><ul>{plan.explanations.map(reason => <li key={reason}>{reason}</li>)}</ul></>}
+        </div>}
+      </section>
       <details><summary>原始输入</summary><pre>{JSON.stringify(detail.input, null, 2)}</pre></details>
       {detail.result != null && <details><summary>已保存结果</summary><pre>{JSON.stringify(detail.result, null, 2)}</pre></details>}
       <h4>工具与外部操作</h4>{!detail.effects.length && <p>没有已记录的工具或发送操作。</p>}
       {detail.effects.map(effect => <details key={effect.effect_id}><summary>{effect.name ?? effect.kind} · {effect.certainty === "confirmed" ? "返回已记录" : "结果未知"} · {effect.retry_safe ? "可重复" : "需核对副作用"}</summary><pre>{JSON.stringify(effect, null, 2)}</pre></details>)}
       <p>{detail.retry.reason}</p><button disabled={busy || !detail.retry.allowed} onClick={() => void act("execution.retry")}>{busy ? "正在处理…" : "按原输入重试"}</button>
-      {busy && <button onClick={() => void rpc("chat.cancel", { session_key: detail.session_key }).catch(e => setError(String(e)))}>停止重试</button>}
+      {busy && <button onClick={() => void rpc("chat.cancel", { session_key: detail.session_key }).catch(e => setError(String(e)))}>停止执行</button>}
       {detail.review && <p>核对结论：{detail.review.decision === "close" ? "结束处置" : "已确认所有待核对操作未产生副作用"}。依据：{detail.review.note}</p>}
       {canReview && <form onSubmit={e => { e.preventDefault(); void act("execution.review"); }}>
         {detail.review?.decision === "no_effect" && <p>若发现新的回执或核对有误，可填写依据并结束处置，撤销尚未使用的重试许可。</p>}

@@ -66,10 +66,22 @@ class _ManagerCoreMixin:
             if rows and not (rows[0]['role'] == 'user' or rows[0].get('proactive')):
                 rows = _align_to_user_boundary(rows)
         history, seen, diagnostics, turns = [], set(), [], []
+        # A continuation's semantic projection includes its immutable ancestors.
+        # Older partial UI bubbles must not duplicate those tool steps in history.
+        covered = set()
+        projected_turns = {}
+        for message in rows:
+            turn = snapshot['links'].get(message['id'], {}).get('turn_id')
+            if turn and message['role'] == 'assistant':
+                if turn not in projected_turns:
+                    projected_turns[turn] = self.execution_journal.interaction_history(turn)
+                covered.update(projected_turns[turn].get('ancestors', []))
         for message in rows:
             turn = snapshot['links'].get(message['id'], {}).get('turn_id')
             if message['role'] == 'assistant' and turn and not message.get('proactive'):
-                projected = self.execution_journal.interaction_history(turn)
+                if turn in covered:
+                    continue
+                projected = projected_turns[turn]
                 if projected['messages']:
                     if turn not in seen:
                         from .helpers import _truncate_tool_result

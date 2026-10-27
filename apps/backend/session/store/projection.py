@@ -243,7 +243,8 @@ class ConversationProjection:
                     # Metadata-only delivery updates keep the original ownership.
                     prior = links.get(identity, {}) if messages.get(identity, {}).get('content') == record['content'] else {}
                     messages[identity] = record
-                    links[identity] = {'seq': event['seq'], 'turn_id': fact.get('interaction_turn_id', prior.get('turn_id'))}
+                    links[identity] = {'seq': event['seq'], 'turn_id': fact.get('interaction_turn_id') or
+                                       fact.get('content_source', {}).get('turn_id') or prior.get('turn_id')}
             previous, checksum = event['seq'], decoded['digest']
         return {'root_id': self.root, 'stream': self.stream, 'through_seq': previous,
                 'prefix_digest': checksum, 'rows': sorted(messages.values(), key=lambda m: m['seq']), 'links': links}

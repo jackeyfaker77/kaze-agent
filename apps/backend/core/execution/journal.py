@@ -56,6 +56,9 @@ class ExecutionJournal:
                     PRIMARY KEY(session_key,candidate));
                 CREATE TABLE IF NOT EXISTS model_context_cache (turn_id TEXT, call_id TEXT, projection TEXT,
                     PRIMARY KEY(turn_id,call_id));
+                CREATE TABLE IF NOT EXISTS continuation_claims (
+                    source_turn_id TEXT PRIMARY KEY, target_turn_id TEXT NOT NULL UNIQUE,
+                    source_seq INTEGER NOT NULL, plan_digest TEXT NOT NULL);
             """)
             with self._transaction():
                 self._conn.execute("INSERT OR IGNORE INTO identity VALUES (1, ?, ?)", (uuid4().hex, CONTRACT_VERSION))
@@ -106,6 +109,10 @@ class ExecutionJournal:
                 old = self._conn.execute("SELECT state FROM execution_views WHERE turn_id=?", (event["turn_id"],)).fetchone()
                 state = project_event(json.loads(old[0]) if old else None,
                                       {**dict(event), "payload": json.loads(event["payload"])}, self.root_id)
+                if event['kind'] == 'continuation.started':
+                    claim = state['continuation']
+                    self._conn.execute('INSERT INTO continuation_claims VALUES (?,?,?,?)',
+                        (claim['source_turn_id'], state['turn_id'], claim['source_seq'], claim['plan_digest']))
                 self._conn.execute("INSERT INTO execution_views VALUES (?,?) ON CONFLICT(turn_id) DO UPDATE SET state=excluded.state",
                                    (state["turn_id"], encode(state)))
                 if event['kind'] == 'proactive.candidates.claimed':
@@ -139,6 +146,7 @@ class ExecutionJournal:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
+                self._conn.execute('DELETE FROM continuation_claims')
                 self._conn.execute("DELETE FROM executions")
                 self._conn.execute("DELETE FROM execution_views")
                 self._conn.execute("DELETE FROM execution_checkpoint")
@@ -147,6 +155,13 @@ class ExecutionJournal:
                 # Retry links are atomic facts; a missing successor is corruption.
                 for row in self._conn.execute("SELECT state FROM execution_views"):
                     state = json.loads(row[0])
+                    if state.get('continuation'):
+                        from .continuation import read_events
+                        from .model_context import digest
+                        lineage = state['continuation']
+                        source = self._state(lineage['source_turn_id'])
+                        if source['last_seq'] != lineage['source_seq'] or source['session_key'] != state['session_key'] or digest(read_events(self, source['turn_id'])) != lineage['source_digest']:
+                            raise ExecutionProjectionError('Invalid continuation lineage')
                     if state["retry_turn_id"]:
                         child = self._state(state["retry_turn_id"])
                         if child["retry_of"] != state["turn_id"]:
@@ -247,7 +262,7 @@ class ExecutionJournal:
                         "proactive.stage.started", "proactive.stage.completed", "proactive.observed",
                         "proactive.candidates.released",
                         "proactive.model.requested", "proactive.model.returned",
-                        "model.response.recorded", "model.attempt.started", "interaction.tool_result", "model.history.selected"}:
+                        "model.response.recorded", "model.attempt.started", "interaction.tool_result", "model.history.selected", "continuation.boundary"}:
             raise ValueError("Unknown execution event")
         with self._transaction():
             row = self._row(turn_id)
@@ -302,10 +317,12 @@ class ExecutionJournal:
         return projected
 
     def interaction_history(self, turn_id: str) -> dict:
-        from .model_context import project_interaction_history
+        from .continuation import interaction_segments
         with self._lock:
-            rows = self._conn.execute('SELECT * FROM events WHERE turn_id=? ORDER BY seq', (turn_id,)).fetchall()
-            return project_interaction_history([{**dict(r), 'payload': json.loads(r['payload'])} for r in rows], self.root_id)
+            segments = interaction_segments(self, turn_id)
+            return {**segments[-1], 'messages': [m for s in segments for m in s['messages']],
+                    'diagnostics': [d for s in segments for d in s['diagnostics']],
+                    'ancestors': [s['source']['turn_id'] for s in segments[:-1]]}
 
     def model_context(self, turn_id: str, *, call_id: str = '', through_seq: int | None = None,
                       expected_digest: str | None = None) -> dict:
@@ -369,15 +386,24 @@ class ExecutionJournal:
         return {**dict(row), "root_id": self.root_id, "input": json.loads(row["input"]),
                 "result": json.loads(row["result"]) if row["result"] else None}
 
+    def _public_state(self, turn_id: str) -> dict:
+        state = public_state(self._state(turn_id))
+        claim = self._conn.execute('SELECT target_turn_id FROM continuation_claims WHERE source_turn_id=?', (turn_id,)).fetchone()
+        if claim:
+            state['continuation_turn_id'] = claim[0]
+            state['retry'] = {'allowed': False, 'reason': '已创建关联续跑，不能整轮重试'}
+            state['can_review_no_effect'] = False
+        return state
+
     def get(self, turn_id: str) -> dict:
         with self._transaction():
-            return public_state(self._state(turn_id))
+            return self._public_state(turn_id)
 
     def find(self, session_key: str, source: str, request_key: str) -> dict | None:
         with self._transaction():
             row = self._conn.execute("SELECT * FROM executions WHERE session_key=? AND source=? AND request_key=?",
                                      (session_key, source, request_key)).fetchone()
-            return public_state(self._state(row["turn_id"])) if row else None
+            return self._public_state(row["turn_id"]) if row else None
 
     def list_executions(self, session_key: str = "", *, before: int = 0, limit: int = 50, status: str = "") -> dict:
         if type(before) is not int or before < 0 or type(limit) is not int or not 1 <= limit <= 100:
@@ -392,7 +418,7 @@ class ExecutionJournal:
                 "ORDER BY rowid DESC LIMIT ?",
                 (session_key, session_key, before, before, status, status, status, limit),
             ).fetchall()
-            items = [public_state(self._state(r["turn_id"])) for r in rows]
+            items = [self._public_state(r["turn_id"]) for r in rows]
             return {"executions": items, "next_cursor": rows[-1]["cursor"] if rows else before}
 
     def events(self, turn_id: str, *, after: int = 0, limit: int = 100) -> dict:
@@ -416,6 +442,8 @@ class ExecutionJournal:
             raise ValueError("请选择处置结论并填写核对依据（1–4000 字符）")
         payload = {"action_id": action_id, "decision": decision, "note": note.strip()}
         with self._transaction():
+            if self._conn.execute('SELECT 1 FROM continuation_claims WHERE source_turn_id=?', (turn_id,)).fetchone():
+                raise ExecutionConflict('已创建续跑，原边界保持不可变')
             state = self._state(turn_id)
             old = state["actions"].get(action_id)
             if old:
@@ -428,6 +456,8 @@ class ExecutionJournal:
 
     def admit_retry(self, turn_id: str, *, expected_seq: int, action_id: str) -> tuple[dict, bool]:
         with self._transaction():
+            if self._conn.execute('SELECT 1 FROM continuation_claims WHERE source_turn_id=?', (turn_id,)).fetchone():
+                raise ExecutionConflict('已创建续跑，不能整轮重试')
             state = self._state(turn_id)
             old = state["actions"].get(action_id)
             if old:
