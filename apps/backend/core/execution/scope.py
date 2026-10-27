@@ -29,6 +29,7 @@ class ExecutionScope:
         self.failed = False
         self.active = True
         self.review_required = False
+        self.completed_ancestor_tools: set[str] = set()
 
     def record(self, kind: str, payload: dict):
         if self.broken or not self.active:
@@ -59,6 +60,11 @@ class ExecutionScope:
         return result
 
     async def effect(self, kind: str, payload: dict, operation, *, certainty=None):
+        if kind == 'tool' and self.completed_ancestor_tools:
+            from .model_context import digest
+            signature = digest({'name': payload.get('name'), 'arguments': payload.get('model_arguments')})
+            if signature in self.completed_ancestor_tools:
+                raise ExecutionNeedsReview('续跑请求重复了已完成的工具操作，已阻止派发；请另开新一轮说明意图')
         if self.review_required:
             raise ExecutionNeedsReview("外部操作结果未知，已停止执行，请在工作台核对执行记录")
         effect_id = uuid4().hex

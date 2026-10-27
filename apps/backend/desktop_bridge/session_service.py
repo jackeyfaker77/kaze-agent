@@ -274,6 +274,12 @@ class DesktopBridgeService:
                                   error=BridgeError(code="request_failed", message=str(exc)))
 
     async def _dispatch(self, method, payload, request_id, *, chat_admission: Callable[[], AbstractAsyncContextManager[None]] = nullcontext, retry_request=None):
+        if method == 'execution.plan':
+            from .continuation_service import recovery_plan
+            return recovery_plan(self, str(payload.get('turn_id') or ''))
+        if method == 'execution.continue':
+            from .continuation_service import continue_execution
+            return await continue_execution(self, payload, request_id, chat_admission)
         if method in {'transport.list', 'transport.get', 'transport.review'}:
             store = self.runtime.bus.transport
             if store is None:

@@ -10,7 +10,7 @@ logger = logging.getLogger("desktop.bridge.dispatcher")
 
 RequestOperation = Callable[[], Awaitable[None]]
 
-_READ_ONLY_METHODS = frozenset({"health", "execution.get", "execution.events", "execution.context", "executions.list", "sessions.list", "session.get", "memory.get", "pet.get", "tasks.list", "messages.list", "runtime.catalog", "document.get", "codex.status", "codex.login.status"})
+_READ_ONLY_METHODS = frozenset({"health", "execution.plan", "execution.get", "execution.events", "execution.context", "executions.list", "sessions.list", "session.get", "memory.get", "pet.get", "tasks.list", "messages.list", "runtime.catalog", "document.get", "codex.status", "codex.login.status"})
 _INTEGRATION_METHODS = frozenset({"chat.send", "voice.transcribe", "voice.synthesize", "observation.analyze", "codex.models"})
 class BridgeRequestDispatcher:
     """Runs bridge requests with bounded concurrency and one conservative write lane."""
@@ -62,7 +62,7 @@ class BridgeRequestDispatcher:
     async def _run(self, method: str, operation: RequestOperation) -> None:
         # chat.send registers its cancellation handle before acquiring integration_slot
         # inside the service. Waiting here would make queued requests uncancellable.
-        if method in {"chat.send", "execution.retry", "chat.cancel", "voice.turn.cancel", "voice.synthesize.cancel"}:
+        if method in {"chat.send", "execution.retry", "execution.continue", "chat.cancel", "voice.turn.cancel", "voice.synthesize.cancel"}:
             await operation()
             return
         if method in _INTEGRATION_METHODS:

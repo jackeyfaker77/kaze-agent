@@ -59,6 +59,11 @@ class _PassiveReasoningLoopMixin:
     ) -> ReasonerResult:
         # 1. 初始化消息上下文、本轮工具轨迹。
         messages = initial_messages
+        from core.execution.scope import active_execution
+        from core.execution.continuation import record_boundary
+        execution = active_execution()
+        if execution is not None:
+            record_boundary(execution, messages)
         tools_used: list[str] = []
         tools_unlocked: list[str] = []
         tool_chain: list[dict[str, Any]] = []

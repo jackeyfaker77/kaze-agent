@@ -287,6 +287,7 @@ class ToolRegistry:
             scope = active_execution()
             if scope is not None:
                 return await scope.effect("tool", {"name": name, "arguments": merged, "context": execution_context,
+                                                  "model_arguments": {k: v for k, v in arguments.items() if k != _PROGRESS_DESCRIPTION_FIELD or _tool_defines_parameter(tool, k)},
                                                   "retry_policy": tool.retry_policy}, invoke,
                                           certainty=tool.execution_certainty)
             return await invoke()

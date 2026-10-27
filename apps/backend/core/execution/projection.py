@@ -40,6 +40,18 @@ def project_event(previous: dict | None, event: dict, root_id: str) -> dict:
     if kind == "run.started":
         require(state["status"] == "accepted")
         state["status"] = "running"
+    elif kind == 'continuation.started':
+        require(state['status'] == 'accepted' and not state.get('continuation'))
+        require(payload.get('version') == 1 and payload.get('source_turn_id') != state['turn_id'])
+        require(isinstance(payload.get('source_seq'), int) and payload['source_seq'] > 0)
+        require(all(isinstance(payload.get(k), str) and payload[k] for k in
+                    ('source_turn_id', 'source_digest', 'history_digest', 'plan_digest', 'action_id')))
+        state['continuation'] = payload
+    elif kind == 'continuation.boundary':
+        require(state['status'] == 'running' and not state.get('continuation_boundary'))
+        require(payload.get('version') == 1 and isinstance(payload.get('history'), list))
+        require(all(isinstance(payload.get(k), str) and payload[k] for k in ('workspace', 'cwd')))
+        state['continuation_boundary'] = {'seq': event['seq']}
     elif kind in {"run.ended", "run.recovered"}:
         require(state["status"] in ACTIVE and payload.get("status") in TERMINAL)
         require(not unresolved(state) or payload["status"] == "needs_review")
@@ -200,6 +212,8 @@ def unresolved(state: dict) -> bool:
 
 
 def retry_policy(state: dict) -> dict:
+    if state.get('continuation'):
+        return {'allowed': False, 'reason': '续跑包含祖先已完成步骤，不能按原输入整轮重试；请生成恢复计划'}
     if state["status"] not in {"failed", "interrupted", "needs_review"}:
         return {"allowed": False, "reason": "仅失败、中断或待核对的执行可处置"}
     if state["retry_turn_id"]:
