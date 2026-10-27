@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from agent.provider import LLMProvider
-from agent.llm_json import load_json_array_loose
 from core.memory.events import MemoryWritten, TurnIngested
 from memory2.memorizer import Memorizer
 from memory2.retriever import Retriever
@@ -38,8 +37,10 @@ class PostResponseMemoryWorker:
     SUPERSEDE_THRESHOLD = 0.82
     SUPERSEDE_CANDIDATE_K = 5
     TOKEN_BUDGET_PER_RUN = 1000
-    TOKENS_EXTRACT_INVALIDATION = 96
-    TOKENS_CHECK_INVALIDATE = 96
+    # These tool-free classifiers need JSON, not a reasoning trace. Keep room
+    # for five candidate IDs and one implicit extraction within the run budget.
+    TOKENS_EXTRACT_INVALIDATION = 128
+    TOKENS_CHECK_INVALIDATE = 256
     TOKENS_EXTRACT_IMPLICIT = 600
 
     def __init__(
@@ -321,11 +322,13 @@ class PostResponseMemoryWorker:
                 tools=[],
                 model=self._model,
                 max_tokens=self.TOKENS_EXTRACT_INVALIDATION,
+                disable_thinking=True,
             )
             text = (resp.content or "").strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            result = load_json_array_loose(text)
+            # A partial array must never become evidence for retiring memory.
+            result = json.loads(text)
             if isinstance(result, list):
                 return [
                     t for t in result if isinstance(t, str) and t.strip()
@@ -368,11 +371,12 @@ class PostResponseMemoryWorker:
                 tools=[],
                 model=self._model,
                 max_tokens=self.TOKENS_CHECK_INVALIDATE,
+                disable_thinking=True,
             )
             text = (resp.content or "").strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            result = load_json_array_loose(text)
+            result = json.loads(text)
             if isinstance(result, list):
                 valid_ids = {c["id"] for c in candidates}
                 return [
