@@ -101,6 +101,8 @@ class AppRuntime:
         self._started = False
 
     async def start(self) -> None:
+        from core.common.restore_safety import require_live_workspace
+        require_live_workspace(self.workspace)
         if self._shutdown:
             raise RuntimeError("A stopped runtime cannot be restarted; construct a new host")
         if self._started:

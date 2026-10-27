@@ -10,6 +10,7 @@ import signal
 from bootstrap.app import AppRuntime
 from bootstrap.host_state import WorkspaceOwner
 from bootstrap.tools import CoreRuntime
+from core.common.restore_safety import require_live_workspace
 
 logger = logging.getLogger(__name__)
 Attachment = Callable[[CoreRuntime], Awaitable[None]]
@@ -54,6 +55,7 @@ class RuntimeHost:
 
     async def run(self, attachment: Attachment | None = None, *, handle_signals: bool = False) -> None:
         try:
+            require_live_workspace(self.runtime.workspace)
             owner = WorkspaceOwner(self.runtime.workspace, self.mode)
         except BaseException:
             await self.runtime.shutdown()

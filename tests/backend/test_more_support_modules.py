@@ -755,7 +755,7 @@ async def test_bootstrap_trigger_and_entrypoints_cover_paths(
     )
     assert item.id == "1"
 
-    monkeypatch.setattr("pathlib.Path.exists", lambda self: False)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["main.py", "--config", "missing.json"])
     with pytest.raises(SystemExit) as exc:
         runpy.run_module("main", run_name="__main__")
@@ -765,7 +765,7 @@ async def test_bootstrap_trigger_and_entrypoints_cover_paths(
         coro.close()
         return None
 
-    monkeypatch.setattr("pathlib.Path.exists", lambda self: True)
+    (tmp_path / 'config.toml').write_text('# fixture\n', encoding='utf-8')
     monkeypatch.setattr("asyncio.run", _fake_asyncio_run)
     monkeypatch.setattr(
         "agent.config.Config.load",

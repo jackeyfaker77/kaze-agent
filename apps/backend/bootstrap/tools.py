@@ -422,6 +422,8 @@ def build_core_runtime(
     workspace: Path,
     http_resources: SharedHttpResources,
 ) -> CoreRuntime:
+    from core.common.restore_safety import require_live_workspace
+    require_live_workspace(workspace)
     from bootstrap.session_migration import migrate_workspace
     migrate_workspace(workspace)
     bus = MessageBus()
