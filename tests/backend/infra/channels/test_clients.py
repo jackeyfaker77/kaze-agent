@@ -94,6 +94,17 @@ class _SessionManager:
         return payload
 
 
+@pytest.fixture(autouse=True)
+def _restore_telegram_channel_imports():
+    prefix = 'infra.channels.telegram_channel'
+    saved = {name: module for name, module in sys.modules.items() if name == prefix or name.startswith(prefix + '.')}
+    yield
+    for name in list(sys.modules):
+        if name == prefix or name.startswith(prefix + '.'):
+            sys.modules.pop(name)
+    sys.modules.update(saved)
+
+
 def _import_telegram_channel(monkeypatch: pytest.MonkeyPatch):
     telegram = types.ModuleType("telegram")
     telegram_constants = types.ModuleType("telegram.constants")
@@ -241,7 +252,9 @@ def _import_telegram_channel(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "telegram.constants", telegram_constants)
     monkeypatch.setitem(sys.modules, "telegram.error", telegram_error)
     monkeypatch.setitem(sys.modules, "telegram.ext", telegram_ext)
-    sys.modules.pop("infra.channels.telegram_channel", None)
+    for name in list(sys.modules):
+        if name == 'infra.channels.telegram_channel' or name.startswith('infra.channels.telegram_channel.'):
+            sys.modules.pop(name)
     return importlib.import_module("infra.channels.telegram_channel")
 
 

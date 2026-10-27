@@ -143,6 +143,43 @@ def test_headless_telegram_and_proactive_delivery_survive_host_restart(tmp_path)
         stop(process, tmp_path)
 
 
+@pytest.mark.parametrize('endpoint', ['getMe', 'setMyCommands', 'deleteWebhook'])
+def test_host_recovers_telegram_startup_without_process_restart_or_duplicate_io(tmp_path, endpoint):
+    scenario = 'startup-' + endpoint
+    process, log = launch(tmp_path, scenario)
+    try:
+        wait_for(lambda: is_ready(tmp_path, process), process, log)
+        first = host_status(tmp_path)
+        assert not first['healthy'] and first['channel_health'] == {'telegram':False}
+        assert all(first['workers'].values())
+        assert first['channel_failures'][0]['error_type'] == 'NetworkError'
+        assert any(r['kind']=='startup_network_failure' for r in wire(tmp_path))
+        (tmp_path/'inbound.json').write_text('{}')
+        (tmp_path/'network-up').write_text('online')
+        wait_for(lambda: host_status(tmp_path).get('healthy'), process, log)
+        restored = host_status(tmp_path)
+        assert restored['owner_id'] == first['owner_id'] and restored['epoch'] == first['epoch']
+        assert restored['channel_failures'] == []
+        wait_for(lambda: any(r.get('text')=='host reply' for r in wire(tmp_path)), process, log)
+        stop(process, tmp_path)
+        assert process.returncode == 0
+        # Re-offer the same raw update after restart: the durable queue must reject duplicates.
+        process, log = launch(tmp_path, scenario)
+        wait_for(lambda: is_ready(tmp_path, process) and host_status(tmp_path).get('healthy'), process, log)
+        time.sleep(.5)
+        stop(process, tmp_path)
+        assert process.returncode == 0
+        assert sum(r['kind']=='model' and r['passive'] for r in wire(tmp_path)) == 1
+        assert sum(r.get('text')=='host reply' for r in wire(tmp_path)) == 1
+        with sqlite3.connect(tmp_path/'private_runtime/transport/queue.sqlite3') as db:
+            jobs = db.execute("SELECT kind,state,attempts FROM jobs WHERE kind IN ('inbound','bus:telegram')").fetchall()
+            assert sorted(jobs) == [('bus:telegram','done',1),('inbound','done',1)]
+        with sqlite3.connect(tmp_path/'sessions.db') as db:
+            assert db.execute("SELECT count(*) FROM messages WHERE session_key='telegram:43'").fetchone()[0] == 2
+    finally:
+        stop(process, tmp_path)
+
+
 def test_headless_crash_recovers_execution_without_replaying_input(tmp_path):
     process, log = launch(tmp_path, "crash")
     try:

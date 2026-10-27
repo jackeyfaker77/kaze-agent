@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from datetime import timedelta
 
 from telegram import BotCommand, Update
+from telegram.error import BadRequest, NetworkError, RetryAfter
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from agent.looping.interrupt import InterruptController
@@ -112,6 +114,8 @@ class TelegramChannel(
         self._event_bus = event_bus
         self._outbound_bound = False
         self._events_bound = False
+        self._lifecycle_lock = asyncio.Lock()
+        self._ready = False
         self.user_map = self._identity_index.mapping
         self._polling_conflict_task: asyncio.Task[None] | None = None
         self._telegram_outbound_limiter = TelegramOutboundLimiter()
@@ -136,10 +140,54 @@ class TelegramChannel(
                     and (self._durable_updates is None or (not self._durable_updates.failed and self._durable_task and not self._durable_task.done())))
 
     async def start(self, ctx: ChannelContext | None = None) -> None:
+        async with self._lifecycle_lock:
+            if self._ready:
+                return
+            try:
+                await self._start_runtime(ctx)
+                self._ready = True
+            except BaseException:
+                # Roll back partial initialization before the Host may retry.
+                # A cleanup failure propagates instead of starting a second consumer.
+                try:
+                    await self._stop_runtime()
+                except Exception as cleanup:
+                    raise RuntimeError('Telegram startup cleanup failed; automatic retry stopped') from cleanup
+                raise
+
+    @staticmethod
+    def startup_retry_delay(error: Exception, attempt: int) -> float | None:
+        if isinstance(error, RetryAfter):
+            value = error.retry_after
+            return max(5.0, value.total_seconds() if isinstance(value, timedelta) else float(value))
+        # BadRequest inherits NetworkError in PTB, but retrying bad parameters is unsafe.
+        if isinstance(error, (NetworkError, TimeoutError)) and not isinstance(error, BadRequest):
+            return float(min(5 * 2 ** min(attempt, 4), 60))
+        return None
+
+    async def _start_runtime(self, ctx: ChannelContext | None) -> None:
         if ctx is not None:
             self._bus = ctx.bus
             self._event_bus = ctx.event_bus
             self._interrupt_controller = ctx.interrupt_controller
+        self._rebuild_user_map()
+        await self._app.initialize()
+        await self._app.start()
+        await self._register_bot_commands()
+        updater = self._app.updater
+        if updater is None:
+            raise RuntimeError("Telegram updater 未初始化")
+        await updater.start_polling(
+            allowed_updates=Update.ALL_TYPES,
+            error_callback=self._on_polling_error,
+            bootstrap_retries=0,
+        )
+        # Failed startup must not expose send handlers to the durable outbox.
+        self._bind_runtime()
+        if self._durable_updates is not None:
+            self._bus.outbox.handlers['telegram:'+self._channel] = self._deliver_command
+            self._durable_task = asyncio.create_task(self._durable_updates.recover(self._app.bot), name='telegram_inbox')
+        if ctx is not None:
             ctx.push_tool.register_channel(
                 self.name,
                 text=self.send,
@@ -149,21 +197,6 @@ class TelegramChannel(
                 target_resolver=self._resolve_chat_id,
                 durable_parts=self._durable_updates is not None,
             )
-        self._bind_runtime()
-        self._rebuild_user_map()
-        await self._app.initialize()
-        await self._app.start()
-        if self._durable_updates is not None:
-            self._bus.outbox.handlers['telegram:'+self._channel] = self._deliver_command
-            self._durable_task = asyncio.create_task(self._durable_updates.recover(self._app.bot), name='telegram_inbox')
-        await self._register_bot_commands()
-        updater = self._app.updater
-        if updater is None:
-            raise RuntimeError("Telegram updater 未初始化")
-        await updater.start_polling(
-            allowed_updates=Update.ALL_TYPES,
-            error_callback=self._on_polling_error,
-        )
         logger.info(f"TelegramChannel 已启动  已知用户: {len(self.user_map)}")
 
     def _bind_runtime(self) -> None:
@@ -181,9 +214,15 @@ class TelegramChannel(
             self._events_bound = True
 
     async def stop(self) -> None:
+        async with self._lifecycle_lock:
+            await self._stop_runtime()
+
+    async def _stop_runtime(self) -> None:
+        self._ready = False
         if self._durable_task is not None:
             self._durable_task.cancel()
             await asyncio.gather(self._durable_task, return_exceptions=True)
+            self._durable_task = None
         if self._polling_conflict_task and not self._polling_conflict_task.done():
             await self._polling_conflict_task
         if self._live_tasks:
@@ -191,8 +230,13 @@ class TelegramChannel(
         updater = self._app.updater
         if updater and updater.running:
             await updater.stop()
-        await self._app.stop()
+        if getattr(self._app, 'running', True):
+            await self._app.stop()
         await self._app.shutdown()
+        # Application.shutdown is a no-op when getMe failed during initialize.
+        # Bot.shutdown still closes the partially initialized HTTP clients.
+        if hasattr(self._app.bot, 'shutdown'):
+            await self._app.bot.shutdown()
         logger.info("TelegramChannel 已停止")
 
     # ── 私有方法 ──────────────────────────────────────────────────
