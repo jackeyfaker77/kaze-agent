@@ -153,6 +153,9 @@ class TransportReview:
             reason = '渠道账户与原任务不一致，不能改发到其他账户'
         if not reason and unknown:
             reason = '需逐项核实所有结果未知的分段均未送达，填写依据后重试'
+        from bus.durable import proactive_payload
+        if proactive_payload(row['payload']) and (unknown or any(r['request'].get('absent_parts') for r in reviews)):
+            reason = '主动提醒的未知发送结果不能通过重新排队解除；请核对并结束处置'
         return {**row, 'parts': parts, 'reviews': reviews, 'related_jobs': self.related_keys(row),
                 'executions': [{'turn_id': r['turn_id'], 'session_key': r['session_key'], 'status': r['status']}
                                for r in records],

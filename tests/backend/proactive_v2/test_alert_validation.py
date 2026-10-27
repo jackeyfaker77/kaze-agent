@@ -38,6 +38,20 @@ EVENT = {
 }
 
 
+@pytest.mark.parametrize('changed,expected', [(False, True), (True, False)])
+async def test_context_recovery_refreshes_current_source_before_delivery(changed, expected):
+    source = replace(SOURCE, spec=replace(SOURCE.spec, channels=('context',)))
+    event = {'_source': 'workspace:calendar', 'available': True, 'application': 'editor',
+             'observed_at': NOW.isoformat(), 'expires_at': (NOW + timedelta(minutes=10)).isoformat()}
+    current = {**event, 'application': 'meeting' if changed else 'editor',
+               'observed_at': (NOW + timedelta(minutes=1)).isoformat()}
+    gateway = SimpleNamespace(call=AsyncMock(return_value=current))
+    runtime = cast(Any, SimpleNamespace(_clock=SimpleNamespace(now=lambda: NOW + timedelta(minutes=2)),
+        _scope=SimpleNamespace(mcp_gateway=gateway, proactive_sources=[source])))
+    assert await WakeRuntime.validate_recovery(runtime, {'kind': 'context', 'event': event}) is expected
+    gateway.call.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     "response,expected",
     [

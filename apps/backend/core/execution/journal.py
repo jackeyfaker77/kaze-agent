@@ -121,6 +121,9 @@ class ExecutionJournal:
                                                    (state['session_key'], candidate)).fetchone()
                         if prior:
                             owner = self._state(prior['turn_id'])
+                            # Older releases allowed re-admission after close.
+                            # Preserve those committed facts; new admission no
+                            # longer treats close as permission to repeat.
                             if not (owner['status'] in TERMINAL and owner['status'] != 'completed' and
                                     owner['review'] and owner['review']['decision'] == 'close'):
                                 raise ExecutionProjectionError('Candidate already belongs to an unclosed proactive attempt')
@@ -231,10 +234,7 @@ class ExecutionJournal:
                 claim = self._conn.execute('SELECT turn_id FROM proactive_claims WHERE session_key=? AND candidate=?',
                                            (row['session_key'], candidate)).fetchone()
                 if claim:
-                    prior = self._state(claim['turn_id'])
-                    if not (prior['status'] in TERMINAL and prior['status'] != 'completed' and
-                            prior['review'] and prior['review']['decision'] == 'close'):
-                        return False
+                    return False
             self._event(row, 'proactive.candidates.claimed', {'candidates': sorted(set(candidates))})
             return True
 
@@ -245,14 +245,21 @@ class ExecutionJournal:
                 claim = self._conn.execute('SELECT turn_id FROM proactive_claims WHERE session_key=? AND candidate=?',
                                            (session_key, candidate)).fetchone()
                 prior = self._state(claim['turn_id']) if claim else None
-                available.append(prior is None or bool(prior['status'] in TERMINAL and
-                    prior['status'] != 'completed' and prior['review'] and prior['review']['decision'] == 'close'))
+                available.append(prior is None)
             return available
 
     def proactive_blocker(self, session_key: str) -> dict | None:
         with self._transaction():
             for row in self._conn.execute("SELECT turn_id FROM executions WHERE session_key=? AND source='proactive' AND status IN ('interrupted','needs_review') ORDER BY rowid", (session_key,)):
                 state = self._state(row['turn_id'])
+                leaf = state
+                for _ in range(64):
+                    successor = self._conn.execute('SELECT target_turn_id FROM continuation_claims WHERE source_turn_id=?', (leaf['turn_id'],)).fetchone()
+                    if successor is None:
+                        break
+                    leaf = self._state(successor[0])
+                if leaf['status'] == 'completed' or (leaf['review'] and leaf['review']['decision'] == 'close'):
+                    continue
                 if not (state['review'] and state['review']['decision'] == 'close'):
                     return public_state(state)
         return None

@@ -158,6 +158,8 @@ class _DurableMixin:
                     parts.append({"text": chunk})
         else:
             parts = [args]
+        outbox.prepare_parts(str(ordinal), {f'{ordinal}:{method}:{index}': {'chat_id': cid, **part}
+                                           for index, part in enumerate(parts)})
         last = None
         for index, part in enumerate(parts):
             # Keep the logical part identity stable across renderer upgrades. A

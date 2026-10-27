@@ -29,12 +29,13 @@ def test_crash_recovery_never_replays_model_or_confirmed_send(tmp_path, scenario
     assert report['replay_calls'] == 0
     assert report['model'] == (0 if scenario == 'before_model' else 1)
     queued = scenario in {'after_enqueue', 'physical_unknown', 'after_receipt', 'after_queue_done', 'after_completed'}
-    assert report['send'] == int(queued)
-    saved = queued and scenario != 'physical_unknown'
+    assert report['send'] == int(queued and scenario != 'after_enqueue')
+    saved = scenario in {'after_queue_done', 'after_completed'}
     assert len(report['messages']) == int(saved)
     if queued:
         assert report['links']
         assert len(report['jobs']) == 1
-        assert report['jobs'][0]['state'] == ('needs_review' if scenario == 'physical_unknown' else 'done')
+        expected = 'needs_review' if scenario == 'physical_unknown' else 'pending' if scenario in {'after_enqueue', 'after_receipt'} else 'done'
+        assert report['jobs'][0]['state'] == expected
     assert report['status'] == ('completed' if scenario == 'after_completed' else
         'needs_review' if scenario in {'physical_unknown', 'after_receipt'} else 'interrupted')

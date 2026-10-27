@@ -10,7 +10,7 @@ export type Execution = {
   effects: { effect_id: string; name?: string; kind: string; certainty: string; retry_safe: boolean; arguments?: unknown; outcome?: unknown }[];
 };
 type Fact = { seq: number; kind: string; created_at: string; payload: unknown };
-type RecoveryPlan = { turn_id: string; allowed: boolean; plan_digest: string; source_seq: number; explanations: string[]; completed_model_calls: number; completed_tools: number; completed_deliveries: number; continuation_turn_id?: string | null };
+type RecoveryPlan = { kind?: "proactive"; action?: string; turn_id: string; allowed: boolean; plan_digest: string; source_seq: number; explanations: string[]; completed_model_calls: number; completed_tools: number; completed_deliveries: number; continuation_turn_id?: string | null };
 const labels: Record<string, string> = { failed: "失败", interrupted: "已中断", needs_review: "待核对", accepted: "已接纳", running: "执行中", completed: "已完成" };
 
 export function Executions({ sessionKey, initialTurnId = "", onQueue }: { sessionKey: string; initialTurnId?: string; onQueue?: (id: string) => void }) {
@@ -124,7 +124,7 @@ export function Executions({ sessionKey, initialTurnId = "", onQueue }: { sessio
       <section aria-label="恢复计划">
         <button disabled={busy} onClick={() => void recover(false)}>查看恢复计划</button>
         {plan && plan.turn_id === detail.turn_id && <div role="status">
-          {plan.allowed ? <><p>可从已保存的边界继续。将复用已完成的 {plan.completed_model_calls} 次模型调用、{plan.completed_tools} 次工具操作和 {plan.completed_deliveries} 次发送的结果。</p><p>确认后创建关联新执行，并调用模型生成下一步；不会再次提交原用户消息。执行前会重新检查条件。</p><button disabled={busy} onClick={() => void recover(true)}>确认创建续跑</button><button disabled={busy} onClick={() => setPlan(null)}>取消续跑</button></> : <><p>当前不能安全续跑。</p><ul>{plan.explanations.map(reason => <li key={reason}>{reason}</li>)}</ul></>}
+          {plan.allowed ? <><p>可从已保存的边界继续。将复用已完成的 {plan.completed_model_calls} 次模型调用、{plan.completed_tools} 次工具操作和 {plan.completed_deliveries} 次发送的结果。</p><p>{plan.kind === "proactive" ? plan.action === "settle_only" ? "提醒及收尾已完成，仅补齐执行终态；不会调用模型、工具或发送。" : plan.action === "receipts_only" ? "仅使用已保存的发送回执补齐状态；没有回执的部分会继续阻塞，不会补发。" : plan.action === "judge" ? "确认后重新检查提醒资格，执行尚未开始的判断，再决定是否发送。" : "确认后复用原判断，重新检查提醒资格，再处理原发送任务；不会重新调用模型判断。" : "确认后创建关联新执行，并调用模型生成下一步；不会再次提交原用户消息。执行前会重新检查条件。"}</p><button disabled={busy} onClick={() => void recover(true)}>确认创建续跑</button><button disabled={busy} onClick={() => setPlan(null)}>取消续跑</button></> : <><p>当前不能安全续跑。</p><ul>{plan.explanations.map(reason => <li key={reason}>{reason}</li>)}</ul></>}
         </div>}
       </section>
       <details><summary>原始输入</summary><pre>{JSON.stringify(detail.input, null, 2)}</pre></details>

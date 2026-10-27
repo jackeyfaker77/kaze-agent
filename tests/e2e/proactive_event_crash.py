@@ -35,7 +35,18 @@ def crash(point):
 
 async def model(**kwargs):
     count('model')
-    return LLMResponse(None, tool_calls=[ToolCall('decision', 'send_event', {'message': 'durable proactive reminder'})])
+    crash('model_unknown')
+    response = LLMResponse(None, tool_calls=[ToolCall('decision', 'send_event', {'message': 'durable proactive reminder'})])
+    if scenario == 'canonical_response':
+        from core.execution.scope import active_execution, fact
+        scope = active_execution()
+        assert scope is not None
+        projected = scope.journal.prepare_model_request(scope.turn_id, 'canonical', kwargs, 'chat.completions.v1')
+        assert projected['request']['messages'] == kwargs['messages']
+        scope.record('model.attempt.started', {'call_id': 'canonical', 'attempt': 1})
+        scope.record('model.response.recorded', {'call_id': 'canonical', 'response': fact(response)})
+        crash('canonical_response')
+    return response
 
 
 async def sender(*args):
@@ -55,6 +66,8 @@ class Source(Tool):
     async def execute(self, **kwargs):
         if self.name.endswith('fetch'):
             return json.dumps([{'event_id': 'once', 'kind': 'alert', 'title': 'remind once'}])
+        count('ack')
+        crash('ack_unknown')
         return '{"ok":true}'
 
 
@@ -82,6 +95,17 @@ async def main():
     loop = build_proactive_loop(core)
     assert loop is not None
     await loop._start_current_snapshot()
+    adapter = loop._recovery_runtime
+    consume = adapter._state.consume_and_queue_ack
+    def finish_local(**kwargs):
+        consume(**kwargs)
+        crash('after_finalization')
+    adapter._state.consume_and_queue_ack = finish_local
+    acknowledge = adapter._state.mark_acknowledged
+    def ack_receipt(*args):
+        acknowledge(*args)
+        crash('after_ack')
+    adapter._state.mark_acknowledged = ack_receipt
     journal = core.session_manager.execution_journal
     queue = core.bus.transport
     outbox = core.bus.outbox
@@ -101,6 +125,8 @@ async def main():
             crash('after_model')
         if kind == 'proactive.observed' and payload.get('stage') == 'resolve':
             crash('after_decision')
+        if kind == 'proactive.observed' and payload.get('stage') == 'recovery.settled':
+            crash('after_settled')
     journal.append = append_fact
     put = queue.put
     def put_intent(*args, **kwargs):
@@ -141,20 +167,47 @@ async def main():
         assert ((workspace / 'calls.jsonl').read_text() if (workspace / 'calls.jsonl').exists() else '') == before_calls
         # A new scheduled tick must not re-evaluate an unreviewed interrupted attempt.
         original = journal.find(key, 'proactive', 'fixed-trigger')
-        if original['status'] != 'completed':
+        if original['status'] != 'completed' and not journal.get(original['turn_id']).get('continuation_turn_id'):
             await loop._tick_bound()
             assert ((workspace / 'calls.jsonl').read_text() if (workspace / 'calls.jsonl').exists() else '') == before_calls
-        # Recover durable unsent work or history only; confirmed parts never resend.
-        for job in queue.pending():
-            await outbox.deliver(job['id'])
+        # Replaying the log / restarting the worker does not grant permission
+        # to resume proactive sends. Explicit Host confirmation does.
+        recovery = None
+        if phase in {'controlled', 'claim_crash'}:
+            from desktop_bridge.session_service import DesktopBridgeService
+            if phase == 'claim_crash':
+                import desktop_bridge.proactive_recovery_service as recovery_service
+                claim = recovery_service.claim_recovery
+                def claim_and_crash(*args):
+                    claim(*args)
+                    os._exit(73)
+                recovery_service.claim_recovery = claim_and_crash
+            core.proactive_loop = loop
+            service = DesktopBridgeService(core)
+            turn_id = original['turn_id']
+            plan = await service._dispatch('execution.plan', {'turn_id': turn_id}, 'plan')
+            while plan.get('continuation_turn_id') and journal.get(plan['continuation_turn_id'])['status'] != 'completed':
+                turn_id = plan['continuation_turn_id']
+                plan = await service._dispatch('execution.plan', {'turn_id': turn_id}, 'plan')
+            if plan['allowed']:
+                payload = {'turn_id': turn_id, 'confirmed': True, 'plan_digest': plan['plan_digest'], 'action_id': 'confirm'}
+                results = await asyncio.gather(service._dispatch('execution.continue', payload, 'one'),
+                                               service._dispatch('execution.continue', {**payload, 'action_id': 'two'}, 'two'))
+                assert {r['created'] for r in results} == {True, False}
+                assert len({r['execution']['turn_id'] for r in results}) == 1
+                recovery = results[0]['execution']['status']
+            elif plan.get('continuation_turn_id'):
+                recovery = journal.get(plan['continuation_turn_id'])['status']
+            else:
+                recovery = plan['reasons']
         core.session_manager._store.rebuild_projection()
         calls = [json.loads(line)['kind'] for line in (workspace / 'calls.jsonl').read_text().splitlines()] if (workspace / 'calls.jsonl').exists() else []
         messages = core.session_manager._store.fetch_session_messages(key)
         jobs = [dict(r) for r in queue.db.execute('SELECT id,state,attempts FROM jobs ORDER BY id')]
         links = [list(r) for r in queue.db.execute('SELECT * FROM transport_execution_links ORDER BY job,turn_id')]
-        print(json.dumps({'status': original['status'], 'model': calls.count('model'), 'send': calls.count('send'),
+        print(json.dumps({'status': original['status'], 'model': calls.count('model'), 'send': calls.count('send'), 'ack': calls.count('ack'),
             'messages': [(m['id'], m['content']) for m in messages], 'jobs': jobs, 'links': links,
-            'replay_calls': 0, 'events': journal._conn.execute('SELECT count(*) FROM events').fetchone()[0]}))
+            'replay_calls': 0, 'recovery': recovery, 'events': journal._conn.execute('SELECT count(*) FROM events').fetchone()[0]}))
     finally:
         await loop._stop_active_kernel()
         loop.close()

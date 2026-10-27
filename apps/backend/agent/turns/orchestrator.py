@@ -87,7 +87,10 @@ class TurnOrchestrator:
             source_metadata['delivery_id'] = 'proactive:' + hashlib.sha256(json.dumps([channel, chat_id, session_key, sorted(result.evidence)]).encode()).hexdigest()
         else:
             source_metadata["delivery_id"] = uuid4().hex
-        from core.execution.proactive import observe
+        from core.execution.proactive import observe, proactive_scope
+        execution = proactive_scope()
+        if execution is not None and getattr(execution, 'proactive_delivery_id', None):
+            source_metadata['delivery_id'] = execution.proactive_delivery_id
         observe("delivery.intent", delivery_id=source_metadata["delivery_id"],
                 channel=channel, chat_id=chat_id, evidence=list(result.evidence))
         # Persist only the data needed to reconstruct conversation history, never callbacks.
@@ -103,8 +106,10 @@ class TurnOrchestrator:
             else nullcontext()
         )
         async with scope:
-            if result.delivery_guard is not None and not await result.delivery_guard():
+            if not getattr(execution, 'proactive_receipts_only', False) and result.delivery_guard is not None and not await result.delivery_guard():
                 return False
+            if execution is not None:
+                execution.proactive_delivery_guard = result.delivery_guard
             try:
                 sent = await self._dispatch_outbound(
                     channel=channel,
@@ -240,7 +245,7 @@ class TurnOrchestrator:
                     return await maybe if inspect.isawaitable(maybe) else maybe
                 scope = proactive_scope()
                 if scope is not None:
-                    await scope.effect("tool", {"name": type(effect).__name__, "arguments": {},
+                    await scope.effect("tool", {"name": type(effect).__name__, "arguments": {'recovery_id': effect.recovery_id} if getattr(effect, 'recovery_id', None) else {},
                                                "retry_policy": "unknown"}, run)
                 else:
                     await run()
