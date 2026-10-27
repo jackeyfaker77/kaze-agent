@@ -163,6 +163,12 @@ class DefaultMemoryEngine(
         )
         self._wire_memory2_events()
         self.closeables = [self._v2_store, self._embedder]
+        self.memory_tasks = None
+        journal = getattr(provider, 'execution_journal', None)
+        if journal is not None:
+            from memory2.durable_tasks import MemoryTasks
+            self.memory_tasks = MemoryTasks(self._v2_store, journal, self._post_response_worker)
+            self.closeables.append(self.memory_tasks)
 
     @classmethod
     def ensure_workspace_storage(
@@ -192,6 +198,10 @@ class DefaultMemoryEngine(
         if bool((event.extra or {}).get("skip_post_memory")):
             return
         if self._event_bus is None:
+            return
+        if getattr(self, 'memory_tasks', None) is not None:
+            # Wakeups are hints. Startup discovers admission from reply facts.
+            self.memory_tasks.start()
             return
         source_ref = f"{event.session_key}@post_response"
         self._event_bus.enqueue(

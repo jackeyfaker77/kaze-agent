@@ -260,7 +260,7 @@ class ExecutionJournal:
     def append(self, turn_id: str, kind: str, payload: dict):
         if kind not in {"tool.dispatched", "tool.returned", "delivery.dispatched", "delivery.returned", "reply.delta", "messages.committed", "run.error",
                         "proactive.stage.started", "proactive.stage.completed", "proactive.observed",
-                        "proactive.candidates.released",
+                        "proactive.candidates.released", "memory.post_response.prepared",
                         "proactive.model.requested", "proactive.model.returned",
                         "model.response.recorded", "model.attempt.started", "interaction.tool_result", "model.history.selected", "continuation.boundary"}:
             raise ValueError("Unknown execution event")

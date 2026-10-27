@@ -281,10 +281,27 @@ class _AppendMessagesModule:
             raise RuntimeError("AfterReasoning requires TurnState.session")
         session = cast("Session", raw_session)
         persist_count = 1 if bool((state.msg.metadata or {}).get("omit_user_turn")) else 2
-        await self._session_services.session_manager.append_messages(
-            session,
-            cast(list[dict[str, Any]], session.messages[-persist_count:]),
-        )
+        from core.memory.task_context import memory_intent
+        ctx = cast(AfterReasoningCtx, frame.slots[_CTX_SLOT])
+        intent = None if state.msg.metadata.get('skip_post_memory') or state.msg.metadata.get('stateless') else {
+            'session_key': state.session_key, 'channel': state.msg.channel, 'chat_id': state.msg.chat_id,
+            'user_msg': state.msg.content, 'agent_response': ctx.reply, 'tool_chain': list(ctx.tool_chain),
+        }
+        from core.execution.scope import active_execution
+        scope = active_execution()
+        if intent is not None and scope is not None and getattr(scope.journal, 'memory_tasks_enabled', False):
+            # A failed append may be completed by pending-write recovery after
+            # this context/process ends. Prepare the recipe, but admit work only
+            # when the corresponding assistant conversation fact commits.
+            scope.record('memory.post_response.prepared', {'input': intent})
+        token = memory_intent.set(intent)
+        try:
+            await self._session_services.session_manager.append_messages(
+                session,
+                cast(list[dict[str, Any]], session.messages[-persist_count:]),
+            )
+        finally:
+            memory_intent.reset(token)
         return frame
 
 

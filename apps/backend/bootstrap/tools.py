@@ -80,6 +80,9 @@ class CoreRuntime:
     proactive_loop: Any | None = None
 
     async def start(self) -> None:
+        memory_tasks = getattr(getattr(self.memory_runtime, 'engine', None), 'memory_tasks', None)
+        if memory_tasks is not None:
+            memory_tasks.start()
         self.mcp_registry.start_connect_all_background()
         if self.plugin_manager is not None:
             await self.plugin_manager.load_all()
@@ -217,6 +220,9 @@ class CoreRuntime:
         return "\n".join(parts)
 
     async def stop(self) -> None:
+        memory_tasks = getattr(getattr(self.memory_runtime, 'engine', None), 'memory_tasks', None)
+        if memory_tasks is not None:
+            await memory_tasks.aclose()
         await self.scheduler.aclose()
         if self.plugin_manager is not None:
             await self.plugin_manager.terminate_all()

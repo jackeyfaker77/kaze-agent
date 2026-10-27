@@ -298,6 +298,27 @@ class ConversationProjection:
             projected = self._project_changes(changes)
             payload = {'facts': changes, 'execution_turn_id': scope.turn_id if scope else None,
                        'origin': 'accepted_conversation_change'}
+            from core.memory.task_context import memory_intent
+            intent = memory_intent.get()
+            if intent is not None and scope is not None and getattr(scope.journal, 'memory_tasks_enabled', False) and any(
+                f['kind'] == 'message.recorded' and f['data']['role'] == 'assistant'
+                for f in changes
+            ):
+                # Admission intent and the original reply fact commit together.
+                payload['memory_post_response'] = intent
+            else:
+                # Pending-write recovery has no active execution context. The
+                # stable semantic owner resolves a prepared recipe; old history
+                # and partial/interrupted replies have no recipe to promote.
+                owners = {f.get('interaction_turn_id') or f.get('content_source', {}).get('turn_id')
+                          for f in changes if f['kind'] == 'message.recorded' and f['data']['role'] == 'assistant'}
+                owners.discard(None)
+                if len(owners) == 1:
+                    turn = owners.pop()
+                    prepared = self.source.execute("SELECT payload FROM events WHERE turn_id=? AND kind='memory.post_response.prepared' ORDER BY seq DESC LIMIT 1", (turn,)).fetchone()
+                    if prepared is not None:
+                        payload['execution_turn_id'] = turn
+                        payload['memory_post_response'] = json.loads(prepared['payload'])['input']
             with self.source:
                 seq = self._insert('conversation.changed', payload)
             # Fault boundaries are intentionally separate for process crash tests.

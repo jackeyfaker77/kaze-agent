@@ -335,6 +335,9 @@ class PostResponseMemoryWorker:
                 ], token_budget
         except Exception as e:
             logger.warning(f"extract_invalidation_topics failed: {e}")
+            from core.memory.task_context import memory_task
+            if memory_task.get() is not None:
+                raise
         return [], token_budget
 
     async def _check_invalidate(
@@ -384,4 +387,7 @@ class PostResponseMemoryWorker:
                 ], token_budget
         except Exception as e:
             logger.warning(f"check_invalidate failed: {e}")
+            from core.memory.task_context import memory_task
+            if memory_task.get() is not None:
+                raise
         return [], token_budget
