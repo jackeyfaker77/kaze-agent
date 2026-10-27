@@ -907,7 +907,7 @@ async def test_alerts_are_naturalized_by_one_llm_call_per_tick(
 
 
 @pytest.mark.asyncio
-async def test_ack_failure_does_not_repeat_delivered_alert_and_retries_next_tick(
+async def test_unknown_ack_does_not_repeat_delivered_alert_or_ack_next_tick(
     tmp_path,
     request,
 ):
@@ -949,13 +949,14 @@ async def test_ack_failure_does_not_repeat_delivered_alert_and_retries_next_tick
 
     assert len(orchestrator.results) == 1
     assert store.unread("alert") == []
-    assert store.pending_acknowledgements() == {"feed_plugin:main": ["a1"]}
+    assert store.pending_acknowledgements() == {}
+    assert store.unknown_acknowledgements() == [{'source_id': 'feed_plugin:main', 'source_event_id': 'a1'}]
 
     second = runtime.begin(new_proactive_frame("telegram:1"))
     await runtime.ingest(second)
     await runtime.decide(second)
 
-    assert gateway.ack_attempts == 2
+    assert gateway.ack_attempts == 1
     assert store.pending_acknowledgements() == {}
     assert store.unread("alert") == []
     assert len(orchestrator.results) == 1

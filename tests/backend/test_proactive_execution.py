@@ -133,7 +133,7 @@ def test_invalid_proactive_prefix_fails_closed(journal, kind, payload):
 
 
 @pytest.mark.asyncio
-async def test_candidate_claim_survives_projection_loss_and_requires_explicit_close(journal):
+async def test_candidate_claim_survives_projection_loss_and_close_does_not_resend(journal):
     async def failed():
         assert claim_candidates('alert', [{'id': 'one', 'ack_server': 'calendar'}])
         raise ValueError('model failed')
@@ -149,7 +149,7 @@ async def test_candidate_claim_survives_projection_loss_and_requires_explicit_cl
         await run_proactive_recorded(journal, 's', f'next-{n}', {}, duplicate)
     journal.review(original['turn_id'], expected_seq=original['last_seq'], decision='close', action_id='close', note='checked')
     async def fresh():
-        assert claim_candidates('alert', [{'id': 'one', 'ack_server': 'calendar'}])
+        assert not claim_candidates('alert', [{'id': 'one', 'ack_server': 'calendar'}])
     await run_proactive_recorded(journal, 's', 'after-review', {}, fresh)
 
 

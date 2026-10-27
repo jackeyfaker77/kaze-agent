@@ -64,6 +64,10 @@ def inspect_host(service, turn_id):
 
 def recovery_plan(service, turn_id):
     journal = service.sessions.execution_journal
+    source = journal._conn.execute('SELECT source FROM executions WHERE turn_id=?', (turn_id,)).fetchone()
+    if source is not None and source['source'] == 'proactive':
+        from .proactive_recovery_service import recovery_plan as proactive_plan
+        return proactive_plan(service, turn_id)
     with journal._lock:
         try:
             observation = inspect_host(service, turn_id)
@@ -79,6 +83,9 @@ def recovery_plan(service, turn_id):
 async def continue_execution(service, payload, request_id, chat_admission):
     journal = service.sessions.execution_journal
     turn_id = str(payload.get('turn_id') or '')
+    if journal.get(turn_id)['source'] == 'proactive':
+        from .proactive_recovery_service import continue_execution as proactive_continue
+        return await proactive_continue(service, payload, request_id, chat_admission)
     if payload.get('confirmed') is not True:
         raise ValueError('请先查看恢复计划，再明确确认创建续跑')
     # Acquire capacity BEFORE revalidation. No await between observation, claim,

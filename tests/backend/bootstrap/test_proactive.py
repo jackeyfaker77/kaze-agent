@@ -211,9 +211,10 @@ async def test_failed_delivery_keeps_alert_unread_and_no_visible_history(
     journal = setup.sessions.execution_journal
     record = next(r for r in journal.list_executions()['executions'] if r['status'] != 'completed')
     journal.review(record['turn_id'], expected_seq=record['last_seq'], action_id='checked',
-                   decision='close', note='Test sender confirmed no delivery; explicitly allow future evaluation')
+                   decision='close', note='Stop this reminder; a new candidate version is required')
     await loop._tick()
-    assert len(setup.sessions.get_or_create(KEY).messages) == 1
+    assert not setup.sessions.get_or_create(KEY).messages
+    assert setup.runtime.provider.chat.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -248,16 +249,17 @@ async def test_ack_failure_survives_restart_without_resending(proactive_setup):
     record = journal.proactive_blocker(KEY)
     assert record is not None and record['status'] == 'needs_review'
     journal.review(record['turn_id'], expected_seq=record['last_seq'], action_id='ack-reviewed',
-                   decision='close', note='Delivery succeeded, consumption committed; only pending idempotent ACK remains')
+                   decision='close', note='Delivery succeeded; the unknown ACK must remain blocked')
     setup.ack.side_effect = None
     second = await setup.start()
     await second._tick()
-    assert setup.ack.await_count >= 2
+    assert setup.ack.await_count == 1
     assert setup.sender.await_count == 1
     assert setup.runtime.provider.chat.await_count == 1
     state = WakeStateStore(setup.workspace / "wake_proactive.db")
     try:
         assert not state.pending_acknowledgements()
+        assert state.unknown_acknowledgements()
     finally:
         state.close()
 

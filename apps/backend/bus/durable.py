@@ -22,6 +22,11 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
+def proactive_payload(payload):
+    return bool(payload.get('_proactive_owner') or
+                (payload.get('_outbound_metadata') or {}).get('source') == 'proactive')
+
+
 class DeliveryStopped(RuntimeError):
     def __init__(self, state: str):
         self.state = state
@@ -55,6 +60,8 @@ class TransportStore(TransportReview):
             CREATE TABLE IF NOT EXISTS parts (
                 job TEXT NOT NULL, part TEXT NOT NULL, payload TEXT NOT NULL,
                 state TEXT NOT NULL, result TEXT, PRIMARY KEY(job,part));
+            CREATE TABLE IF NOT EXISTS part_manifests (
+                job TEXT NOT NULL, scope TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job,scope));
         """)
         self.active: set[str] = set()
         self.init_review()
@@ -169,6 +176,18 @@ class Outbox:
         self.active: set[str] = set()
         self.tasks: set[asyncio.Task] = set()
 
+    def prepare_parts(self, name: str, parts: dict):
+        """Commit the complete renderer output before its first physical part."""
+        scope = delivery_scope.get()
+        if scope is None or scope.queue is not self:
+            raise RuntimeError('Part manifest must belong to an outbox job')
+        material = encode(parts)
+        with self.store.db:
+            row = self.store.db.execute('SELECT payload FROM part_manifests WHERE job=? AND scope=?', (scope.key, name)).fetchone()
+            if row and row[0] != material:
+                raise DeliveryStopped('delivery_render_changed')
+            self.store.db.execute('INSERT OR IGNORE INTO part_manifests VALUES (?,?,?)', (scope.key, name, material))
+
     def enqueue(self, kind: str, payload: dict, key: str | None = None) -> str:
         from core.execution.proactive import check_proactive, observe
         check_proactive()
@@ -178,6 +197,8 @@ class Outbox:
             payload = {**payload, "_transport_account": account}
         from core.execution.scope import active_execution
         scope = active_execution()
+        if scope is not None and getattr(scope, 'proactive', False):
+            payload = {**payload, '_proactive_owner': scope.turn_id}
         self.store.put(key, kind, payload, turn_id=scope.turn_id if scope is not None else None)
         observe("queue.enqueued", job_id=key, kind=kind)
         return key
@@ -220,7 +241,7 @@ class Outbox:
                     {
                         k: v
                         for k, v in row["payload"].items()
-                        if k != "_transport_account"
+                        if k not in {"_transport_account", "_proactive_owner"}
                     }
                 )
                 self.store.state(key, "done", result=result)
@@ -278,6 +299,20 @@ class Outbox:
                 )
             if row["state"] == "sending":
                 raise DeliveryStopped("needs_review")
+        job = self.store.get(key)
+        if proactive_payload(job['payload']):
+            from core.execution.proactive import proactive_scope, check_proactive
+            check_proactive()
+            execution = proactive_scope()
+            if execution is None or job['payload'].get('_proactive_owner') not in getattr(
+                    execution, 'proactive_authorized_owners', {execution.turn_id}):
+                raise DeliveryStopped('proactive_confirmation_required')
+            if getattr(execution, 'proactive_receipts_only', False):
+                raise DeliveryStopped('proactive_receipt_missing')
+            guard = getattr(execution, 'proactive_delivery_guard', None)
+            host_guard = getattr(execution, 'proactive_host_guard', None)
+            if (guard and not await guard()) or (host_guard and not await host_guard()):
+                raise DeliveryStopped('proactive_revalidation_failed')
         with self.store.db:
             self.store.db.execute(
                 "INSERT INTO parts VALUES (?,?,?,'sending',NULL) ON CONFLICT(job,part) DO UPDATE SET state='sending'",
@@ -325,6 +360,10 @@ class Outbox:
             while True:
                 for kind in tuple(self.handlers):
                     for row in self.store.pending(kind):
+                        # Proactive sends need a live eligibility check. The Host
+                        # recovery RPC obtains explicit confirmation after restart.
+                        if proactive_payload(row['payload']):
+                            continue
                         target = (row["payload"]["channel"], row["payload"]["chat_id"])
                         if (
                             row["id"] in self.active

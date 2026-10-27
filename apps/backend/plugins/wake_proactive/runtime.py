@@ -92,6 +92,7 @@ class WakeRunState:
 @dataclass(slots=True)
 class AsyncEffect:
     callback: Callable[[], Awaitable[None]]
+    recovery_id: str | None = None
 
     async def run(self) -> None:
         await self.callback()
@@ -481,6 +482,7 @@ class WakeRuntime:
         messages: list[dict[str, Any]],
         allowed: set[str],
         forced_name: str | None,
+        request: dict[str, Any] | None = None,
     ) -> Any:
         """调用一次带工具约束的 LLM，并返回经过校验的工具调用。"""
 
@@ -491,17 +493,15 @@ class WakeRuntime:
             tool_choice = {"type": "function", "function": {"name": forced_name}}
         for attempt in range(2):
             try:
-                response = await self._scope.provider.chat(
-                    messages=messages,
-                    tools=schemas,
-                    model=str(
+                response = await self._scope.provider.chat(**(request or dict(
+                    messages=messages, tools=schemas, model=str(
                         getattr(self._scope.cfg, "agent_tick_model", "")
                         or self._scope.model
                     ),
                     max_tokens=self._scope.max_tokens,
                     tool_choice=tool_choice,
                     disable_thinking=True,
-                )
+                )))
                 break
             except JSONDecodeError:
                 if attempt == 1:
@@ -514,6 +514,56 @@ class WakeRuntime:
         if call.name not in allowed:
             raise RuntimeError(f"wake proactive unexpected tool in phase: {call.name}")
         return call
+
+    def _event_request(self, messages, kind):
+        allowed = {'send_event'} if kind == 'alert' else {'send_event', 'skip_event'}
+        return dict(messages=messages, tools=[_SCHEMA_BY_NAME[n] for n in sorted(allowed)],
+                    model=str(getattr(self._scope.cfg, 'agent_tick_model', '') or self._scope.model),
+                    max_tokens=self._scope.max_tokens, disable_thinking=True,
+                    tool_choice={'type': 'function', 'function': {'name': 'send_event'}} if kind == 'alert' else 'required')
+
+    async def resume_event(self, boundary, response):
+        """Resume one frozen event decision, never restart a Wake algorithm tick."""
+        from core.execution.proactive import observe, proactive_scope
+        from core.execution.scope import fact
+        ctx = WakeContext(wake_id=boundary['wake_id'], session_key=boundary['session_key'],
+                          now_utc=datetime.fromisoformat(boundary['now_utc']))
+        state = WakeRunState(ctx=ctx, alerts=[], contents=[])
+        kind, event = boundary['kind'], boundary['event']
+        if response is None:
+            response = fact(await self._scope.provider.chat(**boundary['request']))
+        calls = response.get('tool_calls', [])
+        allowed = {'send_event'} if kind == 'alert' else {'send_event', 'skip_event'}
+        if len(calls) != 1 or calls[0]['name'] not in allowed:
+            raise ValueError('Stored proactive decision is not a safe event boundary')
+        decision = execute_event_tool(calls[0]['name'], calls[0]['arguments'])
+        scope = proactive_scope()
+        if scope is not None:
+            scope.proactive_delivery_id = boundary['delivery_id']
+        await self._commit_event_decision(state, kind, event,
+            str(event.get('id') or event.get('event_id') or ''), decision)
+        if scope is None or not scope.failed:
+            observe('recovery.settled', boundary_id=boundary['boundary_id'])
+
+    async def validate_recovery(self, boundary):
+        event = boundary['event']
+        now = self._clock.now()
+        if boundary['kind'] == 'alert':
+            return await mcp_sources.validate_alert_async(self._scope.mcp_gateway,
+                self._scope.proactive_sources, event, now=now) == 'valid'
+        if boundary['kind'] != 'context' or not event.get('expires_at'):
+            return False
+        if current_context_snapshot(event, now=now).get('available') is False:
+            return False
+        source_id = str(event.get('_source') or event.get('source_id') or '')
+        sources = [s for s in self._scope.proactive_sources if mcp_sources.source_key(s) == source_id]
+        if len(sources) != 1:
+            return False
+        refreshed = await mcp_sources.fetch_sources_async(self._scope.mcp_gateway, sources)
+        def semantic(value):
+            return {k: v for k, v in value.items() if k not in {'observed_at', 'expires_at', 'ttl_seconds'}}
+        return any(current_context_snapshot(item, now=now).get('available') is not False
+                   and semantic(item) == semantic(event) for item in refreshed['context'])
 
     async def _commit_content_decision(self, state: WakeRunState) -> bool:
         if state.ctx.terminal_action == "skip":
@@ -702,6 +752,8 @@ class WakeRuntime:
         messages = self._build_event_messages(state, kind, event)
         item_id = str(event.get("id") or event.get("event_id") or "")
         self._record_event_observation(state, kind, event, item_id, messages)
+        from core.execution.proactive_recovery import record_event_boundary
+        boundary = record_event_boundary(kind, event, state.ctx, self._event_request(messages, kind))
         logger.info(
             "[wake.event] llm start kind=%s event_id=%s title=%r",
             kind,
@@ -715,11 +767,22 @@ class WakeRuntime:
             messages,
             allowed,
             "send_event" if kind == "alert" else None,
+            request=boundary['request'] if boundary else None,
         )
         decision = execute_event_tool(call.name, call.arguments)
         if kind == "alert" and not await self._validate_alert(state, event):
             return True
-        await self._commit_event_decision(state, kind, event, item_id, decision)
+        from core.execution.proactive import proactive_scope, observe
+        scope = proactive_scope()
+        if scope is not None and boundary:
+            scope.proactive_delivery_id = boundary['delivery_id']
+        try:
+            await self._commit_event_decision(state, kind, event, item_id, decision)
+            if boundary and (scope is None or not scope.failed):
+                observe('recovery.settled', boundary_id=boundary['boundary_id'])
+        finally:
+            if scope is not None:
+                scope.proactive_delivery_id = None
         logger.info(
             "[wake.event] llm done kind=%s event_id=%s decision=%s message=%r",
             kind,
@@ -798,8 +861,10 @@ class WakeRuntime:
         self._state.save(state.ctx)
 
         # 2. 只在发送成功后消费 alert；context 不参与 reservoir ack
+        from core.execution.proactive import proactive_scope
+        recovery_id = getattr(proactive_scope(), 'proactive_delivery_id', None)
         effects: list[TurnSideEffect] = (
-            [AsyncEffect(lambda: self._ack_and_consume([event], state.ctx.now_utc))]
+            [AsyncEffect(lambda: self._ack_and_consume([event], state.ctx.now_utc), recovery_id)]
             if kind == "alert"
             else []
         )
@@ -1049,6 +1114,7 @@ class WakeRuntime:
     async def _ack_and_consume(
         self, events: list[dict[str, Any]], now: datetime
     ) -> None:
+        from core.execution.proactive import proactive_scope
         grouped: dict[str, list[str]] = {}
         for event in events:
             source_id = str(event.get("_reservoir_ack_source_id") or "")
@@ -1059,8 +1125,9 @@ class WakeRuntime:
             item_ids=[str(event["id"]) for event in events],
             acknowledgements=grouped,
             now=now,
+            delivery_id=getattr(proactive_scope(), 'proactive_delivery_id', None),
         )
-        await self._flush_pending_acknowledgements()
+        await self._flush_pending_acknowledgements(grouped)
 
     async def _consume_events(
         self,
@@ -1072,9 +1139,14 @@ class WakeRuntime:
             now,
         )
 
-    async def _flush_pending_acknowledgements(self) -> None:
+    async def _flush_pending_acknowledgements(self, selected: dict[str, list[str]] | None = None) -> None:
         grouped = self._state.pending_acknowledgements()
         for source_id, event_ids in grouped.items():
+            if selected is not None:
+                event_ids = [key for key in event_ids if key in selected.get(source_id, [])]
+                if not event_ids:
+                    continue
+            self._state.begin_acknowledgement(source_id, event_ids)
             try:
                 await mcp_sources.acknowledge_async(
                     self._scope.mcp_gateway,

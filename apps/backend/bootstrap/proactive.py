@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
+from dataclasses import asdict, replace
 from uuid import uuid4
 
 from agent.core.proactive_turn.gates import (
@@ -60,7 +60,8 @@ class _PushPort:
 
     async def _dispatch_now(self, outbound: OutboundDispatch) -> bool:
         check_proactive()
-        if not self.loop.can_send():
+        from core.execution.proactive import proactive_scope
+        if not getattr(proactive_scope(), 'proactive_receipts_only', False) and not self.loop.can_send():
             from core.execution.proactive import defer_before_delivery
             defer_before_delivery()
             observe('deliver.deferred', reason='user_activity_before_delivery')
@@ -132,6 +133,26 @@ class KazeProactiveLoop(ProactiveLoop):
     def close(self) -> None:
         self._interaction_embeddings.close()
         super().close()
+
+    def _build_plugin_runtime(self):
+        runtime = super()._build_plugin_runtime()
+        self._recovery_runtime = runtime
+        return runtime
+
+    def recovery_environment(self):
+        from core.execution.model_context import digest
+        key = self._target_session_key()
+        last_user = self._presence.get_last_user_at(key) if self._presence else None
+        workspace = self._sessions.workspace
+        files = {}
+        for name in ('config.toml', 'channels.json', 'proactive_sources.json', 'PROACTIVE_CONTEXT.md'):
+            path = workspace / name
+            files[name] = digest(path.read_text(encoding='utf-8')) if path.exists() else None
+        return {'session_key': key, 'last_user_at': last_user.isoformat() if last_user else None,
+                'ordinary_cursor': self._sessions.execution_journal._conn.execute(
+                    "SELECT max(rowid) FROM executions WHERE session_key=? AND source IN ('desktop','telegram')", (key,)).fetchone()[0],
+                'config': digest(asdict(self.runtime.config.proactive)), 'files': files,
+                'sources': digest([asdict(s) for s in self._plugin_proactive_sources])}
 
     async def run(self) -> None:
         assert self._runtime_snapshot_store is not None
@@ -247,6 +268,13 @@ class KazeProactiveLoop(ProactiveLoop):
         self._tick_last_user_at = (
             self._presence.get_last_user_at(key) if self._presence else None
         )
+        from core.execution.proactive import proactive_scope
+        execution = proactive_scope()
+        if execution is not None:
+            execution.proactive_environment = self.recovery_environment
+            async def host_guard():
+                return self.runtime.config.proactive.enabled and self.can_send()
+            execution.proactive_host_guard = host_guard
         manager = getattr(self.runtime, "plugin_manager", None)
         gates = ProactiveGateChain(manager.proactive_gates if manager else [])
         with stage("gate.plugins"):
@@ -265,6 +293,8 @@ class KazeProactiveLoop(ProactiveLoop):
             )
             return None
         self._activation = result.activation
+        if execution is not None:
+            execution.proactive_gate_activation = bool(result.activation)
         reason = "closed"
         try:
             score = await super()._tick_bound()

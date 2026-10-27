@@ -52,7 +52,10 @@ async def test_outbox_recovers_proactive_history_with_evidence_once(desktop, mon
             insert(*args, **kwargs)
         raise OSError('database acknowledgement unavailable')
     monkeypatch.setattr(runtime.session_manager._store, 'insert_message', fail_insert)
-    assert not await orchestrator.handle_proactive_turn(result=result, session_key=KEY, channel='fake', chat_id='1')
+    from core.execution.proactive import run_proactive_recorded
+    async def original_attempt():
+        assert not await orchestrator.handle_proactive_turn(result=result, session_key=KEY, channel='fake', chat_id='1')
+    await run_proactive_recorded(runtime.session_manager.execution_journal, KEY, 'original', {}, original_attempt)
     monkeypatch.setattr(runtime.session_manager._store, 'insert_message', insert)
     queued = runtime.bus.transport.db.execute("SELECT id FROM jobs WHERE kind='push:fake'").fetchone()[0]
     await runtime.bus.outbox.deliver(queued)

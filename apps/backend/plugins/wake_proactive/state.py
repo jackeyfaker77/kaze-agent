@@ -146,6 +146,16 @@ class WakeStateStore:
             """)
         self._conn.commit()
 
+        columns = {row[1] for row in self._conn.execute('PRAGMA table_info(pending_acknowledgements)')}
+        if 'state' not in columns:
+            self._conn.execute("ALTER TABLE pending_acknowledgements ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'")
+            # Legacy rows do not distinguish unsent from a lost ACK receipt.
+            self._conn.execute("UPDATE pending_acknowledgements SET state='sending'")
+            self._conn.commit()
+        self._conn.execute('''CREATE TABLE IF NOT EXISTS event_finalizations (
+            delivery_id TEXT PRIMARY KEY, item_ids TEXT NOT NULL, acknowledgements TEXT NOT NULL)''')
+        self._conn.commit()
+
     def _migrate_drift_timer(self) -> None:
         columns = {
             str(row[1]) for row in self._conn.execute("PRAGMA table_info(drift_state)")
@@ -456,12 +466,28 @@ class WakeStateStore:
         self._conn.commit()
 
     def consume_and_queue_ack(
+        self, *, item_ids: list[str], acknowledgements: dict[str, list[str]],
+        now: datetime, delivery_id: str | None = None,
+    ) -> None:
+        with self._conn:
+            self._consume_and_queue_ack(item_ids=item_ids, acknowledgements=acknowledgements,
+                                        now=now, delivery_id=delivery_id)
+
+    def _consume_and_queue_ack(
         self,
         *,
         item_ids: list[str],
         acknowledgements: dict[str, list[str]],
         now: datetime,
+        delivery_id: str | None = None,
     ) -> None:
+        if delivery_id:
+            receipt = self._conn.execute('SELECT * FROM event_finalizations WHERE delivery_id=?', (delivery_id,)).fetchone()
+            material = (json.dumps(item_ids, sort_keys=True), json.dumps(acknowledgements, sort_keys=True))
+            if receipt:
+                if (receipt['item_ids'], receipt['acknowledgements']) != material:
+                    raise ValueError('Proactive finalization identity changed')
+                return
         if item_ids:
             placeholders = ",".join("?" for _ in item_ids)
             _ = self._conn.execute(
@@ -483,12 +509,26 @@ class WakeStateStore:
                     """,
                     (source_id, event_id, now.isoformat()),
                 )
-        self._conn.commit()
+        if delivery_id:
+            self._conn.execute('INSERT INTO event_finalizations VALUES (?,?,?)', (delivery_id, *material))
+
+    def event_finalization(self, delivery_id: str) -> dict | None:
+        row = self._conn.execute('SELECT * FROM event_finalizations WHERE delivery_id=?', (delivery_id,)).fetchone()
+        if row is None:
+            return None
+        pending = []
+        for source, keys in json.loads(row['acknowledgements']).items():
+            for key in keys:
+                ack = self._conn.execute('SELECT state FROM pending_acknowledgements WHERE source_id=? AND source_event_id=?', (source, key)).fetchone()
+                if ack is None or ack['state'] != 'done':
+                    pending.append({'source_id': source, 'source_event_id': key, 'state': ack['state'] if ack else 'missing'})
+        return {'delivery_id': delivery_id, 'pending': pending, 'completed': not pending}
 
     def pending_acknowledgements(self) -> dict[str, list[str]]:
         rows = self._conn.execute("""
             SELECT source_id, source_event_id
             FROM pending_acknowledgements
+            WHERE state = 'pending'
             ORDER BY queued_at, source_id, source_event_id
             """).fetchall()
         grouped: dict[str, list[str]] = {}
@@ -497,6 +537,15 @@ class WakeStateStore:
                 str(row["source_event_id"])
             )
         return grouped
+
+    def begin_acknowledgement(self, source_id: str, event_ids: list[str]) -> None:
+        with self._conn:
+            self._conn.executemany("UPDATE pending_acknowledgements SET state='sending' WHERE source_id=? AND source_event_id=? AND state='pending'",
+                                   [(source_id, key) for key in event_ids])
+
+    def unknown_acknowledgements(self) -> list[dict]:
+        return [dict(row) for row in self._conn.execute(
+            "SELECT source_id,source_event_id FROM pending_acknowledgements WHERE state='sending'")]
 
     def mark_acknowledged(
         self,
@@ -508,7 +557,7 @@ class WakeStateStore:
         placeholders = ",".join("?" for _ in event_ids)
         _ = self._conn.execute(
             f"""
-            DELETE FROM pending_acknowledgements
+            UPDATE pending_acknowledgements SET state = 'done'
             WHERE source_id = ? AND source_event_id IN ({placeholders})
             """,
             (source_id, *event_ids),
