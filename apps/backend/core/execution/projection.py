@@ -193,7 +193,7 @@ def project_event(previous: dict | None, event: dict, root_id: str) -> dict:
             proactive["observations"].append({**payload, "seq": event["seq"]})
         else:
             raise ExecutionProjectionError(f"Unsupported proactive event kind: {kind}")
-    elif kind in {"reply.delta", "messages.committed", "run.error"}:
+    elif kind in {"reply.delta", "messages.committed", "run.error", "memory.post_response.prepared"}:
         require(state["status"] == "running")
         if kind == "run.error":
             state["error_type"] = payload.get("error_type")

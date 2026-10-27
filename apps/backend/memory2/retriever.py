@@ -10,6 +10,7 @@ import json
 import logging
 import re
 from typing import cast
+from core.memory.task_context import checkpoint_async
 
 from memory2.store import MemoryStore2
 from memory2.embedder import Embedder
@@ -80,6 +81,7 @@ class Retriever:
         self._hotness_half_life_days = max(1.0, float(hotness_half_life_days))
 
     # 统一检索入口：recall_memory 和被动预检索都复用这条查库路径。
+    @checkpoint_async
     async def retrieve(
         self,
         query: str,
@@ -228,6 +230,9 @@ class Retriever:
         vectors: list[list[float]] = []
         for result in results:
             if isinstance(result, BaseException):
+                from core.memory.task_context import memory_task
+                if memory_task.get() is not None:
+                    raise result
                 logger.warning("memory2 retrieve: embed failed, fallback lane skipped: %s", result)
                 continue
             vectors.append(cast(list[float], result))

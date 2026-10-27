@@ -48,3 +48,15 @@ class MemoryStore2(
     _StoreConnection,
 ):
     """Memory v2 的稳定存储入口，组合写入、向量和时间检索能力。"""
+
+
+# Only durable memory tasks use these receipts. Ordinary reads/writes keep their
+# existing behavior. Nested store calls form one atomic outer operation.
+from core.memory.task_context import checkpoint_store
+
+for _name in (
+    'upsert_item', 'mark_superseded', 'mark_superseded_batch', 'merge_item_raw',
+    'reinforce_items_batch', 'record_replacements', 'get_items_by_ids',
+    'vector_search', 'list_items_for_admin',
+):
+    setattr(MemoryStore2, _name, checkpoint_store(getattr(MemoryStore2, _name)))

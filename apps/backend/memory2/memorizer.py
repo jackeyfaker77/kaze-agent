@@ -300,28 +300,20 @@ class Memorizer:
         对 procedure 类型同步重建 rule_schema，并写入 _merge_note 供溯源。
         调用方保证 merged_summary 非空且 item_id 存在。
         """
-        import json as _json
-
         from memory2.store import _content_hash
 
         merged_summary = (merged_summary or "").strip()
         if not merged_summary or not item_id:
             return
 
-        row = self._store._db.execute(
-            "SELECT memory_type, extra_json FROM memory_items WHERE id=?", (item_id,)
-        ).fetchone()
-        if not row:
+        rows = self._store.get_items_by_ids([item_id])
+        if not rows:
             logger.warning("merge_item: item %s not found", item_id)
             return
 
-        memory_type, extra_json_str = row
-        old_extra: dict = {}
-        if extra_json_str:
-            try:
-                old_extra = _json.loads(extra_json_str) or {}
-            except Exception:
-                pass
+        memory_type = str(rows[0]['memory_type'])
+        raw_extra = rows[0].get('extra_json')
+        old_extra: dict = raw_extra if isinstance(raw_extra, dict) else {}
 
         new_embedding = await self._embedder.embed(merged_summary)
         new_hash = _content_hash(merged_summary, memory_type)

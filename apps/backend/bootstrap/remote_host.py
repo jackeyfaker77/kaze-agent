@@ -22,7 +22,7 @@ from desktop_bridge.session_service import DesktopBridgeService
 REMOTE_METHODS = frozenset({
     "health", "sessions.list", "session.get", "session.draft", "session.create",
     "session.rename", "session.delete", "messages.list", "chat.send", "chat.cancel",
-    "tasks.list", "memory.get", "memory.save", "runtime.catalog", "document.get",
+    "tasks.list", "memory.tasks.list", "memory.get", "memory.save", "runtime.catalog", "document.get",
     "execution.get", "execution.events", "execution.context", "executions.list", "execution.review", "execution.retry", "execution.plan", "execution.continue",
     "transport.list", "transport.get", "transport.review",
 })

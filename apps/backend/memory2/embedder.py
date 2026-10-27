@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from core.memory.task_context import checkpoint_async, checkpoint_external
 
 from core.net.http import HttpRequester, RequestBudget, get_default_http_requester
 
@@ -30,6 +31,7 @@ class Embedder:
         self._output_dimensionality = output_dimensionality
         self._requester = requester or get_default_http_requester("external_default")
 
+    @checkpoint_async
     async def embed(self, text: str) -> list[float]:
         """单条 embed"""
         results = await self.embed_batch([text])
@@ -39,6 +41,7 @@ class Embedder:
     def model_id(self) -> str:
         return self._model
 
+    @checkpoint_external
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """分批 embed，每批 ≤ MAX_BATCH，批间 sleep 0.3s"""
         results: list[list[float]] = []

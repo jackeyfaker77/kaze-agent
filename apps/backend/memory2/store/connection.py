@@ -20,11 +20,21 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+class _MemoryConnection(sqlite3.Connection):
+    defer_commit = False
+
+    def commit(self):
+        if not self.defer_commit:
+            super().commit()
+
+
 class _StoreConnection:
     def __init__(self, db_path: str | Path, vec_dim: int = VEC_DIM) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self._db = sqlite3.connect(str(self.db_path), check_same_thread=False, factory=_MemoryConnection)
+        self._db.execute('PRAGMA journal_mode=WAL')
+        self._db.execute('PRAGMA synchronous=FULL')
         self._lock = threading.RLock()
         self._closed = False
         self._db.executescript(SCHEMA)
@@ -114,6 +124,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
             )
         except Exception as exc:
             logger.warning("vec_insert rowid=%s 失败: %s", rowid, exc)
+            if self._db.defer_commit:
+                raise
 
     def _vec_delete(self, rowids: list[int]) -> None:
         """从 vec_items 批量删除。"""
@@ -125,6 +137,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
             )
         except Exception as exc:
             logger.warning("vec_delete 失败: %s", exc)
+            if self._db.defer_commit:
+                raise
 
     # ------------------------------------------------------------------
     # 生命周期

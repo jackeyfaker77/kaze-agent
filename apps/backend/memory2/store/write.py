@@ -371,6 +371,10 @@ class _StoreWriteMixin:
                     self._db.commit()
 
         except sqlite3.IntegrityError:
+            if getattr(self._db, 'defer_commit', False):
+                # The durable task owns this transaction and its receipt.
+                # Do not roll back its save boundary and silently continue.
+                raise
             # content_hash 撞上库中已有条目（极低概率）
             # 安全降级：supersede 旧条目，让 upsert_item 走 reinforce 路径
             logger.warning(

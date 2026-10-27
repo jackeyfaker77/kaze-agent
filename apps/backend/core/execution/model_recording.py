@@ -96,6 +96,10 @@ def model_attempt():
 def recorded_model_call(operation):
     @wraps(operation)
     async def invoke(self, *args, **kwargs):
+        from core.memory.task_context import memory_task
+        task = memory_task.get()
+        if task is not None:
+            return await task.model(self, invoke, args, kwargs)
         scope = active_execution()
         owner_token = None
         journal = getattr(self, 'execution_journal', None)
