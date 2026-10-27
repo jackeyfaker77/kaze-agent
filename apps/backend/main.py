@@ -27,6 +27,7 @@ from core.common.workspace import resolve_default_workspace
 from core.net.http import SharedHttpResources
 from bootstrap.host_state import WorkspaceInUse, host_status, request_host_stop
 from bootstrap.runtime_host import Attachment, RuntimeHost
+from core.common.restore_safety import RestoreQuarantined, require_live_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,8 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("bridge", "desktop", "host", "host-status", "host-stop", "conversation-rebuild", "execution-rebuild", "setup", "init"),
+        choices=("bridge", "desktop", "host", "host-status", "host-stop", "conversation-rebuild", "execution-rebuild", "setup", "init",
+                 "workspace-backup", "backup-verify", "workspace-restore"),
         help="运行命令；desktop 是 bridge 的兼容别名",
     )
     parser.add_argument("--config", default="config.toml", help="配置文件路径")
@@ -44,6 +46,11 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--remote-port", type=int, help="Host 的本机 WebSocket 端口；通过 TLS 代理或 SSH 隧道连接")
     parser.add_argument("--remote-token-file", type=Path, help="远程连接认证 token 文件（至少 32 字符）")
     parser.add_argument("--force", action="store_true", help="初始化时覆盖现有文件")
+    parser.add_argument('--destination', type=Path, help='备份或隔离恢复的新目录，禁止覆盖')
+    parser.add_argument('--backup', type=Path, help='待校验或恢复的备份目录')
+    parser.add_argument('--data-root', action='append', default=[], metavar='NAME=PATH', help='额外领域数据目录，恢复到隔离副本')
+    parser.add_argument('--quiesced', action='store_true', help='确认 Host 和独立领域写入者均已停止；不是在线备份')
+    parser.add_argument('--revision', default='', help='备份所对应的已核对代码版本')
     parser.add_argument(
         "--inspect-modules",
         action="store_true",
@@ -77,6 +84,7 @@ async def inspect_modules(
     config_path: str = "config.toml",
     workspace: Path | None = None,
 ) -> None:
+    require_live_workspace(Path(config_path).resolve().parent)
     import logging
     from bootstrap.tools import build_core_runtime
 
@@ -99,6 +107,7 @@ async def serve_bridge(
     config_path: str = "config.toml",
     workspace: Path | None = None,
 ) -> None:
+    require_live_workspace(Path(config_path).resolve().parent)
     configure_logging_stream(sys.stderr)
     runtime = build_app_runtime(
         Config.load(config_path),
@@ -113,6 +122,7 @@ async def serve_bridge(
 
 
 async def serve_host(config_path: str, workspace: Path | None = None, *, remote_port: int | None = None, remote_token_file: Path | None = None) -> None:
+    require_live_workspace(Path(config_path).resolve().parent)
     attachment: Attachment | None = None
     if remote_port is not None:
         from bootstrap.remote_host import RemoteHostServer, read_remote_token
@@ -138,6 +148,36 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("远程端口必须在 1–65535 之间")
     config_path = str(args.config)
     workspace = args.workspace
+
+    if args.command in {'workspace-backup', 'backup-verify', 'workspace-restore'}:
+        from bootstrap.workspace_backup import create_backup, verify_backup, restore_backup
+        try:
+            if args.command == 'workspace-backup':
+                if workspace is None or args.destination is None:
+                    parser.error('workspace-backup 要求显式 --workspace 和 --destination')
+                roots = {}
+                for spec in args.data_root:
+                    name, separator, path = spec.partition('=')
+                    if not separator or not path or name in roots:
+                        raise ValueError('无效或重复的 --data-root NAME=PATH')
+                    roots[name] = Path(path)
+                result = create_backup(workspace, args.destination, quiesced=args.quiesced,
+                                       data_roots=roots, revision=args.revision)
+            else:
+                if args.backup is None:
+                    parser.error('请提供 --backup')
+                if args.command == 'backup-verify':
+                    manifest = verify_backup(args.backup)
+                    result = {'verified': True, 'backup_id': manifest['backup_id'], 'files': len(manifest['files'])}
+                else:
+                    if args.destination is None:
+                        parser.error('workspace-restore 要求 --destination')
+                    result = restore_backup(args.backup, args.destination)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
+        except (ValueError, OSError, WorkspaceInUse) as exc:
+            logger.error('%s', exc)
+            return 2
 
     if args.command in {'conversation-rebuild', 'execution-rebuild'}:
         from bootstrap.host_state import WorkspaceOwner
@@ -200,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
+        require_live_workspace(workspace or resolve_default_workspace())
+        require_live_workspace(Path(config_path).resolve().parent)
         if args.inspect_modules:
             asyncio.run(inspect_modules(config_path, workspace))
         elif args.command == "host":
@@ -212,6 +254,9 @@ def main(argv: list[str] | None = None) -> int:
     except WorkspaceInUse as exc:
         logger.error("%s", exc)
         return 2
+    except RestoreQuarantined as exc:
+        logger.error('%s', exc)
+        return 3
     return 0
 
 
