@@ -58,6 +58,12 @@ class _SessionConnection:
                 self._conn.rollback()
                 raise
 
+    def committed_history_snapshot(self, session_key: str) -> dict:
+        with self._lock:
+            snapshot = self._projection.session_snapshot(session_key)
+            snapshot['messages'] = [self._row_to_message(row) for row in snapshot.pop('rows')]
+            return snapshot
+
     def __del__(self) -> None:
         if not self._closed:
             try:

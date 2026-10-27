@@ -90,7 +90,10 @@ class CodexResponsesTransport:
             max_retries=0,
         )
         try:
-            stream = await client.responses.create(**self._build_payload(request))
+            from core.execution.model_recording import projected_request, model_attempt
+            payload = projected_request(self._build_payload(request), 'responses.v1')
+            model_attempt()
+            stream = await client.responses.create(**payload)
             return await self._consume_stream(cast(Any, stream), request)
         except openai.APIStatusError as exc:
             status_code = exc.status_code

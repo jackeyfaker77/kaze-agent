@@ -1,6 +1,6 @@
 """Append-only execution facts and transactionally maintained status index.
 
-Conversation projections share this fact space; model context is not yet replayed here.
+Conversation and model-context projections share this fact space.
 All writes commit synchronously before their caller crosses an effect boundary.
 """
 from __future__ import annotations
@@ -54,6 +54,8 @@ class ExecutionJournal:
                 CREATE TABLE IF NOT EXISTS execution_checkpoint (id INTEGER PRIMARY KEY CHECK(id=1), seq INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS proactive_claims (session_key TEXT, candidate TEXT, turn_id TEXT,
                     PRIMARY KEY(session_key,candidate));
+                CREATE TABLE IF NOT EXISTS model_context_cache (turn_id TEXT, call_id TEXT, projection TEXT,
+                    PRIMARY KEY(turn_id,call_id));
             """)
             with self._transaction():
                 self._conn.execute("INSERT OR IGNORE INTO identity VALUES (1, ?, ?)", (uuid4().hex, CONTRACT_VERSION))
@@ -244,13 +246,95 @@ class ExecutionJournal:
         if kind not in {"tool.dispatched", "tool.returned", "delivery.dispatched", "delivery.returned", "reply.delta", "messages.committed", "run.error",
                         "proactive.stage.started", "proactive.stage.completed", "proactive.observed",
                         "proactive.candidates.released",
-                        "proactive.model.requested", "proactive.model.returned"}:
+                        "proactive.model.requested", "proactive.model.returned",
+                        "model.response.recorded", "model.attempt.started", "interaction.tool_result", "model.history.selected"}:
             raise ValueError("Unknown execution event")
         with self._transaction():
             row = self._row(turn_id)
             if row["status"] != "running" or row["epoch"] != self.epoch:
                 raise ExecutionConflict("Execution is not running in this epoch")
             self._event(row, kind, payload)
+
+    def model_response(self, turn_id: str, call_id: str) -> dict:
+        with self._lock:
+            row = self._conn.execute("SELECT payload FROM events WHERE turn_id=? AND kind='model.response.recorded' AND json_extract(payload,'$.call_id')=?",
+                                     (turn_id, call_id)).fetchone()
+            if row is None or 'response' not in json.loads(row[0]):
+                raise ValueError('Model response is not committed')
+            return json.loads(row[0])['response']
+
+    def tool_context(self, turn_id: str, result_id: str) -> list[dict]:
+        with self._lock:
+            row = self._conn.execute("SELECT payload FROM events WHERE turn_id=? AND kind='interaction.tool_result' AND json_extract(payload,'$.result_id')=?",
+                                     (turn_id, result_id)).fetchone()
+            if row is None:
+                raise ValueError('Tool context is not committed')
+            return json.loads(row[0])['messages']
+
+    def prepare_model_request(self, turn_id: str, call_id: str, request: dict, transport: str,
+                              *, history_visible: bool = True) -> dict:
+        from .model_context import VERSION, observe_request, materialize, digest
+        components, manifest = observe_request(request, transport)
+        # Validate before committing; only a valid projection may cross the wire.
+        materialize({c['id']: c for c in components}, manifest)
+        with self._transaction():
+            row = self._row(turn_id)
+            if row['status'] != 'running' or row['epoch'] != self.epoch:
+                raise ExecutionConflict('Model request does not belong to this running epoch')
+            manifest['history_visible'] = history_visible
+            # These facts own interaction semantics; component observations own
+            # only the request's chosen representation and environmental inputs.
+            manifest['derived_from'] = [r['seq'] for r in self._conn.execute(
+                "SELECT seq FROM events WHERE turn_id=? AND kind IN ('model.history.selected','model.response.recorded','interaction.tool_result') ORDER BY seq", (turn_id,))]
+            known = set()
+            for event in self._conn.execute("SELECT payload FROM events WHERE turn_id=? AND kind='model.context.observed'", (turn_id,)):
+                known.update(c['id'] for c in json.loads(event[0])['components'])
+            fresh = [c for c in components if c['id'] not in known]
+            if fresh:
+                self._event(row, 'model.context.observed', {'version': VERSION, 'components': fresh})
+            prior = self._conn.execute('SELECT * FROM events WHERE turn_id=? ORDER BY seq', (turn_id,)).fetchall()
+            manifest['input_prefix_digest'] = digest({'root_id': self.root_id,
+                'events': [{**dict(r), 'payload': json.loads(r['payload'])} for r in prior]})
+            self._event(row, 'model.request.prepared', {**manifest, 'call_id': call_id})
+            seq = self._state(turn_id)['last_seq']
+            projected = self.model_context(turn_id, call_id=call_id, through_seq=seq)
+            self._conn.execute('INSERT INTO model_context_cache VALUES (?,?,?)', (turn_id, call_id, encode(projected)))
+        return projected
+
+    def interaction_history(self, turn_id: str) -> dict:
+        from .model_context import project_interaction_history
+        with self._lock:
+            rows = self._conn.execute('SELECT * FROM events WHERE turn_id=? ORDER BY seq', (turn_id,)).fetchall()
+            return project_interaction_history([{**dict(r), 'payload': json.loads(r['payload'])} for r in rows], self.root_id)
+
+    def model_context(self, turn_id: str, *, call_id: str = '', through_seq: int | None = None,
+                      expected_digest: str | None = None) -> dict:
+        """Read facts, never trust a cache or resume work. Also available remotely."""
+        from .model_context import project_model_context
+        if through_seq is not None and (type(through_seq) is not int or through_seq <= 0):
+            raise ValueError('Invalid model context prefix')
+        if expected_digest is not None and not call_id:
+            raise ValueError('Prefix digest verification requires a model call identity')
+        with self._lock:
+            rows = self._conn.execute('SELECT * FROM events WHERE turn_id=? ORDER BY seq', (turn_id,)).fetchall()
+            if not rows:
+                raise KeyError('Unknown execution')
+            events = [{**dict(r), 'payload': json.loads(r['payload'])} for r in rows]
+            requests = [e for e in events if e['kind'] == 'model.request.prepared'
+                        and (through_seq is None or e['seq'] <= through_seq)]
+            if not call_id:
+                return {'turn_id': turn_id, 'availability': 'recorded' if requests else 'not_recorded',
+                        'calls': [{'call_id': e['payload']['call_id'], 'through_seq': e['seq'],
+                                   'transport': e['payload']['transport'],
+                                   'request_digest': e['payload']['request_digest']} for e in requests]}
+            if through_seq is None:
+                selected = next((e for e in requests if e['payload']['call_id'] == call_id), None)
+                if selected is None:
+                    raise ValueError('No recorded model context for this call; legacy requests cannot be inferred')
+                through_seq = selected['seq']
+            assert through_seq is not None
+            return project_model_context(events, root_id=self.root_id, turn_id=turn_id,
+                                         call_id=call_id, through_seq=through_seq, expected_digest=expected_digest)
 
     def _unresolved(self, turn_id: str) -> bool:
         return unresolved(self._state(turn_id))

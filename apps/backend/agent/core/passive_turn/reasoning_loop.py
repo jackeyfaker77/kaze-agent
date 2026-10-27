@@ -1,6 +1,7 @@
 """DefaultReasoner 的多轮工具调用循环实现。"""
 
 from __future__ import annotations
+from core.execution.model_recording import history_chat
 
 import logging
 from datetime import datetime
@@ -164,7 +165,7 @@ class _PassiveReasoningLoopMixin:
                 schema_names = self._tools.get_registered_names() - disabled
             elif schema_names is not None:
                 schema_names = [name for name in schema_names if name not in disabled]
-            response = await self._llm.provider.chat(
+            response = await history_chat(self._llm.provider,
                 messages=messages,
                 tools=self._tools.get_schemas(names=schema_names),
                 model=self._llm_config.model,
@@ -612,7 +613,7 @@ class _PassiveReasoningLoopMixin:
                     "role": "user",
                     "content": "你刚才只输出了思考过程，没有给出正式回复。请直接回复用户，不要重复思考。",
                 })
-                retry_response = await self._llm.provider.chat(
+                retry_response = await history_chat(self._llm.provider,
                     messages=messages,
                     tools=[],
                     model=self._llm_config.model,

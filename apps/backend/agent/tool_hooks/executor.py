@@ -80,7 +80,8 @@ class ToolExecutor:
 
         try:
             # 这里才进入真实工具执行；hook 本身不直接替代工具实现。
-            output = await invoker(request.tool_name, final_arguments)
+            from core.execution.model_recording import invoke_model_tool
+            output = await invoke_model_tool(request.call_id, invoker, request.tool_name, final_arguments)
         except (JournalWriteError, ExecutionNeedsReview):
             raise
         except Exception as exc:

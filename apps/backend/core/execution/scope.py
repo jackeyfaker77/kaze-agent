@@ -11,6 +11,7 @@ from .journal import ExecutionJournal
 
 
 current_effect: ContextVar[tuple[object, str] | None] = ContextVar("current_effect", default=None)
+current_model_tool: ContextVar[tuple[object, str, str] | None] = ContextVar('current_model_tool', default=None)
 
 
 def fact(value: Any) -> Any:
@@ -36,6 +37,9 @@ class ExecutionScope:
             parent = current_effect.get()
             if kind.endswith(".dispatched") and parent is not None and parent[0] is self:
                 payload = {**payload, "parent_effect_id": parent[1]}
+            owner = current_model_tool.get()
+            if kind.endswith('.dispatched') and owner is not None and owner[0] is self:
+                payload = {**payload, 'model_call_id': owner[1], 'tool_call_id': owner[2]}
             self.journal.append(self.turn_id, kind, payload)
         except Exception as exc:
             self.broken = True
