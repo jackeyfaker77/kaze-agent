@@ -28,13 +28,20 @@ async def test_shell_timeout_after_effect_stops_model_and_survives_replay(deskto
         "time.sleep(20)\n", encoding="utf-8",
     )
     launches = []
+    unknown_at_model_calls = []
     class RecordingShell(ShellTool):
         async def execute(self, **kwargs):
             result = await super().execute(**kwargs)
             launches.append(json.loads(result))
             return result
     runtime.tools.register(RecordingShell(working_dir=tmp_path))
-    runtime.tools.register(ShellTaskOutputTool())
+    class RecordingOutput(ShellTaskOutputTool):
+        async def execute(self, **kwargs):
+            result = await super().execute(**kwargs)
+            if json.loads(result).get("outcome_unknown"):
+                unknown_at_model_calls.append(model_calls)
+            return result
+    runtime.tools.register(RecordingOutput())
     model_calls = 0
     async def model(**kwargs):
         nonlocal model_calls
@@ -57,7 +64,14 @@ async def test_shell_timeout_after_effect_stops_model_and_survives_replay(deskto
     }})
     assert response.error and response.error.code == "execution_needs_review"
     assert counter.read_text() == "1" and len(launches) == 1
-    assert model_calls == (2 if background else 1)
+    if background:
+        # A poll may return running just before the hard deadline (the remaining
+        # wait is rounded to milliseconds). Only an unknown result must halt
+        # model calls; legitimate earlier polls do not violate that boundary.
+        assert unknown_at_model_calls == [model_calls]
+        assert model_calls >= 2
+    else:
+        assert model_calls == 1
     # A timed-out background pump is cancelled by its timer; finish cleanup
     # before fixture teardown closes the event loop.
     if background:
@@ -68,7 +82,8 @@ async def test_shell_timeout_after_effect_stops_model_and_survives_replay(deskto
     row = journal.get(response.error.details["turn_id"])
     assert row["status"] == "needs_review"
     assert row["can_review_no_effect"] is (not background)
-    effect, = [e for e in row["effects"] if e["name"] == ("task_output" if background else "shell")]
+    effect, = [e for e in row["effects"] if e["name"] == ("task_output" if background else "shell")
+               and e["certainty"] == "unknown"]
     assert effect["certainty"] == "unknown"
     assert json.loads(effect["outcome"]["result"])["outcome_unknown" if background else "interrupted"] is True
     for _ in range(2):
