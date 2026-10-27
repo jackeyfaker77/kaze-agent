@@ -1,6 +1,7 @@
 """Acceptance of the production request boundary and its authoritative sources."""
 from contextlib import contextmanager
 from copy import deepcopy
+import asyncio
 import json
 import sqlite3
 from types import SimpleNamespace
@@ -262,6 +263,99 @@ async def test_background_call_has_own_durable_scope(tmp_path):
         assert journal.model_context(execution['turn_id'], call_id=call_id)['request'] == wire[0]
         assert journal.interaction_history(execution['turn_id'])['messages'] == []
     finally:
+        await provider._client.close()
+        journal.close()
+
+
+@pytest.mark.parametrize('queue_kind', ['observers', 'markdown'])
+@pytest.mark.parametrize('fail_model', [False, True])
+async def test_queued_memory_model_does_not_own_replied_turn_or_next_producer(tmp_path, monkeypatch, queue_kind, fail_model):
+    from bus.event_bus import EventBus
+    from core.memory.markdown.maintenance import MarkdownMemoryMaintenance
+    from core.execution.model_recording import history_lane
+    from core.execution.scope import active_execution
+
+    journal = ExecutionJournal(tmp_path)
+    provider, wire = await provider_with_wire([{'content': 'summary'}], journal=journal)
+    started, release = asyncio.Event(), asyncio.Event()
+    original = provider._client._client._transport
+
+    async def slow(request):
+        started.set()
+        await release.wait()
+        if fail_model:
+            wire.append(json.loads(request.content))
+            return httpx.Response(503, json={'error': {'message': 'test unavailable'}})
+        return await original.handle_async_request(request)
+
+    provider._client._client._transport = httpx.MockTransport(slow)
+    bus = EventBus()
+
+    async def summarize(_):
+        assert active_execution() is None and not history_lane.get()
+        if fail_model:
+            # A handled auxiliary failure still owns its own durable terminal fact.
+            from openai import InternalServerError
+            with pytest.raises(InternalServerError):
+                await provider.chat(messages=[{'role': 'user', 'content': 'summary'}], tools=[], model='m', max_tokens=10)
+        else:
+            await provider.chat(messages=[{'role': 'user', 'content': 'summary'}], tools=[], model='m', max_tokens=10)
+
+    if queue_kind == 'observers':
+        bus.on(str, summarize)
+        enqueue = lambda: bus.enqueue('post response')
+        drain = bus.drain
+    else:
+        maintenance = MarkdownMemoryMaintenance(store=SimpleNamespace(), provider=provider, model='m', keep_count=20)
+        maintenance._get_session = lambda _: SimpleNamespace()
+        async def save(_): pass
+        maintenance._save_session = save
+        monkeypatch.setattr(maintenance, '_should_consolidate_session', lambda _: False)
+        monkeypatch.setattr(maintenance, 'refresh_recent_turns', summarize)
+        # Direct lifecycle enqueue keeps every turn even while maintenance is busy.
+        enqueue = lambda: maintenance._enqueue_maintenance('same-session')
+        async def drain():
+            await asyncio.gather(*list(maintenance._maintenance_tasks.values()))
+
+    parents = []
+    try:
+        with running(journal, key='first') as parent:
+            parents.append(parent.turn_id)
+            lane = history_lane.set(True)
+            try:
+                enqueue()
+            finally:
+                history_lane.reset(lane)
+            await asyncio.wait_for(started.wait(), 5)
+            # Regression: the slow auxiliary request previously blocked this terminal event.
+            journal.finish(parent.turn_id, 'completed')
+        with running(journal, key='second') as parent:
+            parents.append(parent.turn_id)
+            enqueue()
+            journal.finish(parent.turn_id, 'completed')
+        release.set()
+        await drain()
+        rows = journal.list_executions()['executions']
+        children = [r for r in rows if r['source'] == 'model']
+        assert len(children) == 2 and len(wire) == 2
+        assert {r['input']['parent_execution']['turn_id'] for r in children} == set(parents)
+        assert all(r['input']['parent_execution']['root_id'] == journal.root_id for r in children)
+        for turn in parents:
+            assert journal.get(turn)['status'] == 'completed'
+            assert not journal.get(turn).get('model_calls')
+        for child in children:
+            assert child['status'] == ('failed' if fail_model else 'completed')
+            assert journal.interaction_history(child['turn_id'])['messages'] == []
+            call_id = next(iter(child['model_calls']))
+            expected = journal.model_context(child['turn_id'], call_id=call_id)
+            for _ in range(2):
+                journal.rebuild_projection()
+                assert journal.model_context(child['turn_id'], call_id=call_id) == expected
+        assert len(wire) == 2
+    finally:
+        release.set()
+        await drain()
+        await bus.aclose()
         await provider._client.close()
         journal.close()
 

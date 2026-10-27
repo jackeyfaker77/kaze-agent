@@ -6,10 +6,12 @@ import asyncio
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable
+from contextvars import Context
 from typing import TYPE_CHECKING
 
 from bus.events_lifecycle import TurnCommitted
 from core.memory.events import ConsolidationCommitted
+from core.execution.background import background_context
 
 from .consolidation import _MarkdownConsolidationWorker
 from .contracts import (
@@ -60,7 +62,7 @@ class MarkdownMemoryMaintenance:
         self._get_session: Callable[[str], object] | None = None
         self._save_session: Callable[[object], Awaitable[None]] | None = None
         self._after_consolidation: Callable[[object], Awaitable[None]] | None = None
-        self._maintenance_queues: dict[str, deque[str]] = {}
+        self._maintenance_queues: dict[str, deque[Context]] = {}
         self._maintenance_tasks: dict[str, asyncio.Task[None]] = {}
         self._global_write_lock = asyncio.Lock()
         self._maintenance_failures: dict[str, str] = {}
@@ -101,12 +103,13 @@ class MarkdownMemoryMaintenance:
         if self._get_session is None or self._save_session is None:
             return
         queue = self._maintenance_queues.setdefault(session_key, deque())
-        queue.append(session_key)
+        queue.append(background_context())
         if session_key in self._maintenance_tasks:
             return
         task = asyncio.create_task(
             self._run_maintenance_queue(session_key),
             name=f"markdown-memory-maintenance:{session_key}",
+            context=Context(),
         )
         self._maintenance_tasks[session_key] = task
         task.add_done_callback(lambda t: self._on_maintenance_done(t, session_key))
@@ -118,30 +121,31 @@ class MarkdownMemoryMaintenance:
                 queue = self._maintenance_queues.get(session_key)
                 if not queue:
                     return
-                _ = queue.popleft()
-                session = self._get_session(session_key) if self._get_session else None
-                if session is None:
+                context = queue.popleft()
+                try:
+                    keep_running = await asyncio.create_task(self._maintain_once(session_key), context=context)
+                except Exception:
+                    queue.clear()
+                    raise
+                if not keep_running:
+                    queue.clear()
                     return
-                if self._should_consolidate_session(session):
-                    try:
-                        result = await self._consolidate_unlocked(
-                            ConsolidateRequest(session=session)
-                        )
-                        if result.trace.get("mode") == "markdown" and self._save_session:
-                            await self._save_session(session)
-                    except Exception as exc:
-                        self._maintenance_failures[session_key] = (
-                            _format_consolidation_error(exc)
-                        )
-                        queue.clear()
-                        raise
-                    if result.trace.get("mode") == "failed":
-                        queue.clear()
-                        return
-                else:
-                    await self.refresh_recent_turns(
-                        RefreshRecentTurnsRequest(session=session)
-                    )
+
+    async def _maintain_once(self, session_key: str) -> bool:
+        session = self._get_session(session_key) if self._get_session else None
+        if session is None:
+            return False
+        if self._should_consolidate_session(session):
+            try:
+                result = await self._consolidate_unlocked(ConsolidateRequest(session=session))
+                if result.trace.get("mode") == "markdown" and self._save_session:
+                    await self._save_session(session)
+            except Exception as exc:
+                self._maintenance_failures[session_key] = _format_consolidation_error(exc)
+                raise
+            return result.trace.get("mode") != "failed"
+        await self.refresh_recent_turns(RefreshRecentTurnsRequest(session=session))
+        return True
 
     def _on_maintenance_done(
         self,
@@ -167,6 +171,7 @@ class MarkdownMemoryMaintenance:
             next_task = asyncio.create_task(
                 self._run_maintenance_queue(session_key),
                 name=f"markdown-memory-maintenance:{session_key}",
+                context=Context(),
             )
             self._maintenance_tasks[session_key] = next_task
             next_task.add_done_callback(lambda t: self._on_maintenance_done(t, session_key))

@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from contextvars import Context
 from collections.abc import Awaitable, Callable
 from typing import TypeAlias, TypeVar, cast
+
+from core.execution.background import background_context
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +20,7 @@ class EventBus:
 
     def __init__(self) -> None:
         self._handlers: dict[type[object], list[Handler[object]]] = {}
-        self._observe_queue: asyncio.Queue[object] | None = None
+        self._observe_queue: asyncio.Queue[tuple[object, Context]] | None = None
         self._observe_task: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -96,7 +99,7 @@ class EventBus:
             logger.warning("event enqueue ignored after close: %s", type(event).__name__)
             return
         queue = self._ensure_observe_queue()
-        queue.put_nowait(event)
+        queue.put_nowait((event, background_context()))
 
     async def drain(
         self,
@@ -141,7 +144,7 @@ class EventBus:
 
     def _ensure_observe_queue(
         self,
-    ) -> asyncio.Queue[object]:
+    ) -> asyncio.Queue[tuple[object, Context]]:
         if self._observe_queue is None:
             self._observe_queue = asyncio.Queue()
         self._ensure_observe_task()
@@ -157,6 +160,7 @@ class EventBus:
         task = asyncio.create_task(
             self._run_observe_queue(),
             name="event_bus_observe_queue",
+            context=Context(),
         )
         self._observe_task = task
         task.add_done_callback(self._on_observe_task_done)
@@ -168,9 +172,9 @@ class EventBus:
             queue = self._observe_queue
             if queue is None:
                 return
-            event = await queue.get()
+            event, context = await queue.get()
             try:
-                await self.fanout(event)
+                await asyncio.create_task(self.fanout(event), context=context)
             finally:
                 queue.task_done()
 

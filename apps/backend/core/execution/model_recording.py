@@ -11,6 +11,7 @@ from functools import wraps
 from uuid import uuid4
 
 from .contracts import ExecutionNeedsReview, JournalWriteError
+from .background import background_origin
 from .model_context import digest, materialize, observe_request
 from .scope import ExecutionScope, active_execution, current_execution, current_model_tool
 
@@ -100,7 +101,11 @@ def recorded_model_call(operation):
         journal = getattr(self, 'execution_journal', None)
         if scope is None and journal is not None:
             key = uuid4().hex
-            row, _ = journal.admit('model:' + key, 'model', key, {'origin': 'background_model_call'})
+            origin = background_origin.get()
+            payload: dict = {'origin': 'background_model_call'}
+            if origin is not None:
+                payload['parent_execution'] = dict(origin)
+            row, _ = journal.admit('model:' + key, 'model', key, payload)
             journal.start(row['turn_id'])
             scope = ExecutionScope(journal, row['turn_id'])
             owner_token = current_execution.set(scope)
