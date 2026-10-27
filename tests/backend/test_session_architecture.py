@@ -49,6 +49,7 @@ async def test_plain_session_runs_complete_turn_and_persists(tmp_path):
     finally:
         await runtime.stop()
         await runtime.memory_runtime.aclose()
+        runtime.session_manager._store.close()
         await http.aclose()
 
 
@@ -125,6 +126,7 @@ async def test_same_session_turns_serialize_without_merging_other_sessions(tmp_p
     finally:
         await runtime.stop()
         await runtime.memory_runtime.aclose()
+        runtime.session_manager._store.close()
         await http.aclose()
 
 
@@ -147,4 +149,5 @@ async def test_bridge_create_get_and_delete_only_target_session(tmp_path):
         await bridge.aclose()
         await runtime.stop()
         await runtime.memory_runtime.aclose()
+        runtime.session_manager._store.close()
         await http.aclose()

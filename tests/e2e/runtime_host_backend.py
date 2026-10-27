@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from telegram.ext import Application
 from telegram.request import BaseRequest
+from telegram.error import NetworkError
 
 from agent.config_models import Config, ChannelsConfig, TelegramChannelConfig
 from agent.provider import LLMResponse, ToolCall
@@ -48,6 +49,9 @@ class TelegramWire(BaseRequest):
         pass
     async def do_request(self, url, method, request_data=None, **kwargs):
         endpoint = url.rsplit("/", 1)[-1]
+        if scenario.startswith('startup-') and endpoint == scenario.removeprefix('startup-') and not (workspace/'network-up').exists():
+            record('startup_network_failure', endpoint=endpoint)
+            raise NetworkError('isolated startup outage')
         params = request_data.parameters if request_data else {}
         result = True
         if endpoint == "getMe":
@@ -115,6 +119,12 @@ config = Config(provider="openai", model="offline", api_key="offline", memory_op
 config.proactive = load_proactive_config({"enabled": True, "lifecycle": "wake", "session_key": "telegram:42",
     "default_channel": "telegram", "default_chat_id": "42", "anyaction_enabled": False,
     "message_dedupe_enabled": False})
+if scenario.startswith('startup-'):
+    from infra.channels.telegram_channel import TelegramChannel
+    config.proactive.enabled = False
+    production_delay = TelegramChannel.startup_retry_delay
+    TelegramChannel.startup_retry_delay = staticmethod(lambda error, attempt:
+        .1 if production_delay(error, attempt) is not None else None)
 tool_module.build_providers = lambda *args: (SimpleNamespace(chat=model), None, None)
 tool_module._resolve_plugin_dirs = lambda *args: []
 original_build = tool_module.build_core_runtime
@@ -127,7 +137,7 @@ def build(*args):
     for action in ("fetch", "ack"):
         core.tools.register(Source(f"mcp_host_source__{action}"), source_type="mcp", source_name="host_source")
     # Persist one future reminder before starting workers. Subsequent hosts load it.
-    if not (workspace / "scheduled").exists():
+    if not scenario.startswith('startup-') and not (workspace / "scheduled").exists():
         core.scheduler.add_job(ScheduledJob(trigger="at", tier="instant",
             fire_at=datetime.now(timezone.utc) + timedelta(seconds=3), channel="telegram", chat_id="44",
             session_key="telegram:44", message="host schedule", name="host-schedule"))
