@@ -120,14 +120,17 @@ class RecordedProactiveProvider:
         # This digest is an audit reference, not a resumable model-context snapshot.
         scope.record("proactive.model.requested", {
             "call_id": key, "model": kwargs.get("model"),
-            "input_digest": sha256(encode(kwargs).encode()).hexdigest(),
+            "input_digest": sha256(encode({k: v for k, v in kwargs.items() if k != 'on_content_delta'}).encode()).hexdigest(),
         })
+        before = set(scope.journal.get(scope.turn_id).get('model_calls', {}))
         try:
             response = await self.provider.chat(**kwargs)
         except BaseException as exc:
             scope.record("proactive.model.returned", {"call_id": key, "error_type": type(exc).__name__})
             raise
-        scope.record("proactive.model.returned", {"call_id": key, "response": fact(response)})
+        recorded = set(scope.journal.get(scope.turn_id).get('model_calls', {})) - before
+        outcome = {'model_call_id': next(iter(recorded))} if len(recorded) == 1 else {'response': fact(response)}
+        scope.record("proactive.model.returned", {"call_id": key, **outcome})
         return response
 
 

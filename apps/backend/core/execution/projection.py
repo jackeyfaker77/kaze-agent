@@ -43,6 +43,9 @@ def project_event(previous: dict | None, event: dict, root_id: str) -> dict:
     elif kind in {"run.ended", "run.recovered"}:
         require(state["status"] in ACTIVE and payload.get("status") in TERMINAL)
         require(not unresolved(state) or payload["status"] == "needs_review")
+        if payload['status'] == 'completed':
+            require(all(c['status'] == 'returned' for c in state.get('model_calls', {}).values()),
+                    'Completed execution has unfinished model calls')
         if payload['status'] == 'completed' and 'proactive' in state:
             require(all(s['status'] == 'completed' for s in state['proactive']['stages'].values()),
                     'Completed proactive attempt has unfinished stages')
@@ -84,6 +87,53 @@ def project_event(previous: dict | None, event: dict, root_id: str) -> dict:
         # Adapter proof of rejection is different from a generic tool return.
         if kind == "delivery.returned" and payload["certainty"] == "confirmed" and payload.get("ok") is False:
             effect["retry_safe"] = True
+    elif kind == 'interaction.tool_result':
+        require(state['status'] == 'running')
+        call = state.get('model_calls', {}).get(payload.get('call_id'))
+        require(call is not None and call['status'] == 'returned' and not call.get('error_type'))
+        results = call.setdefault('tool_results', {})
+        key = payload.get('tool_call_id')
+        require(isinstance(key, str) and bool(key) and key not in results)
+        require(key in call.get('tool_call_ids', []), 'Tool result has no owning semantic call')
+        require(isinstance(payload.get('messages'), list) and bool(payload['messages']))
+        results[key] = {'result_id': payload['result_id'], 'seq': event['seq']}
+    elif kind.startswith('model.'):
+        require(state['status'] == 'running')
+        calls = state.setdefault('model_calls', {})
+        if kind == 'model.history.selected':
+            require(payload.get('version') == 1 and isinstance(payload.get('history_digest'), str))
+            require(isinstance(payload.get('conversation_prefix'), dict))
+        elif kind == 'model.context.observed':
+            from .model_context import VERSION, digest
+            require(payload.get('version') == VERSION and isinstance(payload.get('components'), list))
+            for component in payload['components']:
+                require(digest({'field': component['field'], 'value': component['value']}) == component['id'],
+                        'Invalid model context component')
+        elif kind == 'model.request.prepared':
+            from .model_context import VERSION, TRANSPORTS
+            key = payload.get('call_id')
+            require(isinstance(key, str) and bool(key) and key not in calls)
+            require(payload.get('version') == VERSION and payload.get('transport') in TRANSPORTS)
+            calls[key] = {'call_id': key, 'status': 'prepared', 'request_seq': event['seq'],
+                          'request_digest': payload['request_digest'], 'transport': payload['transport'], 'attempts': 0,
+                          'history_visible': payload.get('history_visible', False)}
+        elif kind == 'model.attempt.started':
+            call = calls.get(payload.get('call_id'))
+            require(call is not None and call['status'] == 'prepared')
+            require(payload.get('attempt') == call['attempts'] + 1)
+            call['attempts'] += 1
+        elif kind == 'model.response.recorded':
+            call = calls.get(payload.get('call_id'))
+            require(call is not None and call['status'] == 'prepared')
+            require(('response' in payload) != ('error_type' in payload))
+            if 'response' in payload:
+                require(isinstance(payload['response'], dict))
+                ids = [c.get('id') for c in payload['response'].get('tool_calls', [])]
+                require(all(isinstance(i, str) and bool(i) for i in ids) and len(ids) == len(set(ids)))
+                call['tool_call_ids'] = ids
+            call.update(status='returned', response_seq=event['seq'], error_type=payload.get('error_type'))
+        else:
+            raise ExecutionProjectionError(f'Unsupported model event kind: {kind}')
     elif kind.startswith("proactive."):
         require(state["source"] == "proactive" and state["status"] == "running")
         proactive = state.setdefault("proactive", {"stages": {}, "models": {}, "observations": []})
@@ -121,7 +171,10 @@ def project_event(previous: dict | None, event: dict, root_id: str) -> dict:
         elif kind == "proactive.model.returned":
             call = proactive["models"].get(payload.get("call_id"))
             require(call is not None and call["status"] == "requested")
-            require(("response" in payload) != ("error_type" in payload))
+            require(sum(k in payload for k in ('response', 'error_type', 'model_call_id')) == 1)
+            if 'model_call_id' in payload:
+                linked = state.get('model_calls', {}).get(payload['model_call_id'])
+                require(linked is not None and linked['status'] == 'returned' and not linked.get('error_type'))
             call.update(status="returned", outcome=payload, end_seq=event["seq"])
         elif kind == "proactive.observed":
             require(isinstance(payload.get("stage"), str) and isinstance(payload.get("detail"), dict))

@@ -15,14 +15,14 @@ def get_history_since_consolidated(
     memory_window: int,
 ) -> list[dict]:
     """读取最近一次记忆整合之后的会话历史。"""
-
+    history_reader = getattr(session, 'read_committed_history', None) or session.get_history
     try:
-        return session.get_history(
+        return history_reader(
             max_messages=memory_window,
             start_index=session.last_consolidated,
         )
     except TypeError:
-        return session.get_history(max_messages=memory_window)
+        return history_reader(max_messages=memory_window)
 
 
 def get_session_metadata(session: object) -> dict[str, Any]:

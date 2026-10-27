@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, cast
 from openai import AsyncOpenAI
+from core.execution.model_recording import recorded_model_call, projected_request, model_attempt
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
@@ -238,6 +239,7 @@ class LLMProvider:
             else bool(payload_snapshot_enabled)
         )
 
+    @recorded_model_call
     async def chat(
         self,
         messages: list[dict],
@@ -293,6 +295,10 @@ class LLMProvider:
                 payload_snapshot_enabled=payload_snapshot_enabled,
             ),
         )
+        if getattr(resp.choices[0], 'finish_reason', None) == 'length':
+            raise ContextLengthError('模型输出被长度限制截断，不能作为完整交互结果')
+        if getattr(resp.choices[0], 'finish_reason', None) == 'content_filter':
+            raise ContentSafetyError('模型输出被内容审查截断')
         msg = resp.choices[0].message
 
         tool_calls = []
@@ -347,6 +353,7 @@ class LLMProvider:
         cache_prompt_tokens: int | None = None
         cache_hit_tokens: int | None = None
         total_tokens: int | None = None
+        finish_reason: str | None = None
 
         stream_iter = aiter(stream)
         while True:
@@ -369,6 +376,8 @@ class LLMProvider:
             if not choices:
                 continue
             choice = choices[0]
+            if getattr(choice, 'finish_reason', None):
+                finish_reason = choice.finish_reason
             delta = getattr(choice, "delta", None)
             if delta is None:
                 continue
@@ -398,6 +407,13 @@ class LLMProvider:
                 content_parts.append(content_piece)
                 if not tool_call_seen:
                     await on_content_delta({"content_delta": content_piece})
+
+        if finish_reason == 'length':
+            raise ContextLengthError('模型流输出被长度限制截断，不能作为完整交互结果')
+        if finish_reason == 'content_filter':
+            raise ContentSafetyError('模型流输出被内容审查截断')
+        if finish_reason not in {'stop', 'tool_calls', 'function_call'}:
+            raise RuntimeError('模型流在完整结束标记之前中断')
 
         tool_calls: list[ToolCall] = []
         for idx in sorted(tool_call_chunks):
@@ -439,6 +455,7 @@ class LLMProvider:
         *,
         payload_snapshot_enabled: bool | None = None,
     ) -> object:
+        kwargs = projected_request(kwargs, 'chat.completions.v1')
         _save_llm_payload_snapshot(
             kwargs,
             enabled=(
@@ -449,6 +466,7 @@ class LLMProvider:
         )
         last_err: Exception | None = None
         for attempt in range(self._max_retries + 1):
+            model_attempt()
             try:
                 return await asyncio.wait_for(
                     self._client.chat.completions.create(**kwargs),
@@ -725,6 +743,9 @@ def _normalize_chat_messages(
     normalized: list[dict] = []
     for msg in messages:
         item = dict(msg)
+        # Runtime-owned Codex continuation items are only materialized by the
+        # Responses adapter. A route change must not leak them into Chat wire IO.
+        item.pop('model_state', None)
         role = str(item.get("role", "") or "")
         content = item.get("content")
 

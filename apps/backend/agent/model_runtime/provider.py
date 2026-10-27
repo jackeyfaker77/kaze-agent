@@ -11,6 +11,7 @@ from agent.model_runtime.catalog.codex import CodexModelCatalog
 from agent.model_runtime.errors import ContextWindowError, ModelRuntimeError
 from agent.model_runtime.transports.responses import CodexResponsesTransport
 from agent.model_runtime.types import ModelRequest
+from core.execution.model_recording import recorded_model_call
 
 
 class CodexProvider(LLMProvider):
@@ -23,6 +24,7 @@ class CodexProvider(LLMProvider):
         self._capabilities = {}
         self._catalog_lock = asyncio.Lock()
 
+    @recorded_model_call
     async def chat(self, messages, tools, model, max_tokens, tool_choice="auto",
                    extra_body=None, disable_thinking=False, payload_snapshot_enabled=None,
                    on_content_delta=None, require_image_input=False) -> LLMResponse:

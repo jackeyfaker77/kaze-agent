@@ -424,6 +424,9 @@ def build_core_runtime(
     loop_provider = provider
     loop_model = config.model
     session_manager = SessionManager(workspace)
+    for model_provider in (provider, light_provider, agent_provider):
+        if model_provider is not None:
+            model_provider.execution_journal = session_manager.execution_journal
     bus.enable_durability(workspace, session_manager.execution_journal)
     session_manager._store.transport_store = bus.transport
     loop_ref: dict[str, AgentLoop] = {}

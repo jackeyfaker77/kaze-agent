@@ -141,6 +141,113 @@ class ConversationProjection:
         updates = ','.join(f'{c}=excluded.{c}' for c in columns if c != key)
         self.view.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)}) ON CONFLICT({key}) DO UPDATE SET {updates}", tuple(row[c] for c in columns))
 
+    def _project_changes(self, facts, *, through_seq=None):
+        sources = {}
+        for fact in facts:
+            ref = fact.get('content_source')
+            if ref:
+                if through_seq is not None and ref['seq'] >= through_seq:
+                    raise ValueError('Conversation source is outside its committed prefix')
+                row = self.source.execute('SELECT * FROM events WHERE seq=?', (ref['seq'],)).fetchone()
+                if row is not None:
+                    if row['version'] != CONTRACT_VERSION:
+                        raise ValueError('Unsupported semantic source version')
+                    sources[row['seq']] = {**dict(row), 'payload': json.loads(row['payload'])}
+        return project_conversation_facts(facts, sources)
+
+    def _bind_semantic_sources(self, changes, scope):
+        for change in changes:
+            if change['kind'] != 'message.recorded':
+                continue
+            data = change['data']
+            previous = self.view.execute('SELECT event_seq FROM conversation_message_sources WHERE message_id=?', (change['id'],)).fetchone()
+            if previous is not None:
+                old_event = self.source.execute('SELECT * FROM events WHERE seq=?', (previous[0],)).fetchone()
+                if old_event is None:
+                    raise ValueError('Existing conversation source is missing')
+                old_fact = next(f for f in self._decode(old_event)['data']['facts']
+                                if f['kind'] == 'message.recorded' and f['id'] == change['id'])
+                old_row = self._project_changes([old_fact])[0][2]
+                if old_row['content'] != data['content']:
+                    change['origin'] = 'conversation_edit'
+                else:
+                    # Metadata updates and full-view reconciliation cannot claim
+                    # an old message for whatever execution happens to be active.
+                    for key in ('interaction_turn_id', 'content_source', 'origin'):
+                        if key in old_fact:
+                            change[key] = old_fact[key]
+                    if 'content_source' in change:
+                        del data['content']
+                continue
+            turn_id = scope.turn_id if scope is not None else None
+            if turn_id is None:
+                # Cancellation/pending-write recovery happens after the execution
+                # scope ended, possibly in a new process. Resolve its stable
+                # admission key, never guess ownership by matching reply text.
+                attributes = data.get('attributes')
+                metadata = attributes.get('metadata') if isinstance(attributes, dict) else None
+                metadata = metadata if isinstance(metadata, dict) else {}
+                request_key = metadata.get('execution_request_id')
+                if isinstance(request_key, str) and request_key:
+                    source = metadata.get('source') or 'desktop'
+                    source = source if isinstance(source, str) else 'desktop'
+                    admitted = self.source.execute("""SELECT turn_id FROM events WHERE kind='request.accepted'
+                        AND json_extract(payload,'$.identity.session_key')=?
+                        AND json_extract(payload,'$.identity.source')=?
+                        AND json_extract(payload,'$.identity.request_key')=?""",
+                        (data['session_key'], source, request_key)).fetchone()
+                    turn_id = admitted['turn_id'] if admitted else None
+            if turn_id is None:
+                continue
+            rows = self.source.execute("SELECT * FROM events WHERE turn_id=? AND kind IN ('request.accepted','model.response.recorded') ORDER BY seq DESC", (turn_id,)).fetchall()
+            if data['role'] == 'assistant' and any(r['kind'] == 'model.response.recorded' for r in rows):
+                change['interaction_turn_id'] = turn_id
+            # Presentation transforms (e.g. parsed proactive text) remain explicit
+            # accepted presentation facts, not a second verdict on a raw response.
+            change['origin'] = 'interaction_presentation'
+            for row in rows:
+                payload = json.loads(row['payload'])
+                expected = None
+                if data['role'] == 'assistant' and row['kind'] == 'model.response.recorded':
+                    expected = payload.get('response', {}).get('content')
+                elif data['role'] == 'user' and row['kind'] == 'request.accepted':
+                    expected = payload['input'].get('content')
+                if isinstance(expected, str) and expected == data.get('content'):
+                    change['content_source'] = {'seq': row['seq'], 'turn_id': turn_id, 'kind': row['kind']}
+                    if row['kind'] == 'model.response.recorded':
+                        change['content_source']['call_id'] = payload['call_id']
+                    del data['content']
+                    break
+        return changes
+
+    def session_snapshot(self, session_key: str) -> dict:
+        """Project committed history directly; the Session/UI cache is not input."""
+        messages = {}
+        links = {}
+        previous, checksum = 0, ''
+        rows = self.source.execute('SELECT * FROM events WHERE turn_id=? ORDER BY seq', (self.stream,)).fetchall()
+        for event in rows:
+            decoded = self._decode(event)
+            body = decoded['data']
+            if body['previous_cursor'] != previous or body['previous_digest'] != checksum:
+                raise RuntimeError('Conversation event prefix is incomplete')
+            facts = {f['id']: f for f in body['facts'] if f['kind'].startswith('message.')}
+            for table, identity, record in self._project_changes(body['facts'], through_seq=event['seq']):
+                if table != 'messages':
+                    continue
+                if record is None:
+                    messages.pop(identity, None)
+                    links.pop(identity, None)
+                elif record['session_key'] == session_key:
+                    fact = facts[identity]
+                    # Metadata-only delivery updates keep the original ownership.
+                    prior = links.get(identity, {}) if messages.get(identity, {}).get('content') == record['content'] else {}
+                    messages[identity] = record
+                    links[identity] = {'seq': event['seq'], 'turn_id': fact.get('interaction_turn_id', prior.get('turn_id'))}
+            previous, checksum = event['seq'], decoded['digest']
+        return {'root_id': self.root, 'stream': self.stream, 'through_seq': previous,
+                'prefix_digest': checksum, 'rows': sorted(messages.values(), key=lambda m: m['seq']), 'links': links}
+
     def replay(self, *, rebuild: bool = False):
         """Caller holds the view write transaction, including its cursor update."""
         checkpoint = self.view.execute('SELECT * FROM conversation_projection WHERE id=1').fetchone()
@@ -161,7 +268,7 @@ class ConversationProjection:
             body = self._decode(row)['data']
             if body['previous_cursor'] != previous_seq or body['previous_digest'] != previous_digest:
                 raise RuntimeError('Conversation event prefix is incomplete')
-            changes = project_conversation_facts(body['facts'])
+            changes = self._project_changes(body['facts'], through_seq=row['seq'])
             if row['kind'] == 'conversation.baseline':
                 if after:
                     raise RuntimeError('Unexpected conversation baseline')
@@ -186,7 +293,8 @@ class ConversationProjection:
         if changes:
             from core.execution.scope import active_execution
             scope = active_execution()
-            projected = project_conversation_facts(changes)
+            changes = self._bind_semantic_sources(changes, scope)
+            projected = self._project_changes(changes)
             payload = {'facts': changes, 'execution_turn_id': scope.turn_id if scope else None,
                        'origin': 'accepted_conversation_change'}
             with self.source:

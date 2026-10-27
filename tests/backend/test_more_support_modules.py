@@ -215,7 +215,7 @@ async def test_provider_payload_snapshot_switch_default_off_and_opt_in(
     monkeypatch.setattr(provider_module, "_PAYLOAD_SNAPSHOT_DIR", snapshot_dir)
     monkeypatch.setattr(provider_module, "_LAST_PAYLOAD_PATH", last_payload)
 
-    stream = _FakeStream([SimpleNamespace(choices=[])])
+    stream = _FakeStream([SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop', delta=SimpleNamespace())])])
     fake = _FakeClient(
         [
             _Response(content="off"),
@@ -317,7 +317,7 @@ async def test_provider_chat_stream_parses_content_reasoning_and_tool_calls(
                     SimpleNamespace(
                         delta=SimpleNamespace(
                             content="好", reasoning_content="法", tool_calls=[]
-                        )
+                        ), finish_reason='stop',
                     )
                 ]
             ),
@@ -360,7 +360,7 @@ async def test_provider_chat_stream_extracts_openai_cached_tokens(
         [
             SimpleNamespace(
                 choices=[
-                    SimpleNamespace(delta=SimpleNamespace(content="好", tool_calls=[]))
+                    SimpleNamespace(delta=SimpleNamespace(content="好", tool_calls=[]), finish_reason='stop')
                 ]
             ),
             SimpleNamespace(

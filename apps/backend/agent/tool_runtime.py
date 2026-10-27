@@ -112,18 +112,20 @@ def append_tool_result(
     tool_name: str | None = None,
 ) -> None:
     result = normalize_tool_result(content)
-    messages.append(
+    projected: list[dict[str, Any]] = [
         {
             "role": "tool",
             "tool_call_id": tool_call_id,
             "content": result.text or "工具执行完成。",
         }
-    )
+    ]
     if result.content_blocks:
         prefix = f"以下是工具 {tool_name} 读取到的文件内容，请直接查看。" if tool_name else "以下是工具读取到的文件内容，请直接查看。"
-        messages.append(
+        projected.append(
             {
                 "role": "user",
                 "content": [{"type": "text", "text": prefix}, *result.content_blocks],
             }
         )
+    from core.execution.model_recording import record_tool_context
+    messages.extend(record_tool_context(projected, tool_call_id=tool_call_id))

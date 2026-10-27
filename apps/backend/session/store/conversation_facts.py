@@ -30,7 +30,7 @@ def conversation_fact(entity: str, identity: str, row: dict | None) -> dict:
     return {'kind': noun + '.recorded', 'id': identity, 'data': data}
 
 
-def project_conversation_facts(facts: list[dict]) -> list[tuple[str, str, dict | None]]:
+def project_conversation_facts(facts: list[dict], semantic_events: dict[int, dict] | None = None) -> list[tuple[str, str, dict | None]]:
     """Same fact prefix gives the same rows; no storage, clock or random access."""
     result = []
     identities = set()
@@ -46,6 +46,21 @@ def project_conversation_facts(facts: list[dict]) -> list[tuple[str, str, dict |
         row = None
         if kind.endswith('.recorded'):
             data = dict(fact['data'])
+            source = fact.get('content_source')
+            if source is not None:
+                if 'content' in data:
+                    raise ValueError('Conversation content has two authorities')
+                event = (semantic_events or {}).get(source['seq'])
+                if event is None or event['turn_id'] != source['turn_id'] or event['kind'] != source['kind']:
+                    raise ValueError('Conversation semantic source is missing or mismatched')
+                if event['kind'] == 'model.response.recorded':
+                    if event['payload']['call_id'] != source['call_id']:
+                        raise ValueError('Conversation model call identity mismatch')
+                    data['content'] = event['payload']['response']['content']
+                elif event['kind'] == 'request.accepted':
+                    data['content'] = event['payload']['input']['content']
+                else:
+                    raise ValueError('Unsupported conversation semantic source')
             if table == 'messages':
                 data['ts'] = data.pop('timestamp')
                 data['extra'] = data.pop('attributes')

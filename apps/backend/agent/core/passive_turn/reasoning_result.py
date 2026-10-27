@@ -1,6 +1,7 @@
 """被动推理的工具事件观测与结果构建逻辑。"""
 
 from __future__ import annotations
+from core.execution.model_recording import history_chat
 
 import logging
 from typing import Any
@@ -99,7 +100,7 @@ class _PassiveReasoningResultMixin:
 
         # 2. 先尝试让模型给一段中文收尾总结。
         try:
-            response = await self._llm.provider.chat(
+            response = await history_chat(self._llm.provider,
                 messages=messages
                 + [
                     support.build_context_hint_message(
