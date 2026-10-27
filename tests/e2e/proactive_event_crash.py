@@ -68,6 +68,12 @@ class Source(Tool):
             return json.dumps([{'event_id': 'once', 'kind': 'alert', 'title': 'remind once'}])
         count('ack')
         crash('ack_unknown')
+        if scenario == 'ack_rejected':
+            return '{"ok":false}'
+        if scenario == 'ack_unsuccessful':
+            return '{"success":false}'
+        if scenario == 'ack_timeout':
+            raise TimeoutError('ACK response lost')
         return '{"ok":true}'
 
 
@@ -155,6 +161,14 @@ async def main():
     try:
         if phase == 'crash':
             await loop._tick_bound('fixed-trigger')
+            if scenario in {'ack_rejected', 'ack_unsuccessful', 'ack_timeout'}:
+                record = journal.find(key, 'proactive', 'fixed-trigger')
+                assert record['status'] == 'needs_review', record
+                assert adapter._state.unknown_acknowledgements()
+                assert not journal._conn.execute(
+                    "SELECT 1 FROM events WHERE kind='proactive.observed' AND json_extract(payload, '$.stage')='recovery.settled'"
+                ).fetchone()
+                os._exit(73)
             raise AssertionError('Crash point was not reached')
         before_calls = (workspace / 'calls.jsonl').read_text() if (workspace / 'calls.jsonl').exists() else ''
         for _ in range(3):
