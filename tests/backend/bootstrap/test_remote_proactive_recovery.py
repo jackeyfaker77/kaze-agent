@@ -30,6 +30,8 @@ class Source(Tool):
                 self.owner.core.presence.record_user_message('telegram:42')
             return json.dumps({'valid_event_ids': ['reminder:v1'] if self.owner.valid else []})
         self.owner.acks += 1
+        if getattr(self.owner, 'reject_ack', False):
+            return '{"ok":false}'
         return '{"ok":true}'
 
 
@@ -108,6 +110,35 @@ async def test_two_remote_clients_recover_same_reminder_once(remote, interrupted
     finally:
         await first.close()
         await second.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_recovery_ack_rejection_stays_blocked_on_repeated_confirmation(remote, interrupted):
+    socket = await authenticate(remote.url)
+    probe = interrupted
+    probe.reject_ack = True
+    journal = probe.core.session_manager.execution_journal
+    try:
+        plan = (await rpc(socket, 'execution.plan', {'turn_id': probe.turn}))['payload']
+        assert plan['allowed'], plan
+        payload = {'turn_id': probe.turn, 'confirmed': True,
+                   'plan_digest': plan['plan_digest'], 'action_id': 'confirm'}
+        result = await rpc(socket, 'execution.continue', payload)
+        assert result.get('error'), result
+        child = journal.get(probe.turn)['continuation_turn_id']
+        assert journal.get(child)['status'] == 'needs_review'
+        for _ in range(2):
+            journal.rebuild_projection()
+            repeated = await rpc(socket, 'execution.continue', payload)
+            assert not repeated.get('error'), repeated
+            assert not repeated['payload']['created']
+            assert repeated['payload']['execution']['status'] == 'needs_review'
+            blocked = (await rpc(socket, 'execution.plan', {'turn_id': child}))['payload']
+            assert not blocked['allowed'] and 'unknown_effect' in blocked['reasons']
+            assert 'not_interrupted' not in blocked['reasons']
+        assert probe.models == probe.sends == probe.acks == 1
+    finally:
+        await socket.close()
 
 
 @pytest.mark.asyncio

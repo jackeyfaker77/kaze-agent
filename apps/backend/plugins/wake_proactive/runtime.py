@@ -1156,12 +1156,15 @@ class WakeRuntime:
                 )
             except Exception as exc:
                 logger.warning(
-                    "wake proactive ack pending source=%s count=%d error=%s",
+                    "wake proactive ack unresolved source=%s count=%d error=%s",
                     source_id,
                     len(event_ids),
                     exc,
                 )
-                continue
+                # Keep the durable sending fence, but do not let the enclosing
+                # effect/turn claim successful settlement. A negative response
+                # is not a protocol-level guarantee that no external work ran.
+                raise
             self._state.mark_acknowledged(source_id, event_ids)
 
     def _read_memory(self) -> str:

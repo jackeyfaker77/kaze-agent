@@ -945,7 +945,8 @@ async def test_unknown_ack_does_not_repeat_delivered_alert_or_ack_next_tick(
 
     first = runtime.begin(new_proactive_frame("telegram:1"))
     await runtime.ingest(first)
-    await runtime.decide(first)
+    with pytest.raises(RuntimeError, match="temporary ack failure"):
+        await runtime.decide(first)
 
     assert len(orchestrator.results) == 1
     assert store.unread("alert") == []

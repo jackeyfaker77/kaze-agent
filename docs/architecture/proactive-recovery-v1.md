@@ -75,6 +75,7 @@
 | after_receipt / after_queue_done | 复用回执，发送总计 1，会话一条 |
 | after_finalization | 复用领域收条，仅发送尚未派发的来源 ACK |
 | ack_unknown | 发送一次、ACK 派发一次，未知 ACK 保持阻塞 |
+| ack_rejected / ack_unsuccessful / ack_timeout | ACK 返回 `ok:false`、`success:false` 或超时后，执行保留 `needs_review`，不提交成功收尾；强制退出并重复恢复后模型、发送、ACK 均维持一次 |
 | after_ack | 复用 ACK 的完成状态，不再次调用来源 |
 | after_settled | 仅补执行终态，无模型／工具／发送 |
 | after_completed | 查看／重复重放不产生新工作 |
@@ -88,6 +89,8 @@
 - `test_proactive_event_recovery.py`：原八个窗口继续证明“重放本身不执行”。
 
 明确限制：本轮适配 Wake 的单条提醒／Context 决策及其收尾。内容调查和完整 Drift 在任意中间工具点的续跑、带自定义插件 gate activation 的收尾，没有对应协议时继续阻塞。不能借已有 `resolve` 文本重造任意 Python 回调，也不将这些边界声明为可自动恢复。
+
+ACK 明确返回失败也不等于协议证明“外部操作没有发生”。失败必须传递给外层执行，保留待核对与持久发送栅栏，不能吞掉异常后记录 `recovery.settled` / `completed`；本阶段不授予自动重试 ACK 的资格。
 
 ## 验收记录
 

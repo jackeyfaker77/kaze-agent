@@ -10,7 +10,8 @@ import pytest
 
 @pytest.mark.parametrize('scenario', ['before_model', 'after_model', 'after_decision',
     'after_enqueue', 'physical_unknown', 'model_unknown', 'after_receipt', 'after_queue_done',
-    'after_finalization', 'ack_unknown', 'after_ack', 'after_settled', 'canonical_response', 'after_completed'])
+    'after_finalization', 'ack_unknown', 'after_ack', 'after_settled', 'canonical_response', 'after_completed',
+    'ack_rejected', 'ack_unsuccessful', 'ack_timeout'])
 def test_confirmed_recovery_does_not_repeat_committed_work(tmp_path, scenario):
     root = Path(__file__).resolve().parents[2]
     env = {**os.environ, 'PYTHONPATH': str(root / 'apps/backend'), 'PYTHONIOENCODING': 'utf-8'}
@@ -31,7 +32,13 @@ def test_confirmed_recovery_does_not_repeat_committed_work(tmp_path, scenario):
     assert report['send'] == (0 if scenario == 'model_unknown' else 1)
     assert report['ack'] <= 1
     assert len(report['messages']) == (0 if scenario in {'physical_unknown', 'model_unknown'} else 1)
-    if scenario not in {'physical_unknown', 'model_unknown', 'ack_unknown', 'after_completed'}:
+    if scenario in {'ack_rejected', 'ack_unsuccessful', 'ack_timeout'}:
+        assert report['status'] == 'needs_review'
+        assert report['ack'] == report['send'] == report['model'] == 1
+        assert 'unknown_effect' in report['recovery']
+        assert 'not_interrupted' not in report['recovery']
+        assert 'boundary_settled' not in report['recovery']
+    elif scenario not in {'physical_unknown', 'model_unknown', 'ack_unknown', 'after_completed'}:
         assert report['recovery'] == 'completed', report
     elif scenario in {'physical_unknown', 'ack_unknown'}:
         assert 'unknown_effect' in report['recovery']
