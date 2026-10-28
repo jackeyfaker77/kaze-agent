@@ -156,7 +156,9 @@ class TransportReview:
         from bus.durable import proactive_payload
         if proactive_payload(row['payload']) and (unknown or any(r['request'].get('absent_parts') for r in reviews)):
             reason = '主动提醒的未知发送结果不能通过重新排队解除；请核对并结束处置'
-        return {**row, 'parts': parts, 'reviews': reviews, 'related_jobs': self.related_keys(row),
+        attempts = [dict(r) for r in self.db.execute(
+            'SELECT attempt,started,finished,outcome,reason,retry_delay FROM transport_attempts WHERE job=? ORDER BY attempt', (key,))]
+        return {**row, 'parts': parts, 'reviews': reviews, 'attempt_history': attempts, 'related_jobs': self.related_keys(row),
                 'executions': [{'turn_id': r['turn_id'], 'session_key': r['session_key'], 'status': r['status']}
                                for r in records],
                 'retry': {'allowed': not reason or bool(unknown and reason.startswith('需逐项')),

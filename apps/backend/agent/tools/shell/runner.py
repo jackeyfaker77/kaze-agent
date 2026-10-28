@@ -16,6 +16,8 @@ def _subprocess_options(cwd: Path | None, env: dict[str, str] | None) -> dict[st
     options: dict[str, Any] = {
         "cwd": str(cwd) if cwd is not None else None,
         "env": env,
+        # Tools are non-interactive; never consume the desktop bridge's stdin.
+        "stdin": asyncio.subprocess.DEVNULL,
         "stdout": asyncio.subprocess.PIPE,
         "stderr": asyncio.subprocess.PIPE,
     }

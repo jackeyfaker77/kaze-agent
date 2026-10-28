@@ -1114,3 +1114,37 @@ async def test_bg_pump_done_evicts_registry_and_log(monkeypatch, tmp_path):
 
     assert task_id not in shell_mod._BG_REGISTRY
     assert not Path(log_path).exists()
+
+
+def test_shell_description_matches_platform():
+    tool = ShellTool()
+    expected = 'Windows cmd.exe' if os.name == 'nt' else 'POSIX /bin/sh'
+    assert expected in tool.description
+    assert expected in tool.parameters['properties']['command']['description']
+    assert 'EOF' in tool.description
+
+
+def test_shell_cannot_read_parent_protocol_stdin(tmp_path):
+    import subprocess
+    import sys
+    import shlex
+    child = tmp_path / 'child.py'
+    child.write_text('import sys; print(repr(sys.stdin.read()))', encoding='utf-8')
+    command = subprocess.list2cmdline([sys.executable, str(child)]) if os.name == 'nt' else shlex.join([sys.executable, str(child)])
+    parent = tmp_path / 'parent.py'
+    parent.write_text(
+        'import asyncio\nfrom agent.tools.shell.runner import _run\n'
+        + f'r=asyncio.run(_run({command!r}, 2))\n'
+        + 'assert r[2] == 0 and not r[3], r\nassert r[0].strip() == "\'\'", r\n', encoding='utf-8')
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[5] / 'apps/backend'))
+    proc = subprocess.Popen([sys.executable, str(parent)], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    try:
+        # Keep the parent's protocol pipe open: the child must still see EOF.
+        proc.wait(timeout=15)
+        out, err = proc.communicate()
+        assert proc.returncode == 0, (out, err)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
