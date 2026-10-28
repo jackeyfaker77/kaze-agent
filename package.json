@@ -18,6 +18,7 @@
     "desktop:dev": "pnpm --filter kaze-desktop --fail-if-no-match run dev",
     "desktop:start": "pnpm --filter kaze-desktop --fail-if-no-match run start",
     "desktop:test": "node apps/desktop/scripts/test-unit.mjs",
+    "desktop:test:conversation-ui": "node apps/desktop/scripts/test-conversation-ui.cjs",
     "desktop:typecheck": "pnpm --filter kaze-desktop --fail-if-no-match run typecheck",
     "dev": "pnpm run desktop:dev",
     "lint": "pnpm --filter kaze-desktop --fail-if-no-match run lint",

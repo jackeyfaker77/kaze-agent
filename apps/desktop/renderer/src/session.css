@@ -86,3 +86,30 @@
 .execution-detail form,.execution-detail label{display:grid;gap:8px;margin-top:12px}
 .execution-detail textarea{min-height:100px;width:100%;resize:vertical}
 @media(max-width:900px){.execution-columns{grid-template-columns:minmax(0,1fr)}}
+
+/* Shared history/stream disclosures. Motion comes from the existing chat-* classes in styles.css. */
+.message-parts{min-width:0}
+.message-disclosure{min-width:0}
+.session-app .message-disclosure-toggle{display:flex;width:100%;min-height:40px;gap:8px;padding:6px 8px;justify-content:flex-start;text-align:left;color:var(--muted);font-size:13px;line-height:1.5;border-radius:7px}
+.message-disclosure-toggle svg{flex-shrink:0}
+.message-chevron.expanded{transform:rotate(90deg)}
+.message-disclosure-body{padding:4px 0 8px 20px;min-width:0}
+.message-disclosure .chat-tool-call-content>div,.message-disclosure .chat-thinking-content>div{min-height:0;overflow:clip}
+.message-disclosure .chat-thinking-content{overflow:clip}
+.message-process{margin:0 0 10px;border-left:1px solid var(--line);padding-left:4px}
+.message-process>.message-disclosure-toggle{color:var(--ink)}
+.message-thinking-duration{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;margin-left:auto}
+.message-tool-name{color:var(--ink);flex-shrink:0}
+.message-tool-summary{font-family:Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.message-tool-status{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;margin-left:auto;font-size:12px}
+.message-tool-status[data-status=error],.message-tool-status[data-status=denied],.message-tool-status[data-status=blocked]{color:var(--danger)}
+.message-tool-field{margin:6px 0 12px;min-width:0}
+.message-tool-field>span{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+.message-tool-field pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;padding:10px;background:var(--container);border-radius:6px;line-height:1.65}
+.message-thinking .markdown,.message-commentary{font-size:13px;color:var(--muted)}
+.message-commentary{padding:5px 8px 9px}
+.message-answer{min-width:0}
+.message-awaiting,.message-waiting{font-size:13px;color:var(--muted);margin:8px 0}
+.message-waiting{display:flex;align-items:center;gap:8px}
+.session-app[data-theme=dark] .chat-thinking-label-streaming{background-image:linear-gradient(90deg,var(--muted) 35%,var(--ink) 50%,var(--muted) 65%)}
+@media(max-width:600px){.message-disclosure-body{padding-left:8px}.message-tool-summary{display:none}.message-thinking-duration{font-size:11px}.session-app .message-disclosure-toggle{flex-wrap:wrap}}
