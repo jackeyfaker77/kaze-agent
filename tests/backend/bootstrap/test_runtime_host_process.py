@@ -28,6 +28,15 @@ def wait_for(predicate, process, log, timeout=45):
 def is_ready(workspace, process):
     # A new process may hold owner.lock before replacing the previous owner's
     # status.json. Wait for a new owner: Windows venv launchers can have a different PID.
+    # host_status probes by briefly acquiring owner.lock. Before the new owner
+    # publishes readiness that probe can beat startup and make the child exit 2.
+    # Observe the fresh publication first; then verify the held ownership lock.
+    try:
+        published = json.loads((workspace/'private_runtime/host/status.json').read_text(encoding='utf-8'))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return False
+    if published.get('owner_id') == process._previous_owner_id or published.get('state') != 'running':
+        return False
     status = host_status(workspace)
     return (status.get("running") and status.get("owner_id")
             and status["owner_id"] != process._previous_owner_id and status.get("state") == "running")
@@ -36,10 +45,20 @@ def is_ready(workspace, process):
 def test_readiness_does_not_accept_previous_process_status(tmp_path, monkeypatch):
     from types import SimpleNamespace
     status = {"running": True, "state": "running", "owner_id": "old"}
-    monkeypatch.setattr(sys.modules[__name__], "host_status", lambda _: status)
+    probes = []
+    def probe(_):
+        probes.append(True)
+        return status
+    monkeypatch.setattr(sys.modules[__name__], "host_status", probe)
+    record = tmp_path/'private_runtime/host/status.json'
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps(status), encoding='utf-8')
     assert not is_ready(tmp_path, SimpleNamespace(_previous_owner_id="old"))
+    assert not probes
     status["owner_id"] = "new"
+    record.write_text(json.dumps(status), encoding='utf-8')
     assert is_ready(tmp_path, SimpleNamespace(_previous_owner_id="old"))
+    assert probes == [True]
 
 
 def launch(tmp_path, scenario="run", *, production=False):

@@ -1,4 +1,6 @@
 import logging
+import os
+import tempfile
 import re
 import sqlite3
 import threading
@@ -134,10 +136,31 @@ class MemoryStore:
         return ""
 
     def write_recent_context(self, content: str) -> None:
-        self.recent_context_file.write_text(
-            normalize_memory_document("RECENT_CONTEXT.md", content),
-            encoding="utf-8",
-        )
+        self._atomic_write(self.recent_context_file,
+            normalize_memory_document("RECENT_CONTEXT.md", content).encode("utf-8"))
+
+    @staticmethod
+    def _atomic_write(path: Path, content: bytes) -> None:
+        if path.exists() and path.read_bytes() == content:
+            return
+        descriptor, name = tempfile.mkstemp(prefix=".markdown-write-", dir=path.parent)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            from core.memory.markdown.durable import fault
+            fault("file_pre_replace")
+            os.replace(name, path)
+            fault("file_replaced")
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
+
+    def _append_atomic(self, path: Path, marker: str, payload: str, trailing: bool) -> None:
+        old = path.read_bytes() if path.exists() else b""
+        suffix = marker + "\n" + payload.rstrip() + "\n" + ("\n" if trailing else "")
+        self._atomic_write(path, old + suffix.encode("utf-8"))
 
     # ── SELF.md (role self-model) ──────────────────────────────
 
@@ -327,11 +350,7 @@ class MemoryStore:
                     existing_trailing = bool(int(row[1] or 0))
                     if not self._file_contains_marker(target_file, marker):
                         if existing_payload:
-                            with open(target_file, "a", encoding="utf-8") as f:
-                                f.write(marker + "\n")
-                                f.write(existing_payload.rstrip() + "\n")
-                                if existing_trailing:
-                                    f.write("\n")
+                            self._append_atomic(target_file, marker, existing_payload, existing_trailing)
                     conn.execute("COMMIT")
                     return False
 
@@ -344,11 +363,7 @@ class MemoryStore:
                     conn.execute("COMMIT")
                     return False
 
-                with open(target_file, "a", encoding="utf-8") as f:
-                    f.write(marker + "\n")
-                    f.write(text.rstrip() + "\n")
-                    if trailing_blank_line:
-                        f.write("\n")
+                self._append_atomic(target_file, marker, text, trailing_blank_line)
 
                 conn.execute(
                     "INSERT OR REPLACE INTO consolidation_writes(source_ref, kind, payload, trailing_blank_line, done_at) VALUES (?, ?, ?, ?, datetime('now'))",

@@ -319,6 +319,11 @@ class ConversationProjection:
                     if prepared is not None:
                         payload['execution_turn_id'] = turn
                         payload['memory_post_response'] = json.loads(prepared['payload'])['input']
+            # The wakeup can be lost after this commit. A startup scan discovers
+            # Markdown work from the same durable reply fact as the UI message.
+            markdown_intent = payload.get('memory_post_response') or intent
+            if markdown_intent is not None and any(f['kind'] == 'message.recorded' and f['data']['role'] == 'assistant' for f in changes):
+                payload['markdown_maintenance'] = {k: markdown_intent.get(k, '') for k in ('session_key', 'channel', 'chat_id')}
             with self.source:
                 seq = self._insert('conversation.changed', payload)
             # Fault boundaries are intentionally separate for process crash tests.

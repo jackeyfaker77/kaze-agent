@@ -168,6 +168,7 @@ class DefaultMemoryEngine(
         if journal is not None:
             from memory2.durable_tasks import MemoryTasks
             self.memory_tasks = MemoryTasks(self._v2_store, journal, self._post_response_worker)
+            self.memory_tasks.consolidation_handler = self._apply_consolidation
             self.closeables.append(self.memory_tasks)
 
     @classmethod
@@ -221,8 +222,16 @@ class DefaultMemoryEngine(
         self,
         event: ConsolidationCommitted,
     ) -> None:
-        save_coros = [
-            self._save_from_consolidation(
+        if event.task_id and self.memory_tasks is not None:
+            self.memory_tasks.enqueue_consolidation(event, self._existing_long_term_memory(''))
+            self.memory_tasks.start()
+            return
+        await self._apply_consolidation(event)
+
+    async def _apply_consolidation(self, event: ConsolidationCommitted, *, existing_profile=None) -> None:
+        # Stable sequential checkpoint paths across crashes and replay.
+        for entry, emotional_weight in event.history_entry_payloads:
+            await self._save_from_consolidation(
                 history_entry=entry,
                 behavior_updates=[],
                 source_ref=_build_entry_source_ref(event.source_ref, entry),
@@ -231,13 +240,9 @@ class DefaultMemoryEngine(
                 role_id="",
                 emotional_weight=emotional_weight,
             )
-            for entry, emotional_weight in event.history_entry_payloads
-        ]
-        if save_coros:
-            await asyncio.gather(*save_coros)
         implicit_result = await self._extract_implicit_long_term(
             conversation=event.conversation,
-            existing_profile=self._existing_long_term_memory(""),
+            existing_profile=self._existing_long_term_memory("") if existing_profile is None else existing_profile,
         )
         if implicit_result:
             await self._save_implicit_long_term(

@@ -58,5 +58,6 @@ for _name in (
     'upsert_item', 'mark_superseded', 'mark_superseded_batch', 'merge_item_raw',
     'reinforce_items_batch', 'record_replacements', 'get_items_by_ids',
     'vector_search', 'list_items_for_admin',
+    'upsert_consolidation_event', 'has_consolidation_source_ref', 'find_similar_recent_events',
 ):
     setattr(MemoryStore2, _name, checkpoint_store(getattr(MemoryStore2, _name)))

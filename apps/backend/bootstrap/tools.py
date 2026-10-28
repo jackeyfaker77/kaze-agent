@@ -80,6 +80,9 @@ class CoreRuntime:
     proactive_loop: Any | None = None
 
     async def start(self) -> None:
+        markdown_tasks = getattr(self.memory_runtime.markdown.maintenance, 'durable', None)
+        if markdown_tasks is not None:
+            markdown_tasks.start()
         memory_tasks = getattr(getattr(self.memory_runtime, 'engine', None), 'memory_tasks', None)
         if memory_tasks is not None:
             memory_tasks.start()
@@ -220,6 +223,9 @@ class CoreRuntime:
         return "\n".join(parts)
 
     async def stop(self) -> None:
+        markdown_tasks = getattr(self.memory_runtime.markdown.maintenance, 'durable', None)
+        if markdown_tasks is not None:
+            await markdown_tasks.aclose()
         memory_tasks = getattr(getattr(self.memory_runtime, 'engine', None), 'memory_tasks', None)
         if memory_tasks is not None:
             await memory_tasks.aclose()
@@ -406,6 +412,8 @@ def _bind_memory_lifecycle_if_supported(
             save_session=_save_session,
         )
     )
+    from core.memory.markdown.durable import MarkdownTasks
+    markdown.durable = MarkdownTasks(markdown, session_manager)
 
 
 def _resolve_plugin_llm_dependencies(

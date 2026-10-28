@@ -331,7 +331,10 @@ class DesktopBridgeService:
                 after=payload.get("after", 0), limit=payload.get("limit", 100))
         if method == 'memory.tasks.list':
             tasks = getattr(self.runtime.memory_runtime.engine, 'memory_tasks', None)
-            return tasks.list_tasks(str(payload.get('session_key') or ''), payload.get('limit', 50)) if tasks else {'tasks': []}
+            result = tasks.list_tasks(str(payload.get('session_key') or ''), payload.get('limit', 50)) if tasks else {'tasks': []}
+            markdown = getattr(self.runtime.memory_runtime.markdown.maintenance, 'durable', None)
+            result['markdown_tasks'] = markdown.list_tasks(str(payload.get('session_key') or ''), payload.get('limit', 50)) if markdown else []
+            return result
         if method == 'execution.context':
             return self.sessions.execution_journal.model_context(str(payload.get('turn_id') or ''),
                 call_id=str(payload.get('call_id') or ''), through_seq=payload.get('through_seq'),

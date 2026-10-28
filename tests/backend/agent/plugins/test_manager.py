@@ -1139,7 +1139,9 @@ async def test_core_runtime_start_wires_plugin_tool_hooks_to_loop_and_spawn():
         provider=SimpleNamespace(),  # type: ignore[arg-type]
         light_provider=None,
         mcp_registry=FakeMcpRegistry(),  # type: ignore[arg-type]
-        memory_runtime=SimpleNamespace(),  # type: ignore[arg-type]
+        memory_runtime=SimpleNamespace(  # type: ignore[arg-type]
+            markdown=SimpleNamespace(maintenance=SimpleNamespace(durable=None)),
+        ),
         presence=SimpleNamespace(),  # type: ignore[arg-type]
         plugin_manager=plugin_manager,  # type: ignore[arg-type]
     )

@@ -70,3 +70,7 @@ class ConsolidationCommitted:
     scope_channel: str
     scope_chat_id: str
     conversation: str
+    task_id: str = ''
+    session_key: str = ''
+    source_seq: int = 0
+    source_turn: str | None = None

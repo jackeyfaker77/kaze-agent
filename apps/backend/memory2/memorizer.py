@@ -218,6 +218,9 @@ class Memorizer:
                         logger.info(f"memory2 event saved: {result}")
             except Exception as e:
                 logger.warning(f"memory2 event save 失败: {e}")
+                from core.memory.task_context import memory_task
+                if memory_task.get() is not None:
+                    raise
 
         # 2. behavior_updates 统一由 post-response worker 处理，避免与 consolidation 重复写入
         if behavior_updates:

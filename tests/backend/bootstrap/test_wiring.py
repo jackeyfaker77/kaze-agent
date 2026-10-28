@@ -567,6 +567,8 @@ def test_build_loop_deps_uses_context_factory(monkeypatch, tmp_path: Path):
     fake_context = object()
     markdown_store = object()
     markdown_maintenance = SimpleNamespace(bind_lifecycle=lambda request: None)
+    # This test isolates context construction, not the durable storage adapter.
+    monkeypatch.setattr('core.memory.markdown.durable.MarkdownTasks', lambda *args: object())
 
     monkeypatch.setattr(
         "bootstrap.tools.resolve_context_factory",

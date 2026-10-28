@@ -1,6 +1,6 @@
-# Kaze 可靠基础版候选：发布验收与操作说明
+# Kaze 可靠基础版：发布验收与操作说明
 
-日期：2026-10-28。代码基线 `02c0906`（PR #31）加本轮备份隔离补丁；**本轮为发布候选**，最终发布时须记录交付 PR 的合并提交及对应 CI。依赖以该提交的 Python requirements、`pnpm-lock.yaml` 为准。
+日期：2026-10-28。固定验收提交 `3f421c5988d504eb542b176b6d349e2adb37c353`，交付 [PR #32](https://github.com/jackeyfaker77/kaze-agent/pull/32) 已合并；**限定范围可靠基础版已验收**，不是 Akasha 目标版。依赖以该提交的 Python requirements、`pnpm-lock.yaml` 为准。
 
 ## 已交付的使用范围
 
@@ -44,9 +44,9 @@
 - 修复夹具及补齐后续边界后，备份、CLI、Host、本地／远程及相关支持模块集成复测：64 passed、1 skipped。包括新增“损坏数据库头”“发布前崩溃”“远程 Host 隔离”“隔离配置搭配新工作区”场景。跳过项为 Windows 环境不允许创建符号链接；未将跳过记作通过。
 - 最终源码和测试 Pyright：0 errors、0 warnings。桌面：224 passed、1 skipped；打包测试：5 passed。`git diff --check` 通过。
 - 提交前独立 review 发现附件被误当数据库规范化的问题；已将收件上传与持久发件附件按原始字节复制，并补齐真实 `snapshot_file` 的 SQLite、非 SQLite `.db`、`-wal`、`-shm`、`.lock` 附件回归。修复后备份专项 24 passed、1 skipped。
-- 未重复运行第二次完整后端套件；完整首轮结果与修复后专项结果分别保留，不能描述为最终树一次全量全绿。提交 PR 时仍需 GitHub CI 全量验证。
+- 未重复运行第二次完整后端套件；完整首轮结果与修复后专项结果分别保留，不能描述为最终树一次全量全绿。随后 PR #32 最终 CI 已完成：后端 2236、桌面 225、打包 5 项全部通过。
 
-证据文件为 `.tmp/baseline-backup-full.log`、`.tmp/backup-final-integration.log`、`.tmp/backup-pyright-final.log`、`.tmp/backup-testtypes-final.log`、`.tmp/backup-desktop-tests.log`、`.tmp/backup-package-tests.log`。`.tmp/baseline-build-identity.json` 记录基线提交、实现文件摘要和本机依赖版本；最终可发布提交仍待合并后固定。
+证据文件为 `.tmp/baseline-backup-full.log`、`.tmp/backup-final-integration.log`、`.tmp/backup-pyright-final.log`、`.tmp/backup-testtypes-final.log`、`.tmp/backup-desktop-tests.log`、`.tmp/backup-package-tests.log`。`.tmp/baseline-build-identity.json` 记录基线提交、实现文件摘要和本机依赖版本；最终验收提交为本文首部的 `3f421c5`。
 
 实测快照及报告位于 `.tmp/baseline-20261028-backup`、`.tmp/baseline-20261028-restored`、`.tmp/baseline-restore-drill.json`、`.tmp/baseline-after-send-drill.json`、`.tmp/baseline-live-report.json`，均为本机私有验收产物，不进入 Git。`.tmp` 不是长期备份保管位置；发布后应由用户选定持久、受限的备份介质。
 
@@ -54,4 +54,18 @@
 
 Markdown 历史归档与近期摘要任务恢复仍未完成。未知外部结果不自动核验。任意 Drift 工具点、缺少收尾协议的插件激活不能通用续跑。Akasha 迁移与目标版验收、24 小时服务器部署、Peer Mesh 均不在本轮范围。
 
-本候选是限定范围的可靠基础版，不是路线 Phase C–E 的 Akasha 目标版。
+本版是限定范围的可靠基础版，不是路线 Phase C–E 的 Akasha 目标版。
+
+## 合并后重启验收（2026-10-28）
+
+- 重建桌面并正常退出旧实例，启动 `3f421c5`；运行所有权与 epoch 更新，Host 和 Telegram 健康。
+- 原有 31 个会话、303 条消息完整；旧消息逐条无修改。两轮测试后为 32 个会话、307 条消息。四个核心数据库完整性检查通过。
+- 本地及真实 Telegram 各一轮成功；收件、回复各一次，队列 done，后台记忆任务完成。
+- 旧备份隔离副本在 host、bridge、desktop、remote-host 四个入口各尝试两次，均返回 3；配置目录绕过也被拦截，副本文件未变化。
+- 备份／CLI／远程 Host 专项 37 passed、1 skipped；跳过为 Windows 符号链接权限，不计为通过。
+- 配置哈希未变，当前 wake 模式实际轮询 300 秒。证据：`.tmp/pr32-restart-audit.json`、`.tmp/pr32-live-report.json`、`.tmp/pr32-isolated-drill.json`。
+- 这次固定的是源码与依赖基线，不表示已发布安装包、创建版本标签或完成服务器部署。Markdown 归档与摘要持久恢复仍不属于本基线。
+
+## 后续工作区补齐状态
+
+2026-10-28：Markdown 历史归档与近期摘要的持久恢复已完成实现和隔离崩溃验收，见[专门契约与证据](architecture/durable-markdown-tasks-v1.md)。本轮尚未提交合并或加载生产，不能据此修改上述 `3f421c5` 固定基础版的已知限制；后续交付应记录新的合并提交、CI 与重启验收。
