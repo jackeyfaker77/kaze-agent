@@ -62,11 +62,16 @@ class ShellTool(Tool):
 
     @property
     def description(self) -> str:
+        shell = "Windows cmd.exe" if os.name == "nt" else "POSIX /bin/sh"
+        syntax = (
+            "- 使用 cmd 语法（dir、& 或 &&），不要使用 bash 的 ls、分号或 /dev/null\n"
+            if os.name == "nt" else "- 使用 POSIX sh 语法，多条命令用 ; 或 && 连接\n"
+        )
         return (
-            "在 bash 中执行命令并返回输出。\n"
+            f"在 {shell} 中执行非交互命令并返回输出，标准输入为 EOF。\n"
+            + syntax +
             "注意：\n"
             "- 使用绝对路径，避免依赖 cd 切换目录\n"
-            "- 多条命令用 ; 或 && 连接，不要用换行分隔\n"
             "- 网络命令（curl/wget/httpie/xh）仅允许访问公网 HTTP(S)，且禁止上传/写文件\n"
             "- 以下命令被禁止：nc、telnet、浏览器等高风险工具\n"
             "- 输出超过 30000 字符时自动截断\n"
@@ -86,7 +91,7 @@ class ShellTool(Tool):
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "要执行的 bash 命令",
+                    "description": "要执行的 Windows cmd.exe 命令" if os.name == "nt" else "要执行的 POSIX /bin/sh 命令",
                 },
                 "description": {
                     "type": "string",

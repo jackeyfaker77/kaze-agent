@@ -208,7 +208,7 @@ class _DurableMixin:
                         if isinstance(delay, timedelta)
                         else float(delay)
                     )
-                    raise RetryDelivery(seconds) from exc
+                    raise RetryDelivery(seconds, reason="rate_limited") from exc
                 except (BadRequest, Forbidden, InvalidToken, FileNotFoundError) as exc:
                     raise PermanentDelivery() from exc
                 except Exception as exc:
@@ -224,7 +224,10 @@ class _DurableMixin:
                                 httpx.PoolTimeout,
                             ),
                         ):
-                            raise RetryDelivery() from exc
+                            reason = ("connect_timeout" if isinstance(cause, httpx.ConnectTimeout)
+                                      else "pool_timeout" if isinstance(cause, httpx.PoolTimeout)
+                                      else "connect_error")
+                            raise RetryDelivery(reason=reason) from exc
                         cause = cause.__cause__
                     raise
 

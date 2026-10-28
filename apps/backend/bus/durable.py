@@ -34,8 +34,12 @@ class DeliveryStopped(RuntimeError):
 
 
 class RetryDelivery(Exception):
-    def __init__(self, delay: float = 1):
+    def __init__(self, delay: float = 1, *, reason: str = "retryable_rejection"):
         self.delay = delay
+        # Persist categories only: exception messages may contain bot tokens.
+        self.reason = reason if reason in {
+            "rate_limited", "connect_error", "connect_timeout", "pool_timeout"
+        } else "retryable_rejection"
 
 
 class PermanentDelivery(Exception):
@@ -62,6 +66,10 @@ class TransportStore(TransportReview):
                 state TEXT NOT NULL, result TEXT, PRIMARY KEY(job,part));
             CREATE TABLE IF NOT EXISTS part_manifests (
                 job TEXT NOT NULL, scope TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job,scope));
+            CREATE TABLE IF NOT EXISTS transport_attempts (
+                job TEXT NOT NULL, attempt INTEGER NOT NULL, started REAL NOT NULL,
+                finished REAL, outcome TEXT, reason TEXT, retry_delay REAL,
+                PRIMARY KEY(job,attempt));
         """)
         self.active: set[str] = set()
         self.init_review()
@@ -103,24 +111,31 @@ class TransportStore(TransportReview):
         ).fetchall()
         return [self.get(r["id"]) for r in rows]
 
-    def state(self, key, state, *, result=None, error=None, delay: float = 0):
+    def state(self, key, state, *, result=None, error=None, delay: float = 0, reason=None):
         with self.db:
+            now = time.time()
             self.db.execute(
                 "UPDATE jobs SET state=?,result=?,error=?,due=? WHERE id=?",
                 (
                     state,
                     encode(result) if result is not None else None,
                     error,
-                    time.time() + delay,
+                    now + delay,
                     key,
                 ),
             )
+            self.db.execute('''UPDATE transport_attempts
+                SET finished=?,outcome=?,reason=?,retry_delay=?
+                WHERE job=? AND attempt=(SELECT attempts FROM jobs WHERE id=?)
+                AND finished IS NULL''', (now, state, reason, delay, key, key))
 
     def attempt(self, key):
         with self.db:
             self.db.execute(
                 "UPDATE jobs SET state='running',attempts=attempts+1 WHERE id=?", (key,)
             )
+            self.db.execute('''INSERT INTO transport_attempts(job,attempt,started)
+                SELECT id,attempts,? FROM jobs WHERE id=?''', (time.time(), key))
 
     def snapshot_file(self, value: str) -> str:
         source = Path(value)
@@ -253,10 +268,11 @@ class Outbox:
                     key,
                     state,
                     error="Retryable rejection",
+                    reason=exc.reason,
                     delay=max(exc.delay, min(2 ** (attempts - 1), 60)),
                 )
             except PermanentDelivery as exc:
-                self.store.state(key, "failed", error=type(exc).__name__)
+                self.store.state(key, "failed", error=type(exc).__name__, reason="permanent_rejection")
                 raise DeliveryStopped("failed") from exc
             except BaseException as exc:
                 uncertain = self.store.db.execute(
@@ -276,6 +292,7 @@ class Outbox:
                     key,
                     state,
                     error=type(exc).__name__,
+                    reason="outcome_unknown" if uncertain else "handler_error_before_send",
                     delay=min(2 ** (attempts - 1), 60),
                 )
                 raise
