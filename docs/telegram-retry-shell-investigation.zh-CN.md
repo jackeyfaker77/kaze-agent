@@ -21,4 +21,4 @@
 - 更新后的尝试审计、人工处置、远程处置、受控续跑：40 passed。均使用 `-W error`。
 - 按 CI 命令执行两份 Pyright `--level error`，均通过。
 - 生产配置四份 SHA-256 与重启前一致，wake 轮询仍为 300 秒；原未知任务仍为 needs_review。
-- 修改尚未提交。2026-10-28 14:58 已通过桌面桥重启生产后端并加载，Telegram 连接健康，transport_attempts 表已初始化。独立本地验收只启动一次后台 shell，task_output 返回 done / exit_code=0 / elapsed_ms=2125，输出 stdin_eof=true 和 SHELL_TASK_DONE。两条原未知执行的完整状态及事件数量未变化，配置哈希未变，wake 仍为 300 秒。没有发送新的 Telegram 验收消息；新网络审计的现场样本仍需后续真实发送积累。没有把隔离分类测试说成真实网络根因已确定。
+- PR #34 已合并为 `2ade483`，[最终 CI 全部通过](https://github.com/jackeyfaker77/kaze-agent/actions/runs/40648164271)。2026-10-28 14:58 已通过桌面桥重启生产后端并加载，Telegram 连接健康，transport_attempts 表已初始化。独立本地验收只启动一次后台 shell，task_output 返回 done / exit_code=0 / elapsed_ms=2125，输出 stdin_eof=true 和 SHELL_TASK_DONE。两条原未知执行的完整状态及事件数量未变化，配置哈希未变，wake 仍为 300 秒。没有发送新的 Telegram 验收消息；新网络审计的现场样本仍需后续真实发送积累。没有把隔离分类测试说成真实网络根因已确定。
