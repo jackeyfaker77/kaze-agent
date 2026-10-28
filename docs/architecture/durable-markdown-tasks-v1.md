@@ -1,6 +1,6 @@
 # Markdown 历史归档与近期摘要持久恢复 v1
 
-本轮在可靠基础版 `3f421c5` 上补齐 Markdown 归档链；独立于 Akasha 和服务器部署。当前为工作区实现，提交、CI、生产重启验收分别记录，不计入旧基础版的能力。
+本轮在原可靠基础版 `3f421c5` 上补齐 Markdown 归档链；独立于 Akasha 和服务器部署。PR #33 已合并、CI 通过并加载生产，纳入当前 `2ade483` 基础版；原基线的历史验收范围不追溯扩大。自动化与生产验证边界见文末。
 
 ## 所有权与入口
 
@@ -63,4 +63,4 @@
 - 源码 Pyright、测试 Pyright 均 **0 errors、0 warnings**；`git diff --check` 通过。未将这些定向结果表述为本轮全后端套件或 GitHub CI 已通过。
 - 生产四份配置文件 SHA-256 与 PR #32 重启验收基线一致；wake 的 300 秒代码路径未改。Akasha、服务器部署未实施。
 
-结论：本轮实现与隔离崩溃恢复验收完成。尚未提交、合并或重启生产 Kaze；生产加载与真实渠道验收属于后续交付步骤。原可靠基础版仍固定为 `3f421c5`。本机汇总证据保存在 `.tmp/markdown-final-acceptance.json`。
+交付更新（2026-10-28）：PR #33 已合并为 `b6e4f8d`，[最终 CI 通过](https://github.com/jackeyfaker77/kaze-agent/actions/runs/40642224999)。生产已重启加载：原有 316 条消息逐条完整，本地／Telegram 新对话均完成；两个 Markdown 任务完成近期上下文更新，二次重启任务、回执和文件哈希不变。生产未强制触发完整归档，完整归档崩溃证据仍以隔离矩阵为准。当前整体基础版固定为 PR #34 的 `2ade483`，见[发布记录](../reliable-baseline-release.zh-CN.md)。本机专项证据在 `.tmp/markdown-final-acceptance.json`，生产证据在 `.tmp/pr33-restart-audit.json` 与 `.tmp/pr33-live-report.json`。
