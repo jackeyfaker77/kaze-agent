@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { BridgeRpcError, newDraftKey, rpc, type Entry, type Session } from "./api";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { BridgeRpcError, newDraftKey, rpc, rpcWithIdentity, type Entry, type Session } from "./api";
 import { recoverAttachments, recoverDraft } from "./recoverDraft";
 import { handleCommittedEvent } from "./committedEvent";
+import { conversationDisplayReducer, conversationRows, record } from "./conversationDisplay";
 
 /** A draft has an address for pet voice, but is never saved by navigation. */
 export function useConversation() {
@@ -14,16 +15,24 @@ export function useConversation() {
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [delta, setDelta] = useState("");
-  const [tool, setTool] = useState("");
-  const key = useRef(newDraftKey());
+  const [display, dispatchDisplay] = useReducer(conversationDisplayReducer, {});
+  const historyVersion = useRef(0);
+  const [selectedKey, setSelectedKey] = useState(newDraftKey);
+  const key = useRef(selectedKey);
   const saved = useRef(false);
   const locked = useRef(false);
   const navigating = useRef(false);
   const alive = useRef(true);
   const textSending = useRef(false);
+  const [activeAttempt, setActiveAttempt] = useState("");
   const pendingSends = useRef(new Map<string, { id: string }>());
   const fail = useCallback((value: unknown) => setError(value instanceof Error ? value.message : String(value)), []);
+  const acceptSession = useCallback((next: Session) => {
+    historyVersion.current++;
+    dispatchDisplay({ type: "snapshot", session: next });
+    saved.current = next.messages.length > 0;
+    setSession(saved.current ? next : null);
+  }, []);
   async function refresh() {
     const result = await rpc<{ sessions: Entry[] }>("sessions.list");
     if (alive.current) setEntries(result.sessions);
@@ -37,23 +46,23 @@ export function useConversation() {
     void (async () => { const status = await window.miraDesktop.bridgeStatus(); if (alive.current) setMode(status.mode ?? "local"); await rpc("health"); await selectCurrent(); await refresh(); if (alive.current) setReady(true); })().catch(fail);
     const resync = async () => {
       const selectedKey = key.current;
+      const version = historyVersion.current;
       await refresh();
       const result = await rpc<Session>("session.get", { session_key: selectedKey });
-      if (alive.current && key.current === selectedKey) { saved.current = result.messages.length > 0; setSession(saved.current ? result : null); setDelta(""); setTool(""); setReady(true); }
+      if (alive.current && key.current === selectedKey) {
+        if (version === historyVersion.current) acceptSession(result);
+        setReady(true);
+      }
     };
     const off = window.miraDesktop.onEvent(event => {
-      if (event.method === "bridge.exit") { setReady(false); return; }
+      if (event.method === "bridge.exit") { dispatchDisplay({ type: "disconnect" }); setReady(false); return; }
       if (event.method === "bridge.connected" || event.method === "sessions.changed") {
         void resync().catch(fail); return;
       }
-      if (handleCommittedEvent(event, key.current, () => { void refresh().catch(fail); }, next => {
-        if (next) { saved.current = true; setSession(next); }
-        setDelta(""); setTool("");
-      })) return;
-      if (event.payload.session_key !== key.current) return;
-      if (event.method === "chat.delta") setDelta(value => value + String(event.payload.content_delta ?? ""));
-      if (event.method === "chat.tool.started") setTool(String(event.payload.tool_name ?? ""));
-      if (event.method === "chat.tool.completed") setTool("");
+      dispatchDisplay({ type: "event", event });
+      handleCommittedEvent(event, key.current, () => { void refresh().catch(fail); }, next => {
+        if (next) acceptSession(next);
+      });
     });
     const offVoice = window.miraDesktop.onVoiceState(payload => {
       const running = ["transcribing", "sending", "waiting_reply", "speaking_prepare", "speaking", "finish_current_sentence_then_idle"].includes(payload.status);
@@ -61,14 +70,14 @@ export function useConversation() {
       if (!textSending.current) { locked.current = running; setBusy(running); }
     });
     return () => { alive.current = false; off(); offVoice(); };
-  }, [fail]);
+  }, [fail, acceptSession]);
   async function open(nextKey: string) {
     if (locked.current || navigating.current || (saved.current && key.current === nextKey)) return;
     navigating.current = true; setLoading(true);
     try {
       const next = await rpc<Session>("session.get", { session_key: nextKey });
-      key.current = nextKey; saved.current = true; setSession(next);
-      setDraft(""); setAttachments([]); setDelta(""); setError("");
+      key.current = nextKey; setSelectedKey(nextKey); acceptSession(next);
+      setDraft(""); setAttachments([]); setError("");
     } catch (e) { fail(e); }
     finally { navigating.current = false; setLoading(false); }
   }
@@ -78,8 +87,9 @@ export function useConversation() {
     try {
       const nextKey = newDraftKey();
       await rpc("session.draft", { session_key: nextKey });
-      key.current = nextKey; saved.current = false; setSession(null);
-      setDraft(""); setAttachments([]); setDelta(""); setError("");
+      key.current = nextKey; setSelectedKey(nextKey); saved.current = false; setSession(null);
+      historyVersion.current++;
+      setDraft(""); setAttachments([]); setError("");
     } catch (e) { fail(e); }
     finally { navigating.current = false; setLoading(false); }
   }
@@ -91,18 +101,22 @@ export function useConversation() {
     const signature = JSON.stringify([currentKey, content, media]);
     const attempt = pendingSends.current.get(signature) ?? { id: crypto.randomUUID() };
     pendingSends.current.set(signature, attempt);
-    setDraft(""); setAttachments([]); setDelta("");
+    setActiveAttempt(attempt.id);
+    historyVersion.current++;
+    setDraft(""); setAttachments([]);
     // Optimistic update：后端返回前先把用户消息写入本地 Session，让界面立即响应。
     setSession({ session_key: currentKey, title: previous?.title || content.slice(0, 60) || "附件会话", messages: [...(previous?.messages ?? []), { role: "user", content, media }] });
     try {
       // 下一步：调用同目录 api.ts 的 rpc()，把 session_key、content、media 发给 Electron 主进程。
-      const result = await rpc<{ session: Session }>("chat.send", {
+      const response = await rpcWithIdentity<{ session: Session }>("chat.send", {
         session_key: currentKey, content, media, execution_request_id: attempt.id,
       });
       if (pendingSends.current.get(signature) === attempt) pendingSends.current.delete(signature);
-      saved.current = result.session.messages.length > 0; setSession(saved.current ? result.session : null);
+      acceptSession(response.payload.session);
+      dispatchDisplay({ type: "stop", sessionKey: currentKey, requestId: response.id, rpcIdentity: true });
       await refresh().catch(fail);
     } catch (e) {
+      if (e instanceof BridgeRpcError && e.requestId) dispatchDisplay({ type: "stop", sessionKey: currentKey, requestId: e.requestId, rpcIdentity: true });
       const reason = e instanceof Error ? e.message : String(e);
       const uncertain = !(e instanceof BridgeRpcError) || ["remote_outcome_unknown", "bridge_exit", "bridge_timeout", "bridge_write_failed", "internal_error", "execution_needs_review", "execution_unavailable", "execution_outcome_unknown"].includes(e.code);
       const turn = e instanceof BridgeRpcError && typeof e.details?.turn_id === "string" ? ` 执行：${e.details.turn_id}` : "";
@@ -114,16 +128,28 @@ export function useConversation() {
       }
       try {
         const actual = await rpc<Session>("session.get", { session_key: currentKey });
-        saved.current = actual.messages.length > 0; setSession(saved.current ? actual : null); await refresh();
-      } catch { setSession(previous); }
-    } finally { locked.current = false; textSending.current = false; setBusy(false); setDelta(""); setTool(""); }
+        acceptSession(actual); await refresh();
+      } catch { if (!uncertain) setSession(previous); }
+    } finally {
+      locked.current = false; textSending.current = false; setActiveAttempt(""); setBusy(false);
+    }
   }
   async function rename(title: string) {
     setSession(await rpc<Session>("session.rename", { session_key: key.current, title })); await refresh();
   }
   async function remove() {
-    await rpc("session.delete", { session_key: key.current }); await startNew(true); await refresh();
+    const removedKey = key.current;
+    await rpc("session.delete", { session_key: removedKey });
+    dispatchDisplay({ type: "forget", sessionKey: removedKey });
+    await startNew(true); await refresh();
   }
-  return { mode, entries, session, draft, setDraft, attachments, setAttachments, error, setError, ready, busy, loading, delta, tool, fail, refresh, selectCurrent, open, startNew, send, rename, remove,
+  const rows = conversationRows(session, display, selectedKey);
+  const liveTurns = display[selectedKey]?.turns ?? [];
+  const runningTool = liveTurns.flatMap(turn => turn.parts).find(part => part.kind === "tool" && part.status === "running");
+  const tool = runningTool?.kind === "tool" ? runningTool.name : "";
+  const hasLiveTurn = liveTurns.some(turn => turn.phase === "running");
+  const waitingForReply = busy && Boolean(activeAttempt) && !hasLiveTurn && !session?.messages.some(message =>
+    message.role === "assistant" && record(message.metadata).execution_request_id === activeAttempt);
+  return { mode, entries, session, rows, display: display[selectedKey], hasLiveTurn, waitingForReply, draft, setDraft, attachments, setAttachments, error, setError, ready, busy, loading, tool, fail, refresh, selectCurrent, open, startNew, send, rename, remove,
     cancel: () => rpc("chat.cancel", { session_key: key.current }) };
 }
