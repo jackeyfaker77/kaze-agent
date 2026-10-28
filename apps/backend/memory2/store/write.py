@@ -96,7 +96,7 @@ class _StoreWriteMixin:
             return "skipped:empty"
         emotional_weight = _coerce_emotional_weight(emotional_weight)
 
-        self._db.execute("BEGIN IMMEDIATE")
+        self._db.execute("SAVEPOINT consolidation_event")
         new_item_rowid: int | None = None
         new_item_emb: list[float] | None = None
         try:
@@ -105,7 +105,7 @@ class _StoreWriteMixin:
                 (src,),
             ).fetchone()
             if already is not None:
-                self._db.execute("COMMIT")
+                self._db.execute("RELEASE consolidation_event")
                 existing_id = already[0] or ""
                 return f"skipped:{existing_id or src}"
 
@@ -158,16 +158,15 @@ class _StoreWriteMixin:
                 "INSERT INTO consolidation_events(source_ref, item_id, created_at) VALUES (?, ?, ?)",
                 (src, item_id, _now_iso()),
             )
-            self._db.execute("COMMIT")
-
             if new_item_rowid is not None and new_item_emb is not None:
                 self._vec_insert(new_item_rowid, new_item_emb)
-                self._db.commit()
+            self._db.execute("RELEASE consolidation_event")
 
             return result
         except Exception:
             try:
-                self._db.execute("ROLLBACK")
+                self._db.execute("ROLLBACK TO consolidation_event")
+                self._db.execute("RELEASE consolidation_event")
             except Exception:
                 pass
             raise

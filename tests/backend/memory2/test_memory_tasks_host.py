@@ -70,18 +70,26 @@ async def test_real_chat_commits_memory_intent_and_host_drains_once(tmp_path, mo
         # Pending persistence may complete outside the originating context.
         await (server.service if server else service).recover_pending_chat_writes()
         jobs.start()
+        markdown_jobs = runtime.memory_runtime.markdown.maintenance.durable
+        markdown_jobs.start()
         async with asyncio.timeout(10):
             while not jobs.list_tasks()['tasks'] or jobs.list_tasks()['tasks'][0]['state'] != 'done':
                 await asyncio.sleep(.02)
+            while not markdown_jobs.list_tasks() or markdown_jobs.list_tasks()[0]['state'] != 'done':
+                await asyncio.sleep(.02)
+        assert len(markdown_jobs.list_tasks()) == 1
+        assert markdown_jobs.list_tasks()[0]['source_turn'] == jobs.list_tasks()['tasks'][0]['source_turn_id']
         assert len(wire) == 3
         before = list(jobs.db.iterdump())
         if remote_mode:
             results = await asyncio.gather(*(rpc(s, 'memory.tasks.list') for s in sockets))
             assert results[0]['payload'] == results[1]['payload']
             assert results[0]['payload']['tasks'][0]['state'] == 'done'
+            assert results[0]['payload']['markdown_tasks'][0]['state'] == 'done'
         else:
             result = await service.handle({'method':'memory.tasks.list','payload':{}})
             assert result.payload['tasks'][0]['state'] == 'done'
+            assert result.payload['markdown_tasks'][0]['state'] == 'done'
         assert list(jobs.db.iterdump()) == before and len(wire) == 3
         session = runtime.session_manager.get_or_create('desktop:durable')
         assert [m['content'] for m in session.messages] == ['hello','reply']

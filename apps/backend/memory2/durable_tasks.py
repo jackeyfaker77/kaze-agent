@@ -10,6 +10,7 @@ from contextvars import Context, ContextVar
 import json
 import hashlib
 import logging
+from typing import Any
 
 from core.memory.task_context import memory_task, MemoryTaskBlocked
 from core.execution.model_context import digest
@@ -35,6 +36,7 @@ class MemoryTasks:
         self.db = store._db
         self.task = None
         self.closed = False
+        self.consolidation_handler: Any = None
         self.lock = asyncio.Lock()
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS memory_task_cursor(root TEXT PRIMARY KEY, seq INTEGER NOT NULL);
@@ -81,6 +83,16 @@ class MemoryTasks:
         if not self.closed and (self.task is None or self.task.done()):
             self.task = asyncio.create_task(self.run(), name='memory_tasks', context=Context())
 
+    def enqueue_consolidation(self, event, existing_profile):
+        from dataclasses import asdict
+        job = 'markdown-callback:' + event.task_id
+        payload = {'kind': 'markdown_consolidation', 'session_key': event.session_key,
+                   'event': asdict(event), 'existing_profile': existing_profile}
+        with self.db:
+            self.db.execute('INSERT OR IGNORE INTO memory_tasks VALUES (?,?,?,?,?,?,?,NULL,NULL)',
+                (job, self.journal.root_id, event.source_seq, event.source_turn, self.VERSION, encode(payload), 'pending'))
+        return job
+
     def list_tasks(self, session_key='', limit=50):
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError('Invalid memory task limit')
@@ -125,7 +137,14 @@ class MemoryTasks:
                 try:
                     if row['version'] != self.VERSION:
                         raise MemoryTaskBlocked('unsupported_workflow_version')
-                    await self.worker.run(**json.loads(row['input']), source_ref='memory-task:' + row['id'])
+                    inputs = json.loads(row['input'])
+                    if inputs.get('kind') == 'markdown_consolidation':
+                        if self.consolidation_handler is None:
+                            raise MemoryTaskBlocked('consolidation_handler_unavailable')
+                        from core.memory.events import ConsolidationCommitted
+                        await self.consolidation_handler(ConsolidationCommitted(**inputs['event']), existing_profile=inputs['existing_profile'])
+                    else:
+                        await self.worker.run(**inputs, source_ref='memory-task:' + row['id'])
                     fault('before_done')
                     with self.db:
                         self.db.execute("UPDATE memory_tasks SET state='done',error=NULL WHERE id=?", (row['id'],))

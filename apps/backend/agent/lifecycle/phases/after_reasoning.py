@@ -289,7 +289,7 @@ class _AppendMessagesModule:
         }
         from core.execution.scope import active_execution
         scope = active_execution()
-        if intent is not None and scope is not None and getattr(scope.journal, 'memory_tasks_enabled', False):
+        if intent is not None and scope is not None and (getattr(scope.journal, 'memory_tasks_enabled', False) or getattr(scope.journal, 'markdown_tasks_enabled', False)):
             # A failed append may be completed by pending-write recovery after
             # this context/process ends. Prepare the recipe, but admit work only
             # when the corresponding assistant conversation fact commits.

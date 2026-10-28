@@ -30,6 +30,7 @@ from .formatting import (
 from .runtime import MarkdownMemoryStore, resolve_markdown_store
 
 if TYPE_CHECKING:
+    from .durable import MarkdownTasks
     from bus.event_bus import EventBus
     from agent.provider import LLMProvider
 
@@ -66,6 +67,7 @@ class MarkdownMemoryMaintenance:
         self._maintenance_tasks: dict[str, asyncio.Task[None]] = {}
         self._global_write_lock = asyncio.Lock()
         self._maintenance_failures: dict[str, str] = {}
+        self.durable: MarkdownTasks | None = None
         if event_bus is not None:
             event_bus.on(TurnCommitted, self.on_turn_committed)
 
@@ -84,10 +86,17 @@ class MarkdownMemoryMaintenance:
     def on_turn_committed(self, event: TurnCommitted) -> None:
         if bool((event.extra or {}).get("skip_post_memory")):
             return
+        if self.durable is not None:
+            self.durable.start()
+            return
         self._enqueue_maintenance(event.session_key)
 
     def request_background_consolidation(self, session_key: str) -> None:
         """非阻塞请求指定会话执行后台记忆整理。"""
+        if self.durable is not None:
+            self.durable.request(session_key)
+            self.durable.start()
+            return
         if self.get_consolidation_failure(session_key) is not None:
             return
         task = self._maintenance_tasks.get(session_key)
@@ -97,6 +106,8 @@ class MarkdownMemoryMaintenance:
 
     def get_consolidation_failure(self, session_key: str) -> str | None:
         """返回指定会话最近一次后台记忆整理的明确失败原因。"""
+        if self.durable is not None:
+            return self.durable.failure(session_key)
         return self._maintenance_failures.get(session_key)
 
     def _enqueue_maintenance(self, session_key: str) -> None:
@@ -191,6 +202,8 @@ class MarkdownMemoryMaintenance:
         )
 
     async def consolidate(self, request: ConsolidateRequest) -> ConsolidateResult:
+        if self.durable is not None:
+            return await self.durable.consolidate(request)
         session_key = str(getattr(request.session, "key", "") or "")
         if not session_key:
             return await self._consolidate_unlocked(request)
@@ -242,6 +255,7 @@ class MarkdownMemoryMaintenance:
         self,
         session: object,
         draft: "_ConsolidationDraft",
+        *, emit: bool = True,
     ) -> None:
         target_store = self._resolve_store_for_session(session)
         role_id = str(getattr(session, "metadata", {}).get("role_id") or "").strip()
@@ -277,7 +291,7 @@ class MarkdownMemoryMaintenance:
             session.last_consolidated = 0
         else:
             session.last_consolidated = draft.window.consolidate_up_to
-        if self._event_bus is not None:
+        if emit and self._event_bus is not None:
             await self._event_bus.emit(
                 ConsolidationCommitted(
                     history_entry_payloads=list(draft.history_entry_payloads),
