@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
+import sys
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,6 +107,9 @@ class McpClient:
             env=proc_env,
             cwd=self.cwd,
             limit=_STREAM_LIMIT,
+            # A pythonw Host must not open a console for each MCP child or
+            # reconnect. Pipes still carry the protocol and stderr diagnostics.
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
         )
         _ = asyncio.create_task(self._drain_stderr())
 
