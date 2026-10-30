@@ -181,6 +181,7 @@ class AppRuntime:
         workers = {task.get_name(): not task.done() for task in self._background_tasks}
         failures = self.channel_host.failures if self.channel_host else []
         channels = self.channel_host.health() if self.channel_host else {}
+        mcp_health = self.mcp_registry.health() if self.mcp_registry else {}
         proactive_requested = self.features.enable_proactive and self.config.proactive.enabled
         proactive_running = workers.get("proactive", False)
         journal = self.core.session_manager.execution_journal if self.core else None
@@ -188,6 +189,8 @@ class AppRuntime:
             "healthy": self._started and not self._shutdown and all(workers.values())
                        and not failures and all(channels.values()) and (not proactive_requested or proactive_running),
             "workers": workers,
+            "mcp_health": mcp_health,
+            "dependencies_ready": all(mcp_health.values()),
             "channels": [channel.name for channel in self.channel_host.channels] if self.channel_host else [],
             "channel_health": channels,
             "channel_failures": [{"channel": f.channel, "phase": f.phase, "error_type": f.error_type} for f in failures],

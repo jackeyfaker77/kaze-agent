@@ -73,6 +73,11 @@ class McpClient:
         self._call_lock = asyncio.Lock()
         self._recent_stdout: deque[str] = deque(maxlen=8)
         self._recent_stderr: deque[str] = deque(maxlen=8)
+        self._broken = False
+
+    @property
+    def connected(self) -> bool:
+        return not self._broken and self._process is not None and self._process.returncode is None
 
     @property
     def tool_infos(self) -> list[McpToolInfo]:
@@ -84,7 +89,7 @@ class McpClient:
                 self._connect_impl(),
                 timeout=_CONNECT_TIMEOUT,
             )
-        except Exception:
+        except BaseException:
             await self.disconnect()
             raise
 
@@ -152,7 +157,14 @@ class McpClient:
     ) -> str:
         """调用远端工具，返回结果字符串。"""
         async with self._call_lock:
-            return await self._call_locked(tool_name, arguments, timeout=timeout)
+            if self._broken:
+                raise ConnectionError(f"MCP server {self.name!r} connection unavailable")
+            try:
+                return await self._call_locked(tool_name, arguments, timeout=timeout)
+            except (ConnectionError, OSError, TimeoutError, asyncio.CancelledError):
+                # Never resend a tools/call whose external outcome may be unknown.
+                self._broken = True
+                raise
 
     async def _call_locked(
         self, tool_name: str, arguments: dict[str, Any], *, timeout: float | None
@@ -204,18 +216,33 @@ class McpClient:
 
     async def disconnect(self) -> None:
         """终止子进程。"""
-        if self._process is None:
+        process = self._process
+        if process is None:
             return
+
+        async def cleanup() -> None:
+            try:
+                process.terminate()
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+            except ProcessLookupError:
+                await process.wait()
+
+        # Registry removal/shutdown can cancel a recovery inside _drop. Keep
+        # owning the process until termination (including kill fallback) finishes.
+        task = asyncio.create_task(cleanup())
         try:
-            self._process.terminate()
-            _ = await asyncio.wait_for(self._process.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
-            self._process.kill()
-            _ = await self._process.wait()
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
         except Exception as e:
             logger.warning("[mcp] 断开 %r 时出错: %s", self.name, e)
         finally:
-            self._process = None
+            if self._process is process:
+                self._process = None
 
     def _new_id(self) -> int:
         i = self._next_id
