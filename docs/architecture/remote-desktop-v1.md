@@ -1,8 +1,10 @@
 # Desktop ↔ Runtime Host v1
 
 独立 Host 可以接受桌面 WebSocket 连接。桌面选用远程模式后不启动本地 Python，
-不创建本地 config.toml，不读取或保存本地模型配置。省略远程环境变量时继续沿用
-原本地 bridge 模式。本轮不自动迁移工作区、安装服务或修改已有配置。
+不创建本地 config.toml，不读取或保存本地模型配置。未设置远程环境变量且不存在
+同机部署连接文件时，继续沿用原本地 bridge 模式。Windows 当前用户常驻安装会
+生成 `.desktop/runtime-connection.json`，显式环境变量仍优先；详见
+[Windows 本机常驻部署](windows-local-host-v1.zh-CN.md)。
 
 ## 启动
 

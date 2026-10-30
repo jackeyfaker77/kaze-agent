@@ -45,6 +45,11 @@ if (!process.versions.electron) {
         await until(`document.querySelectorAll('.message-process').length===${count + 1}`, 'live process');
       };
       await win.loadFile(path.join(root, 'apps/desktop/renderer-dist/index.html'));
+      if (mode === 'remote') {
+        await until(`document.body.innerText.includes('fixture: Host not ready yet')`, 'startup error visible');
+        await run(`window.conversationFixture.emit('bridge.connected',{})`);
+        await until(`!document.body.innerText.includes('fixture: Host not ready yet')`, 'recovered connection clears startup error');
+      }
       await until(`document.body.innerText.includes('${mode === 'local' ? '本地' : '远程'}服务已连接')`, 'connected');
       await run(`Array.from(document.querySelectorAll('.conversation-list button')).find(e=>e.textContent.includes('Fixture A')).click()`);
       await until(`document.body.innerText.includes('历史正文完整')`, 'history');

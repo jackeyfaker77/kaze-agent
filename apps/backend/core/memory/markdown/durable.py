@@ -35,6 +35,17 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
+def _same_source(current, snapshot):
+    # Delivery receipts are transport facts, updated after the conversation is
+    # committed. They are not Markdown source content. Keep every other field
+    # (including identity, order, tools and user edits) in the comparison.
+    def semantic(message):
+        return {k: v for k, v in message.items()
+                if k not in ('delivery_status', 'external_message_id')}
+    return ([semantic(m) for m in current[:len(snapshot)]] ==
+            [semantic(m) for m in snapshot])
+
+
 class _Models(Task):
     def __init__(self, owner, row):
         self.owner, self.row = owner, row
@@ -154,7 +165,16 @@ class MarkdownTasks:
             for raw in rows:
                 row = dict(raw)
                 if row['state'] == 'blocked':
-                    break
+                    # Repair only the old false conflict caused by late delivery
+                    # receipts. Unknown models, real edits and file conflicts
+                    # remain blocked; saved model/draft/file receipts are reused.
+                    snapshot = json.loads(row['snapshot']) if row['snapshot'] else None
+                    current = self.manager._load(row['session_key'])
+                    if (row['error'] != 'source_history_changed' or not snapshot or
+                            current is None or
+                            current.messages[:len(snapshot['messages'])] == snapshot['messages'] or
+                            not _same_source(current.messages, snapshot['messages'])):
+                        break
                 if row['state'] == 'running':
                     if row['owner'] == self.journal.epoch:
                         break
@@ -207,7 +227,7 @@ class MarkdownTasks:
             fault('snapshot')
         else:
             snapshot = json.loads(row['snapshot'])
-        if current.messages[:len(snapshot['messages'])] != snapshot['messages']:
+        if not _same_source(current.messages, snapshot['messages']):
             raise MemoryTaskBlocked('source_history_changed')
         session = SimpleNamespace(**snapshot)
         frozen = SimpleNamespace(read_long_term=lambda: snapshot['long_term'], read_history=lambda *_: snapshot['history'], read_recent_context=lambda: snapshot['recent'])
@@ -239,7 +259,7 @@ class MarkdownTasks:
             fault('draft')
         # Recheck after model awaits; user edits/deletion must not be resurrected.
         current = self.manager._load(row['session_key'])
-        if current is None or current.messages[:len(snapshot['messages'])] != snapshot['messages']:
+        if current is None or not _same_source(current.messages, snapshot['messages']):
             raise MemoryTaskBlocked('source_history_changed')
         if 'recent_only' in saved:
             self._write_file(row['id'], m._store.recent_context_file, saved['recent_only'], append=False, expected_before=snapshot['recent_hash'])

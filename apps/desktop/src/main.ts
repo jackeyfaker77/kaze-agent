@@ -1,7 +1,8 @@
 import { resolve } from "node:path";
 import { app, BrowserWindow, Menu, powerMonitor, protocol, screen, session, shell } from "electron";
 import { localAssetSchemePrivileges, registerLocalAssetProtocol } from "./assets/assetProtocol.js";
-import { RemoteBridgeClient, remoteConnectionFromEnvironment } from "./bridge/remoteBridgeClient.js";
+import { RemoteBridgeClient } from "./bridge/remoteBridgeClient.js";
+import { desktopRuntimeConnection } from "./bridge/localHostConnection.js";
 import type { BridgeClient } from "./bridge/bridgeContract.js";
 import { DesktopBridgeClient } from "./bridge/bridgeClient.js";
 import { startBridge, wireBridgeEvents } from "./bridge/bridgeLifecycle.js";
@@ -43,7 +44,7 @@ const runtimePaths = resolveDesktopRuntimePaths({
   workspacePath: process.env.HASAKI_WORKSPACE,
 });
 const hasSingleInstanceLock = configureApplicationIdentity(app, runtimePaths.workspacePath, process.env.HASAKI_DESKTOP_USER_DATA_DIR);
-const remoteConnection = remoteConnectionFromEnvironment(process.env);
+const remoteConnection = desktopRuntimeConnection(process.env, runtimePaths.workspacePath);
 const bridge: BridgeClient = remoteConnection ? new RemoteBridgeClient(remoteConnection) : new DesktopBridgeClient(runtimePaths.bridge);
 const localAssets = new LocalAssetRegistry();
 const trayLifecycleEnabled = process.platform === "win32";

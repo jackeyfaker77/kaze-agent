@@ -13,6 +13,7 @@ const sessions = {
   'desktop:b': { session_key: 'desktop:b', title: 'Fixture B', messages: [{ id: 'b', role: 'assistant', content: '另一个会话' }] },
 };
 let pending, sequence = 0, heldGet, holdGet = false;
+let startupFailure = mode === 'remote';
 const clone = value => JSON.parse(JSON.stringify(value));
 const publish = (method, payload = {}, id = pending?.id || 'fixture') => {
   for (const listener of listeners) listener({ id, type: 'event', method, payload: { session_key: pending?.key || 'desktop:a', ...payload } });
@@ -36,6 +37,10 @@ const api = {
   invoke: async ({ method, payload }) => {
     calls.push(method);
     const id = `rpc-${++sequence}`;
+    if (method === 'health' && startupFailure) {
+      startupFailure = false;
+      return { id, method, type: 'response', payload: {}, error: { code: 'remote_unavailable', message: 'fixture: Host not ready yet' } };
+    }
     if (method === 'sessions.list') return response(id, method, { sessions: Object.values(sessions).map(s => ({ key: s.session_key, metadata: { title: s.title }, message_count: s.messages.length })) });
     if (method === 'session.get') {
       const value = response(id, method, clone(sessions[payload.session_key] || { session_key: payload.session_key, title: '', messages: [] }));

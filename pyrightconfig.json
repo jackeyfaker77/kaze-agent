@@ -8,6 +8,7 @@
   ],
   "include": [
     "apps/backend/main.py",
+    "apps/backend/windows_host.py",
     "apps/backend/agent",
     "apps/backend/bootstrap",
     "apps/backend/bus",

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[5]
 @pytest.mark.parametrize('point', ['source_fact','before_admission_commit','admitted','snapshot','before_model',
     'model_response','second_model_response','draft','file_intent','file_pre_replace','file_replaced',
     'file_applied:PENDING.md','file_applied:RECENT_CONTEXT.md','file_applied:journal/2026-10-28.md',
-    'files','cursor','callback','before_done','done','wire','wire_second','callback_wire',
+    'files','cursor','callback','before_done','done','receipt_conflict','wire','wire_second','callback_wire',
     'callback_before_memory_commit:upsert_consolidation_event',
     'callback_after_memory_commit:upsert_consolidation_event','callback_model_response',
     'callback_after_memory_commit:upsert_item','callback_before_done'])
