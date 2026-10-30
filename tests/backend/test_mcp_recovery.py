@@ -197,11 +197,18 @@ from pathlib import Path
 root=Path(__file__).parent
 counter=root/'starts'
 with counter.open('a') as f:f.write('start\\n')
+if sys.platform=='win32':
+ import ctypes
+ with (root/'consoles').open('a') as f:f.write(str(ctypes.windll.kernel32.GetConsoleWindow())+'\\n')
 if len(counter.read_text().splitlines())==1:time.sleep(30)
 for line in sys.stdin:
  r=json.loads(line);method=r['method']
  if 'id' not in r:continue
  if method=='tools/call':
+  if r['params']['name']=='probe':
+   print('probe diagnostic',file=sys.stderr,flush=True)
+   print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':{'content':[{'type':'text','text':'stdio works'}]}}),flush=True)
+   continue
   with (root/'calls').open('a') as f:f.write('call\\n')
   os._exit(3)
  result={'tools':[{'name':'fetch','inputSchema':{'type':'object'}}]} if method=='tools/list' else {}
@@ -217,11 +224,15 @@ for line in sys.stdin:
         await registry.load_and_connect_all()
         await until(lambda: registry.health().get('calendar'))
         old = registry._clients['calendar']
+        assert await old.call('probe', {}) == 'stdio works'
+        await until(lambda: any('probe diagnostic' in line for line in old._recent_stderr))
         with pytest.raises(ConnectionError):
             await old.call('fetch', {})
         await until(lambda: registry._clients.get('calendar') is not old and registry.health()['calendar'])
         assert (tmp_path/'calls').read_text().splitlines() == ['call']
         assert len((tmp_path/'starts').read_text().splitlines()) == 3
+        if sys.platform == 'win32':
+            assert (tmp_path/'consoles').read_text().splitlines() == ['0', '0', '0']
         assert path.read_bytes() == original
     finally:
         await registry.shutdown()
