@@ -1,0 +1,53 @@
+{
+  "date": "2026-10-29",
+  "scope": "Windows current-user resident Host, loopback desktop attachment and delivery-receipt memory recovery",
+  "status": "passed for the tested current-user resident scope; actual Windows logon/reboot validation remains outstanding",
+  "deployment": {
+    "autostart": "current-user interactive logon, delay 10 seconds",
+    "abnormal_exit_recovery": "1 minute Task Scheduler repetition, IgnoreNew, workspace owner lock",
+    "normal_stop": "disable task and cooperative host-stop; pause latch prevents implicit restart",
+    "listener": "127.0.0.1:8765",
+    "credentials": "private token file with current-user and SYSTEM ACL; no token in process arguments or renderer",
+    "shared_original_workspace": true,
+    "business_configuration_hashes_unchanged": true,
+    "proactive_poll_seconds": 300,
+    "ssh_configured": false
+  },
+  "live_evidence": {
+    "cold_backup": {"files": 92, "databases": 11},
+    "original_history": {"sessions": 37, "messages": 335, "missing": 0, "changed_original_messages": 0},
+    "database_integrity": ["ok", "ok", "ok", "ok"],
+    "desktop_fully_exited": true,
+    "telegram_new_input": {"inbound": "done", "inbound_attempts": 1, "outbound": "done", "outbound_attempts": 1, "user_confirmed_reply": true},
+    "calendar_reminder": {"outbound": "done", "attempts": 1, "ack_records": 1, "user_confirmed_receipt": true, "normal_host_restart_did_not_resend": true},
+    "isolated_scheduler_crash": {"automatic_restart": true, "history_preserved": true, "single_owner": true, "normal_stop_does_not_restart": true},
+    "desktop_reopened": {"mode": "remote", "same_host_epoch": true, "real_text_reply": "桌面连接同机后台正常。"},
+    "memory_receipt_conflict": {"recovered": "done", "original_model_results_reused": 2, "old_failed_inbounds_retained_for_review": 2}
+  },
+  "tests": {
+    "post_review_lifecycle": {"passed": 11, "cases": ["transient lock conflict followed by successful startup", "legacy exit_code=2 pause recovery", "explicit normal stop remains paused", "stop during startup", "owner change while stopping", "queued task cancellation wait", "safe timeout", "reenable disabled running task without another launch"]},
+    "post_review_host_process_regression": {"passed": 13, "skipped": 1},
+    "post_review_real_scheduler": {"passed": true, "conflict_then_crash_auto_restart": true, "immediate_start_stop": true, "history_preserved": true, "single_owner": true},
+    "host_telegram_proactive_local_and_remote": {"passed": 70, "skipped": 1, "skip_reason": "POSIX signal test on Windows"},
+    "markdown_unit": {"passed": 13},
+    "markdown_real_process_crash_matrix": {"passed": 28, "recovery_passes_per_case": 2},
+    "desktop_unit": {"passed": 244, "skipped": 1},
+    "conversation_ui": {"local": "passed", "remote_initial_connection_recovery": "passed"},
+    "desktop_typecheck_lint_build": "passed",
+    "pyright_production_and_tests": "0 errors"
+  },
+  "review": {
+    "resolved": ["A temporary owner-lock conflict could persist a pause and disable future recovery", "Stop during startup could omit the stop request; Start could leave a running task disabled"],
+    "followup": "Reviewed lifecycle transitions, pause compatibility and regression coverage after fixes; no further blocking findings in this scope",
+    "production": "Running Host was not interrupted during post-review tests; health and Telegram remained available, original reminder still had one send attempt, business configuration hashes unchanged"
+  },
+  "boundaries": [
+    "Logon trigger is configured; actual Windows logout/login and system restart were not performed.",
+    "Current-user interactive tasks cannot operate while logged out, asleep or powered off.",
+    "Process exit recovery does not detect a process that stays alive but hangs.",
+    "Task Scheduler RestartOnFailure did not relaunch in this machine's isolated tests; the tested repetition trigger is used instead.",
+    "Unknown model/tool/send outcomes remain blocked; external delivery is not claimed to be exactly-once.",
+    "Remote-mode desktop restrictions on pet, voice, configuration editing and local uploads remain unchanged.",
+    "No cloud deployment, SSH or business configuration changes were made."
+  ]
+}

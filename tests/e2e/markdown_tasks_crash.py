@@ -29,6 +29,12 @@ async def main():
     f = await setup(workspace, wire, callback=callback)
     if phase == 'crash':
         def fault(where):
+            if point == 'receipt_conflict' and where == 'draft':
+                message = f.sessions._load('desktop:markdown').messages[-1]
+                f.sessions._store.update_message(message['id'], delivery_status='sent', external_message_id='123')
+                with f.jobs.db:
+                    f.jobs.db.execute("UPDATE tasks SET state='blocked',error='source_history_changed'")
+                os._exit(73)
             task = memory_task.get()
             is_callback = task is not None and task.row['id'].startswith('markdown-callback:')
             if callback and 'memory_commit' in where:

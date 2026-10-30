@@ -263,3 +263,57 @@ async def test_summary_edited_during_model_call_is_preserved(tmp_path):
         assert len(f.calls) == 2
     finally:
         await close(f)
+
+
+@pytest.mark.parametrize('edit_content', [False, True])
+async def test_delivery_receipt_during_model_does_not_change_source(tmp_path, edit_content):
+    def deliver():
+        message = f.sessions._load(key).messages[-1]
+        f.sessions._store.update_message(message['id'], delivery_status='sent',
+            external_message_id='telegram:123', **({'content': 'edited'} if edit_content else {}))
+    f = await setup(tmp_path, wire_hook=deliver)
+    try:
+        key = await admit(f)
+        await f.jobs.drain()
+        task = f.jobs.list_tasks()[0]
+        assert task['state'] == ('blocked' if edit_content else 'done')
+        if edit_content:
+            assert task['error'] == 'source_history_changed'
+        await f.jobs.drain()
+        assert len(f.calls) == 2
+        assert f.runtime.store.read_history().count('durable history') == (0 if edit_content else 1)
+    finally:
+        await close(f)
+
+
+@pytest.mark.parametrize('reason', ['source_history_changed', 'model_outcome_unknown'])
+async def test_old_receipt_conflict_recovers_saved_draft_only(tmp_path, monkeypatch, reason):
+    from core.memory.markdown import durable
+    class Crash(BaseException):
+        pass
+    def crash(point):
+        if point == 'draft':
+            raise Crash()
+    f = await setup(tmp_path)
+    try:
+        key = await admit(f)
+        monkeypatch.setattr(durable, 'fault', crash)
+        with pytest.raises(Crash):
+            await f.jobs.drain()
+        assert len(f.calls) == 2
+        message = f.sessions._load(key).messages[-1]
+        f.sessions._store.update_message(message['id'], delivery_status='sent', external_message_id='123')
+        with f.jobs.db:
+            f.jobs.db.execute("UPDATE tasks SET state='blocked',error=?", (reason,))
+    finally:
+        await close(f)
+    monkeypatch.setattr(durable, 'fault', lambda _: None)
+    f = await setup(tmp_path)
+    try:
+        for _ in range(2):
+            await f.jobs.drain()
+        assert not f.calls
+        assert f.jobs.list_tasks()[0]['state'] == ('done' if reason == 'source_history_changed' else 'blocked')
+        assert f.runtime.store.read_history().count('durable history') == (1 if reason == 'source_history_changed' else 0)
+    finally:
+        await close(f)

@@ -11,6 +11,7 @@ export function useConversation() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
   const [error, setError] = useState("");
+  const connectionError = useRef("");
   const [mode, setMode] = useState<"local" | "remote" | null>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -27,6 +28,14 @@ export function useConversation() {
   const [activeAttempt, setActiveAttempt] = useState("");
   const pendingSends = useRef(new Map<string, { id: string }>());
   const fail = useCallback((value: unknown) => setError(value instanceof Error ? value.message : String(value)), []);
+  const failConnection = useCallback((value: unknown) => {
+    const message = value instanceof Error ? value.message : String(value);
+    connectionError.current = message;
+    setError(message);
+  }, []);
+  const clearConnectionError = useCallback(() => {
+    setError(current => current === connectionError.current ? "" : current);
+  }, []);
   const acceptSession = useCallback((next: Session) => {
     historyVersion.current++;
     dispatchDisplay({ type: "snapshot", session: next });
@@ -43,7 +52,7 @@ export function useConversation() {
   }
   useEffect(() => {
     alive.current = true;
-    void (async () => { const status = await window.miraDesktop.bridgeStatus(); if (alive.current) setMode(status.mode ?? "local"); await rpc("health"); await selectCurrent(); await refresh(); if (alive.current) setReady(true); })().catch(fail);
+    void (async () => { const status = await window.miraDesktop.bridgeStatus(); if (alive.current) setMode(status.mode ?? "local"); await rpc("health"); await selectCurrent(); await refresh(); if (alive.current) { setReady(true); clearConnectionError(); } })().catch(failConnection);
     const resync = async () => {
       const selectedKey = key.current;
       const version = historyVersion.current;
@@ -52,12 +61,13 @@ export function useConversation() {
       if (alive.current && key.current === selectedKey) {
         if (version === historyVersion.current) acceptSession(result);
         setReady(true);
+        clearConnectionError();
       }
     };
     const off = window.miraDesktop.onEvent(event => {
       if (event.method === "bridge.exit") { dispatchDisplay({ type: "disconnect" }); setReady(false); return; }
       if (event.method === "bridge.connected" || event.method === "sessions.changed") {
-        void resync().catch(fail); return;
+        void resync().catch(failConnection); return;
       }
       dispatchDisplay({ type: "event", event });
       handleCommittedEvent(event, key.current, () => { void refresh().catch(fail); }, next => {
@@ -70,7 +80,7 @@ export function useConversation() {
       if (!textSending.current) { locked.current = running; setBusy(running); }
     });
     return () => { alive.current = false; off(); offVoice(); };
-  }, [fail, acceptSession]);
+  }, [fail, acceptSession, failConnection, clearConnectionError]);
   async function open(nextKey: string) {
     if (locked.current || navigating.current || (saved.current && key.current === nextKey)) return;
     navigating.current = true; setLoading(true);
