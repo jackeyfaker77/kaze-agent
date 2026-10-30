@@ -1,6 +1,7 @@
 # Kaze Personal Agent 实施与交付路线
 
 - 状态：实施路线，阶段实现与验收分别跟踪。
+- Windows 本机常驻 v1 验收基线：`ea0578d8b0b1d73da302b0eda45cd3e6f042a139`（PR #37–39）。MCP 自动恢复、隐藏启动已合并并加载，正常 Host 重启与最新版本再次整机重启的最终验收均通过；用户未开桌面时 Telegram 收发和主动提醒正常，后续完整轮询未重发。见[正式验收与重启步骤](../acceptance/windows-resident-v1-final.zh-CN.md)。此部署基线不替换下方可靠基础版的历史基线。
 - 编写日期：2026-10-27。
 - 当前可靠基础版基线：`2ade483efecbed6946c6c0925ac470d2c46982e2`（PR #34，包含 PR #32–34）。原 PR #32 基线 `3f421c5` 保留为历史验收记录。
 - 更新日期：2026-10-28；Phase A 限定范围及 Phase B v1 已合并、通过自动化与生产重启验收。PR #33 的 Markdown 恢复和 PR #34 的 shell 输入隔离／发送尝试审计均已合并、CI 通过并加载生产；当前可靠基础版按限定范围验收，详见[发布记录](../reliable-baseline-release.zh-CN.md)。

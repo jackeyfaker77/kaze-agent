@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-30",
+  "status": "passed within Windows current-user logon resident v1 scope",
+  "baseline_commit": "ea0578d8b0b1d73da302b0eda45cd3e6f042a139",
+  "windows_boot_local": "2026-10-30T15:42:50+08:00",
+  "host_ready_local": "2026-10-30T15:44:23+08:00",
+  "same_root": true,
+  "new_owner": true,
+  "desktop_not_opened_user_confirmed": true,
+  "history": {
+    "original_messages": 361,
+    "missing": 0,
+    "changed": 0
+  },
+  "four_configuration_hashes_unchanged": true,
+  "poll_seconds": 300,
+  "telegram": {
+    "execution": "completed",
+    "inbound": "done",
+    "inbound_attempts": 1,
+    "reply": "done",
+    "reply_attempts": 1,
+    "user_pasted_received_reply": true
+  },
+  "reminder": {
+    "todo_id": "todo_d57ec5f7462a44ba97aef2ffe7f9e47b",
+    "title": "Kaze-WINV1-FINAL-20261030",
+    "execution": "completed",
+    "outbox_id": "proactive-recovery:9e0e925ca9144a36843349c67e785c6b",
+    "attempts": 1,
+    "acks": 1,
+    "user_pasted_received_reminder": true,
+    "sent_local": "2026-10-30T15:49:32+08:00",
+    "following_poll_completed_local": "2026-10-30T15:54:35+08:00",
+    "following_poll_alerts": 0
+  },
+  "old_reminder_send_attempts": 1,
+  "unknown_old_execution_not_replayed": true,
+  "window_evidence": "No matching visible MCP window at post-boot inspection; no continuous observation during OS login. Prior normal Host startup and isolated reconnect no-console evidence retained.",
+  "remaining": [
+    "Separate logout/login",
+    "Sleep/hibernate wake network recovery",
+    "Real network/proxy outage recovery",
+    "Long-running observation",
+    "Hung-but-alive Host supervision"
+  ]
+}
