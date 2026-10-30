@@ -77,7 +77,8 @@
   "review": {
     "fixed": [
       "Cancellation during connection teardown must await child cleanup",
-      "Unrelated optional MCP failure must not block proactive sources"
+      "Unrelated optional MCP failure must not block proactive sources",
+      "Directly registered plugin source tools must not require a managed stdio connection; managed offline sources still block"
     ],
     "production_boundary": "Production acceptance preceded these two review hardenings; both covered by post-review automated regression."
   }

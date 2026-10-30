@@ -185,6 +185,16 @@ async def test_offline_mcp_waits_without_admitting_or_calling_then_recovers(proa
 
 
 @pytest.mark.asyncio
+async def test_direct_registered_source_does_not_require_managed_connection(proactive_setup):
+    setup = proactive_setup
+    setup.runtime.mcp_registry = SimpleNamespace(health=lambda: {'unrelated_optional': False})
+    loop = await setup.start()
+    await loop._tick()
+    setup.sender.assert_awaited_once()
+    setup.ack.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_wake_delivers_without_heartbeat_and_persists_only_after_receipt(
     proactive_setup,
 ):

@@ -248,8 +248,14 @@ class KazeProactiveLoop(ProactiveLoop):
             return None
 
         registry = getattr(self.runtime, 'mcp_registry', None)
-        source_servers = {source.spec.server for source in self._plugin_proactive_sources}
-        if registry is not None and any(not registry.health().get(name, False) for name in source_servers):
+        health = registry.health() if registry is not None else {}
+        # Plugins may register source tools directly without a managed stdio
+        # connection. Managed offline connections must still block stale tools.
+        if registry is not None and any(
+            not health.get(source.spec.server, self.runtime.tools.has_tool(
+                f'mcp_{source.spec.server}__{source.spec.fetch_tool}'))
+            for source in self._plugin_proactive_sources
+        ):
             logger.warning('主动来源 MCP 尚未就绪；等待连接恢复，不派发工具或模型请求')
             return None
 
