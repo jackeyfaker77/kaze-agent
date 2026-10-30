@@ -247,6 +247,12 @@ class KazeProactiveLoop(ProactiveLoop):
             logger.warning('主动执行尚待核对，保持轮询但不再调用模型或发送；请查看执行记录与关联队列')
             return None
 
+        registry = getattr(self.runtime, 'mcp_registry', None)
+        source_servers = {source.spec.server for source in self._plugin_proactive_sources}
+        if registry is not None and any(not registry.health().get(name, False) for name in source_servers):
+            logger.warning('主动来源 MCP 尚未就绪；等待连接恢复，不派发工具或模型请求')
+            return None
+
         from core.execution.contracts import ExecutionNeedsReview
         try:
             return await run_proactive_recorded(journal, key, request_key or uuid4().hex,

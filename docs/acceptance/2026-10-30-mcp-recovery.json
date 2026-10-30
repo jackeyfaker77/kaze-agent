@@ -1,0 +1,84 @@
+{
+  "date": "2026-10-30",
+  "scope": "Calendar and Feed stdio MCP connection recovery; Windows resident Host proactive acceptance",
+  "status": "passed for tested scope",
+  "tests": {
+    "broader_local_remote_proactive_and_host_regressions": {
+      "passed": 793,
+      "skipped": 2
+    },
+    "final_focused_mcp_and_proactive_regressions": {
+      "passed": 21
+    },
+    "skip_reasons": [
+      "POSIX SIGTERM semantics unavailable on Windows",
+      "OS does not grant symlink creation"
+    ],
+    "pyright_production_errors": 0,
+    "pyright_tests_errors": 0,
+    "real_stdio_faults": [
+      "initialize timeout followed by automatic recovery",
+      "process exits after accepting a tool request; reconnect does not replay the request"
+    ],
+    "existing_recovery_matrix": "real process crashes, repeated recovery, unknown model/send/ACK remain blocked",
+    "post_review_mcp_and_proactive": {
+      "passed": 25
+    }
+  },
+  "live_evidence": {
+    "actual_windows_reboot_and_logon": true,
+    "desktop_kept_closed": true,
+    "telegram_reboot_reply_user_confirmed": true,
+    "fix_loaded_by_normal_host_restart": true,
+    "mcp_health": {
+      "calendar": true,
+      "feed": true,
+      "device": true
+    },
+    "host_healthy": true,
+    "original_history": {
+      "messages": 351,
+      "missing": 0,
+      "changed": 0
+    },
+    "final_four_business_configuration_hashes_match_reboot_baseline": true,
+    "proactive_poll_seconds": 300,
+    "reminder": {
+      "title": "Kaze-BOOT-20261030-主动提醒验收",
+      "delivery_completed_local": "2026-10-30T12:33:09+08:00",
+      "outbox_state": "done",
+      "send_attempts": 1,
+      "ack_records": 1,
+      "user_pasted_received_reminder": true,
+      "next_poll_completed_local": "2026-10-30T12:38:33+08:00",
+      "next_poll_alerts": 0,
+      "resends": 0,
+      "note": "Next poll sent an unrelated Feed item; it was not a duplicate reminder."
+    },
+    "old_execution": {
+      "turn_id": "d46b6b7e1db7431cbb36223a4c6315c3",
+      "readonly_audit_before_action": true,
+      "user_authorized_close": true,
+      "review_api": "execution.review",
+      "decision": "close",
+      "original_calendar_result": "unknown",
+      "original_tool_dispatched_count_unchanged": 3,
+      "original_tool_returned_count_unchanged": 3,
+      "model_or_delivery_or_ack_events": 0,
+      "retry_permission_granted": false
+    }
+  },
+  "boundaries": [
+    "Actual Windows reboot exposed the startup defect; this fix was then loaded with a normal Host restart, not a second Windows reboot.",
+    "Connection fault injection used isolated real subprocesses, not production Calendar/Feed or Telegram failure injection.",
+    "Unknown external effects remain unknown; no external exactly-once guarantee is asserted.",
+    "Standalone logout/login, pre-login operation and sleep/wake network recovery remain untested."
+  ],
+  "review": {
+    "fixed": [
+      "Cancellation during connection teardown must await child cleanup",
+      "Unrelated optional MCP failure must not block proactive sources"
+    ],
+    "production_boundary": "Production acceptance preceded these two review hardenings; both covered by post-review automated regression."
+  }
+}
