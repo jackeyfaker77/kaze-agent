@@ -122,6 +122,13 @@ demo 不启动 Host，也不读取生产数据。可用全局 `--workspace '新�
 
 ## 残余范围与回退
 
+### P1 后续复审修复（2026-11-01）
+
+- context 捕获和订阅基线在计算身份前复用 `current_context_snapshot` 检查：不可用、过期、时间无效的快照不写入来源顺序，不解除等待，避免归一化丢失 revision 后使用微秒时间戳污染后续版本。
+- `source_inputs[alias]` 使用 `{"schema_version": 2, "items": {item_id: envelope}}`。基线和增量消费保留每个独立 item 的最新投影，批量消费、重启后模型收到与聚合摘要一致的完整快照。旧单 envelope 与旧逐 item 基线在下次消费时兼容转换；合法 item 名 `items`、`item_id` 不参与格式判定。
+- 新增 context 恢复/晚订阅六例、真实 GoalSubagentExecutor 假 provider 的批量输入重启验证，以及三种旧基线条目命名回归。兼容回归 184 项通过；最后的旧格式小修后专项 42 项通过，Ruff 与目标 Pyright error 检查通过。独立 review 已复核最终生产代码并确认无待修问题；两组测试有重叠，不相加。
+- 本修复不自动改写此前已污染的 ledger heads/positions，也不能凭旧单 envelope 凭空补回曾被覆盖的条目。若旧版本曾实际处理这些输入，应先停止相关目标，依据不可变 ledger 人工核对并建立干净订阅；不能将该补丁当作既有受损数据迁移。此轮没有操作生产 Host 或真实模型/渠道。
+
 - 仅显式创建的本地 Goal／订阅；无桌面订阅面板、自动通知、多机消息服务或 DAG。当前沿用 P0 的全库串行 Goal 阶段及预算。
 - Wake 停机补偿依赖其持久快照及上游仍能提供的事件；同 item 停机期间被覆盖的中间版本只补最新可见版本。来源产生后又彻底删除、没有任何本地持久事实的事件无法凭空恢复。
 - recurring timer 补偿按磁盘保存的名义 occurrence 合并一次，随后保持原 scheduler 推进规则；不枚举所有错过的周期。

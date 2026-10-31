@@ -232,6 +232,8 @@ class GoalInputs:
                 {
                     "item_id": r["item_id"],
                     "position": r["position"],
+                    "version": r["version"],
+                    "event_seq": r["seq"],
                     "payload": json.loads(r["payload"]),
                 }
                 for r in rows
@@ -246,9 +248,18 @@ class GoalInputs:
                     positions.get(row["item_id"], -1), row["position"]
                 )
                 if matches(payload, filters):
-                    selected_baseline[row["item_id"]] = projection(payload, fields)
+                    selected_baseline[row["item_id"]] = {
+                        "kind": kind,
+                        "source_id": source_id,
+                        "item_id": row["item_id"],
+                        "position": row["position"],
+                        "version": row.get("version", str(row["position"])),
+                        "event_seq": row.get("event_seq"),
+                        "fields": projection(payload, fields),
+                    }
             fingerprints = {
-                item: digest(value) for item, value in selected_baseline.items()
+                item: digest(value["fields"])
+                for item, value in selected_baseline.items()
             }
             fingerprint = digest(fingerprints) if fingerprints else None
             if len(encode(selected_baseline).encode()) > 256_000:
@@ -275,7 +286,10 @@ class GoalInputs:
             alias = "input:" + subscription_id
             if fingerprint is not None:
                 self.store._observe_source(
-                    state, alias, fingerprint, source_input=selected_baseline
+                    state,
+                    alias,
+                    fingerprint,
+                    source_input={"schema_version": 2, "items": selected_baseline},
                 )
             self.store._wait(state, {"kind": "source", "source_id": alias})
         return self.get(subscription_id)
@@ -358,6 +372,24 @@ class GoalInputs:
                 positions = json.loads(sub["positions"])
                 fingerprints = json.loads(sub["fingerprints"])
                 state = self.store._read(sub["goal_id"])
+                alias = "input:" + sub["subscription_id"]
+                previous = state.get("source_inputs", {}).get(alias, {})
+                if previous.get("schema_version") == 2:
+                    snapshots = previous["items"]
+                elif isinstance(previous.get("item_id"), str):
+                    # Compatibility with the previously persisted single envelope.
+                    snapshots = {previous["item_id"]: previous}
+                else:
+                    # Older baselines stored per-item field projections directly.
+                    snapshots = {
+                        item: {
+                            "kind": sub["kind"],
+                            "source_id": sub["source_id"],
+                            "item_id": item,
+                            "fields": fields,
+                        }
+                        for item, fields in previous.items()
+                    }
                 rows = conn.execute(
                     "SELECT * FROM goal_input_events WHERE seq>? AND kind=? AND source_id=? "
                     "AND (?='' OR item_id=?) AND owner_session=? ORDER BY seq",
@@ -410,11 +442,12 @@ class GoalInputs:
                             "event_seq": event["seq"],
                             "fields": selected,
                         }
+                        snapshots[event["item_id"]] = envelope
                         self.store._observe_source(
                             state,
                             "input:" + sub["subscription_id"],
                             aggregate,
-                            source_input=envelope,
+                            source_input={"schema_version": 2, "items": snapshots},
                         )
                         sub["fingerprint"] = aggregate
                         applied += 1

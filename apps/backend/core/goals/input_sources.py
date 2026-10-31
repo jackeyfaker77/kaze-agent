@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 import sqlite3
 
 from .contracts import digest
+from proactive_v2.context_freshness import current_context_snapshot
 
 logger = logging.getLogger(__name__)
+
+
+def usable_context(event, now):
+    return current_context_snapshot(event, now=now).get("available") is not False
 
 
 def timestamp(value):
@@ -103,6 +108,10 @@ class GoalInputSources:
         baseline = []
         if options["kind"].startswith("wake."):
             for kind, event in self._wake_rows({options["source_id"]}):
+                if kind == "context" and not usable_context(
+                    event, datetime.now(timezone.utc)
+                ):
+                    continue
                 try:
                     identity = wake_identity(kind, event)
                 except ValueError:
@@ -118,6 +127,7 @@ class GoalInputSources:
                         {
                             "item_id": identity[2],
                             "position": identity[4],
+                            "version": identity[3],
                             "payload": event,
                         }
                     )
@@ -156,6 +166,8 @@ class GoalInputSources:
             )
 
     async def capture_wake(self, session_key, kind, event, now):
+        if kind == "context" and not usable_context(event, now):
+            return False
         identity = wake_identity(kind, event)
         wanted = [
             s
