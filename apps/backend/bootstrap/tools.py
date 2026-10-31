@@ -78,6 +78,7 @@ class CoreRuntime:
     memory_optimizer: Any | None = None
     screen_observation: Any | None = None
     proactive_loop: Any | None = None
+    goal_service: Any | None = None
 
     async def start(self) -> None:
         markdown_tasks = getattr(self.memory_runtime.markdown.maintenance, 'durable', None)
@@ -523,6 +524,12 @@ def build_core_runtime(
         )
 
     scheduler.bind_delivery_committer(commit_scheduler_delivery)
+    from core.goals.executor import GoalSubagentExecutor
+    from core.goals.service import GoalService
+    from core.goals.store import GoalStore
+    goal_service = GoalService(GoalStore(session_manager.execution_journal, workspace),
+                               GoalSubagentExecutor(provider, config.model, max_tokens=config.max_tokens))
+    goal_service.bind_scheduler(scheduler)
     async def commit_queued_delivery(payload, receipt):
         import json
         metadata = dict(payload.get('_outbound_metadata') or {})
@@ -577,6 +584,7 @@ def build_core_runtime(
         session_manager=session_manager,
         scheduler=scheduler,
         provider=provider,
+        goal_service=goal_service,
         light_provider=light_provider,
         agent_provider=agent_provider,
         mcp_registry=mcp_registry,

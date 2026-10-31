@@ -24,7 +24,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Coroutine
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -290,6 +290,7 @@ class SchedulerService:
         self._active_tasks: dict[str, asyncio.Task[None]] = {}
         self._running = False
         self._chat_lane = chat_lane
+        self._internal_ticks: dict[str, Callable[[datetime], Coroutine[Any, Any, None]]] = {}
         self._commit_delivery: (
             Callable[[ScheduledJob, str, DeliveryReceipt], Awaitable[None]] | None
         ) = None
@@ -303,6 +304,12 @@ class SchedulerService:
         self._commit_delivery = commit
 
     # ── Public API ───────────────────────────────────────────────
+
+    def bind_internal_tick(self, name: str, callback: Callable[[datetime], Coroutine[Any, Any, None]]) -> None:
+        """Host-only work on the existing clock; no inference or channel delivery implied."""
+        if not name or name in self._internal_ticks:
+            raise ValueError('Internal tick identity already bound or empty')
+        self._internal_ticks[name] = callback
 
     async def run(self) -> None:
         self.load_and_recover()
@@ -584,6 +591,12 @@ class SchedulerService:
 
     async def _tick(self) -> None:
         now = self._now()
+        for name, callback in self._internal_ticks.items():
+            key = f'internal:{name}'
+            if key not in self._active_tasks:
+                task = asyncio.create_task(callback(now), name=f'scheduler:{key}')
+                self._active_tasks[key] = task
+                task.add_done_callback(lambda done, key=key: self._on_job_task_done(key, done))
         for job in list(self._jobs.values()):
             if not job.enabled or job.id in self._in_flight:
                 continue
@@ -639,6 +652,10 @@ class SchedulerService:
             self.store.save(self._jobs)
 
     def _on_job_task_done(self, job_id: str, task: asyncio.Task[None]) -> None:
+        if job_id.startswith('internal:') and not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                logger.error('Internal scheduler tick %s failed: %s', job_id, type(error).__name__)
         if self._active_tasks.get(job_id) is task:
             self._active_tasks.pop(job_id, None)
             self._in_flight.discard(job_id)
@@ -668,6 +685,7 @@ class SchedulerService:
                 ],
                 metadata={
                     **self._job_metadata(job),
+                    'execution_request_id': f'schedule:{job.id}:{job.fire_at.isoformat()}',
                     "context_channel": job.channel,
                     "context_chat_id": self.push_tool.resolve_target(
                         job.channel, job.chat_id

@@ -1,0 +1,572 @@
+{
+  "workspace": "C:\\Users\\SHOWFU~1\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8",
+  "goal_id": "demo-fe4542fc",
+  "transitions": [
+    {
+      "status": "ready",
+      "step": "verify",
+      "attempts": 1,
+      "reason": "execution_completed_acceptance_pending"
+    },
+    {
+      "status": "ready",
+      "step": "replan",
+      "attempts": 1,
+      "reason": "acceptance_failed_revision_available"
+    },
+    {
+      "status": "ready",
+      "step": "execute",
+      "attempts": 1,
+      "reason": "bounded_revision_prepared"
+    },
+    {
+      "status": "ready",
+      "step": "verify",
+      "attempts": 2,
+      "reason": "execution_completed_acceptance_pending"
+    },
+    {
+      "status": "succeeded",
+      "step": "verify",
+      "attempts": 2,
+      "reason": "all_executable_criteria_passed"
+    }
+  ],
+  "goal": {
+    "active_phase": null,
+    "attempts": [
+      {
+        "attempt": 1,
+        "definition_version": 1,
+        "execution_ids": [
+          "f56953853904463fbe72d140bcdfeb4d",
+          "e387f27c6cb845e588a2b7d247491186",
+          "6f08bdca315a4aa3b33e73f441572581"
+        ]
+      },
+      {
+        "attempt": 2,
+        "definition_version": 1,
+        "execution_ids": [
+          "43000bdd15c44df6b35828a26d199c9c",
+          "d9cf1a4135ce42608083e1862a60351f"
+        ]
+      }
+    ],
+    "authorization": {
+      "allowed_actions": [
+        "model",
+        "write_file",
+        "read_file",
+        "verify:file",
+        "verify:json",
+        "verify:command",
+        "replan"
+      ],
+      "limits": {
+        "model": 10,
+        "replan": 1,
+        "tool": 10,
+        "total": 30,
+        "validation": 8
+      },
+      "max_attempts": 2,
+      "source": "explicit_local_demo"
+    },
+    "authorization_version": 1,
+    "block": null,
+    "cancel_version": 0,
+    "created_at": "2026-10-31T17:59:31.718458+00:00",
+    "definition": {
+      "artifacts": [
+        "result.json"
+      ],
+      "criteria": [
+        {
+          "id": "json",
+          "kind": "json",
+          "path": "result.json",
+          "required": [
+            "ok"
+          ]
+        },
+        {
+          "argv": [
+            "E:\\CODE\\hasaki-agent\\.venv\\Scripts\\python.exe",
+            "-I",
+            "-c",
+            "import json,sys; from pathlib import Path; v=json.loads((Path(sys.argv[1])/\"result.json\").read_text()); print(\"PASS\" if v[\"ok\"] else \"FAIL\"); sys.exit(0 if v[\"ok\"] else 1)",
+            "{artifact_dir}"
+          ],
+          "id": "test",
+          "kind": "command",
+          "timeout_seconds": 30
+        }
+      ],
+      "input_dir": "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\trusted-inputs",
+      "max_iterations": 8,
+      "objective": "Produce result.json and pass the fixed acceptance test",
+      "sources": []
+    },
+    "definition_version": 1,
+    "definitions": [
+      {
+        "artifacts": [
+          "result.json"
+        ],
+        "criteria": [
+          {
+            "id": "json",
+            "kind": "json",
+            "path": "result.json",
+            "required": [
+              "ok"
+            ]
+          },
+          {
+            "argv": [
+              "E:\\CODE\\hasaki-agent\\.venv\\Scripts\\python.exe",
+              "-I",
+              "-c",
+              "import json,sys; from pathlib import Path; v=json.loads((Path(sys.argv[1])/\"result.json\").read_text()); print(\"PASS\" if v[\"ok\"] else \"FAIL\"); sys.exit(0 if v[\"ok\"] else 1)",
+              "{artifact_dir}"
+            ],
+            "id": "test",
+            "kind": "command",
+            "timeout_seconds": 30
+          }
+        ],
+        "input_dir": "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\trusted-inputs",
+        "max_iterations": 8,
+        "objective": "Produce result.json and pass the fixed acceptance test",
+        "sources": []
+      }
+    ],
+    "evidence": [
+      {
+        "checks": [
+          {
+            "criterion_id": "json",
+            "format": "json",
+            "kind": "json",
+            "passed": true,
+            "path": "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts\\result.json",
+            "sha256": "4608b778befdf9f31695903e10a56bdfcb4b175a32185e76cecbfc12c2055cf3"
+          },
+          {
+            "argv": [
+              "E:\\CODE\\hasaki-agent\\.venv\\Scripts\\python.exe",
+              "-I",
+              "-c",
+              "import json,sys; from pathlib import Path; v=json.loads((Path(sys.argv[1])/\"result.json\").read_text()); print(\"PASS\" if v[\"ok\"] else \"FAIL\"); sys.exit(0 if v[\"ok\"] else 1)",
+              "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts"
+            ],
+            "criterion_id": "test",
+            "kind": "command",
+            "passed": false,
+            "returncode": 1,
+            "stderr": "",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout": "FAIL\r\n",
+            "stdout_sha256": "765489fd1b16cabfd78a744ff35dbeccd0d050fb1bff907dca6e1eafa8d44938"
+          }
+        ],
+        "definition_version": 1,
+        "input_digest": "7457b9672a2c328a5c663975f2a34a44ce4cf1294393015e8053e4acbd13df16",
+        "input_versions": {
+          "artifacts": {
+            "result.json": "4608b778befdf9f31695903e10a56bdfcb4b175a32185e76cecbfc12c2055cf3"
+          },
+          "definition_version": 1,
+          "sources": {}
+        },
+        "observed_sources": {
+          "__local_files__": "7457b9672a2c328a5c663975f2a34a44ce4cf1294393015e8053e4acbd13df16"
+        },
+        "output_versions": {
+          "artifacts": {
+            "result.json": "4608b778befdf9f31695903e10a56bdfcb4b175a32185e76cecbfc12c2055cf3"
+          },
+          "definition_version": 1,
+          "sources": {}
+        },
+        "passed": false,
+        "phase_id": "6128c11d460a4d268db50a2e0447854c",
+        "stale": false,
+        "turn_id": "e387f27c6cb845e588a2b7d247491186"
+      },
+      {
+        "checks": [
+          {
+            "criterion_id": "json",
+            "format": "json",
+            "kind": "json",
+            "passed": true,
+            "path": "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts\\result.json",
+            "sha256": "6bc0da1f42f96fc37b8bd7ed20ba57606d2a0da5cda2b135c7854fbdc985b8a3"
+          },
+          {
+            "argv": [
+              "E:\\CODE\\hasaki-agent\\.venv\\Scripts\\python.exe",
+              "-I",
+              "-c",
+              "import json,sys; from pathlib import Path; v=json.loads((Path(sys.argv[1])/\"result.json\").read_text()); print(\"PASS\" if v[\"ok\"] else \"FAIL\"); sys.exit(0 if v[\"ok\"] else 1)",
+              "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts"
+            ],
+            "criterion_id": "test",
+            "kind": "command",
+            "passed": true,
+            "returncode": 0,
+            "stderr": "",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout": "PASS\r\n",
+            "stdout_sha256": "d938fa189912f8776c3deb31a6bec42f403f57b9c8e3ed936bdb076caf6bd61c"
+          }
+        ],
+        "definition_version": 1,
+        "input_digest": "96226a7ce2ccff09ad2a1053cdf269884c9b17b9a52d318a35d4b27fe0aa1507",
+        "input_versions": {
+          "artifacts": {
+            "result.json": "6bc0da1f42f96fc37b8bd7ed20ba57606d2a0da5cda2b135c7854fbdc985b8a3"
+          },
+          "definition_version": 1,
+          "sources": {}
+        },
+        "observed_sources": {
+          "__local_files__": "96226a7ce2ccff09ad2a1053cdf269884c9b17b9a52d318a35d4b27fe0aa1507"
+        },
+        "output_versions": {
+          "artifacts": {
+            "result.json": "6bc0da1f42f96fc37b8bd7ed20ba57606d2a0da5cda2b135c7854fbdc985b8a3"
+          },
+          "definition_version": 1,
+          "sources": {}
+        },
+        "passed": true,
+        "phase_id": "7193c2c3acbf4c0bb92848604ed49c49",
+        "stale": false,
+        "turn_id": "d9cf1a4135ce42608083e1862a60351f"
+      }
+    ],
+    "goal_id": "demo-fe4542fc",
+    "observed_sources": {
+      "__local_files__": "96226a7ce2ccff09ad2a1053cdf269884c9b17b9a52d318a35d4b27fe0aa1507"
+    },
+    "parent_execution_id": "",
+    "phases": [
+      {
+        "attempt": 1,
+        "authorization_version": 1,
+        "cancel_version": 0,
+        "definition_version": 1,
+        "goal_id": "demo-fe4542fc",
+        "input_versions": {
+          "__local_files__": "cc1628c5b2d296827082d7edff9a87018c34488013db3964d919f4faa8d72655"
+        },
+        "parent_execution_id": "",
+        "phase_id": "87c6325afea141169826de00458ffe36",
+        "result": {
+          "artifact_refs": [
+            "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts\\result.json"
+          ],
+          "claim": "completed"
+        },
+        "status": "completed",
+        "step": "execute",
+        "turn_id": "f56953853904463fbe72d140bcdfeb4d"
+      },
+      {
+        "attempt": 1,
+        "authorization_version": 1,
+        "cancel_version": 0,
+        "definition_version": 1,
+        "goal_id": "demo-fe4542fc",
+        "input_versions": {
+          "__local_files__": "7457b9672a2c328a5c663975f2a34a44ce4cf1294393015e8053e4acbd13df16"
+        },
+        "parent_execution_id": "",
+        "phase_id": "6128c11d460a4d268db50a2e0447854c",
+        "result": {
+          "checks": [
+            {
+              "criterion_id": "json",
+              "format": "json",
+              "kind": "json",
+              "passed": true,
+              "path": "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts\\result.json",
+              "sha256": "4608b778befdf9f31695903e10a56bdfcb4b175a32185e76cecbfc12c2055cf3"
+            },
+            {
+              "argv": [
+                "E:\\CODE\\hasaki-agent\\.venv\\Scripts\\python.exe",
+                "-I",
+                "-c",
+                "import json,sys; from pathlib import Path; v=json.loads((Path(sys.argv[1])/\"result.json\").read_text()); print(\"PASS\" if v[\"ok\"] else \"FAIL\"); sys.exit(0 if v[\"ok\"] else 1)",
+                "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts"
+              ],
+              "criterion_id": "test",
+              "kind": "command",
+              "passed": false,
+              "returncode": 1,
+              "stderr": "",
+              "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "stdout": "FAIL\r\n",
+              "stdout_sha256": "765489fd1b16cabfd78a744ff35dbeccd0d050fb1bff907dca6e1eafa8d44938"
+            }
+          ],
+          "input_digest": "7457b9672a2c328a5c663975f2a34a44ce4cf1294393015e8053e4acbd13df16",
+          "input_versions": {
+            "artifacts": {
+              "result.json": "4608b778befdf9f31695903e10a56bdfcb4b175a32185e76cecbfc12c2055cf3"
+            },
+            "definition_version": 1,
+            "sources": {}
+          },
+          "output_versions": {
+            "artifacts": {
+              "result.json": "4608b778befdf9f31695903e10a56bdfcb4b175a32185e76cecbfc12c2055cf3"
+            },
+            "definition_version": 1,
+            "sources": {}
+          },
+          "passed": false,
+          "stale": false
+        },
+        "status": "completed",
+        "step": "verify",
+        "turn_id": "e387f27c6cb845e588a2b7d247491186"
+      },
+      {
+        "attempt": 1,
+        "authorization_version": 1,
+        "cancel_version": 0,
+        "definition_version": 1,
+        "goal_id": "demo-fe4542fc",
+        "input_versions": {
+          "__local_files__": "7457b9672a2c328a5c663975f2a34a44ce4cf1294393015e8053e4acbd13df16"
+        },
+        "parent_execution_id": "",
+        "phase_id": "42fe2e6f8ffc44b78c9b64e881bf15fa",
+        "result": {
+          "instruction": "Revise the artifacts using the persisted failed acceptance checks.",
+          "previous_evidence_digest": "5fe5dd75a29e90a1acd417098abdd97ab7a3ed6cb0a4b8a42b2b91b891fded1c"
+        },
+        "status": "completed",
+        "step": "replan",
+        "turn_id": "6f08bdca315a4aa3b33e73f441572581"
+      },
+      {
+        "attempt": 2,
+        "authorization_version": 1,
+        "cancel_version": 0,
+        "definition_version": 1,
+        "goal_id": "demo-fe4542fc",
+        "input_versions": {
+          "__local_files__": "7457b9672a2c328a5c663975f2a34a44ce4cf1294393015e8053e4acbd13df16"
+        },
+        "parent_execution_id": "",
+        "phase_id": "83892f2a2d5141bb98daf434240aad2a",
+        "result": {
+          "artifact_refs": [
+            "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts\\result.json"
+          ],
+          "claim": "completed"
+        },
+        "status": "completed",
+        "step": "execute",
+        "turn_id": "43000bdd15c44df6b35828a26d199c9c"
+      },
+      {
+        "attempt": 2,
+        "authorization_version": 1,
+        "cancel_version": 0,
+        "definition_version": 1,
+        "goal_id": "demo-fe4542fc",
+        "input_versions": {
+          "__local_files__": "96226a7ce2ccff09ad2a1053cdf269884c9b17b9a52d318a35d4b27fe0aa1507"
+        },
+        "parent_execution_id": "",
+        "phase_id": "7193c2c3acbf4c0bb92848604ed49c49",
+        "result": {
+          "checks": [
+            {
+              "criterion_id": "json",
+              "format": "json",
+              "kind": "json",
+              "passed": true,
+              "path": "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts\\result.json",
+              "sha256": "6bc0da1f42f96fc37b8bd7ed20ba57606d2a0da5cda2b135c7854fbdc985b8a3"
+            },
+            {
+              "argv": [
+                "E:\\CODE\\hasaki-agent\\.venv\\Scripts\\python.exe",
+                "-I",
+                "-c",
+                "import json,sys; from pathlib import Path; v=json.loads((Path(sys.argv[1])/\"result.json\").read_text()); print(\"PASS\" if v[\"ok\"] else \"FAIL\"); sys.exit(0 if v[\"ok\"] else 1)",
+                "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts"
+              ],
+              "criterion_id": "test",
+              "kind": "command",
+              "passed": true,
+              "returncode": 0,
+              "stderr": "",
+              "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "stdout": "PASS\r\n",
+              "stdout_sha256": "d938fa189912f8776c3deb31a6bec42f403f57b9c8e3ed936bdb076caf6bd61c"
+            }
+          ],
+          "input_digest": "96226a7ce2ccff09ad2a1053cdf269884c9b17b9a52d318a35d4b27fe0aa1507",
+          "input_versions": {
+            "artifacts": {
+              "result.json": "6bc0da1f42f96fc37b8bd7ed20ba57606d2a0da5cda2b135c7854fbdc985b8a3"
+            },
+            "definition_version": 1,
+            "sources": {}
+          },
+          "output_versions": {
+            "artifacts": {
+              "result.json": "6bc0da1f42f96fc37b8bd7ed20ba57606d2a0da5cda2b135c7854fbdc985b8a3"
+            },
+            "definition_version": 1,
+            "sources": {}
+          },
+          "passed": true,
+          "stale": false
+        },
+        "status": "completed",
+        "step": "verify",
+        "turn_id": "d9cf1a4135ce42608083e1862a60351f"
+      }
+    ],
+    "reason": "all_executable_criteria_passed",
+    "reservations": {
+      "4a0406bc131d4e0f8f0dcc7c3d831fd7": {
+        "action": "verify:json",
+        "kind": "validation",
+        "phase_id": "6128c11d460a4d268db50a2e0447854c",
+        "receipt": {
+          "result_digest": "731d65ada90a66c572f616316f89d75288e292952b14e6f2ef7acd80b7d6d03a"
+        },
+        "status": "settled",
+        "units": 1
+      },
+      "4b12b0cc25d642789ac39843829e8199": {
+        "action": "verify:command",
+        "kind": "validation",
+        "phase_id": "7193c2c3acbf4c0bb92848604ed49c49",
+        "receipt": {
+          "result_digest": "33f82bf8fea698e2f11a484261cd53b146e5c33768d862df1efb9c46d7e95b3b"
+        },
+        "status": "settled",
+        "units": 1
+      },
+      "5f698a46308043e89e76fa40d67de08a": {
+        "action": "model",
+        "kind": "model",
+        "phase_id": "87c6325afea141169826de00458ffe36",
+        "receipt": {
+          "result_digest": "946823a4b125b6a8a412cc7cc52ddea906746891ad0170ff1f477f34bdf8c502"
+        },
+        "status": "settled",
+        "units": 1
+      },
+      "61470ee495a3471381363c80a915fc0e": {
+        "action": "write_file",
+        "kind": "tool",
+        "phase_id": "87c6325afea141169826de00458ffe36",
+        "receipt": {
+          "result_digest": "f4f532a67320c843ce4f9186f8478091a9b753a61002a73c6b5789ebed841f21"
+        },
+        "status": "settled",
+        "units": 1
+      },
+      "6cd89e769d7946c4b2961a3eb0c5a17a": {
+        "action": "write_file",
+        "kind": "tool",
+        "phase_id": "83892f2a2d5141bb98daf434240aad2a",
+        "receipt": {
+          "result_digest": "f4f532a67320c843ce4f9186f8478091a9b753a61002a73c6b5789ebed841f21"
+        },
+        "status": "settled",
+        "units": 1
+      },
+      "9446a95fab2a4705862d3645ea2bd628": {
+        "action": "replan",
+        "kind": "replan",
+        "phase_id": "42fe2e6f8ffc44b78c9b64e881bf15fa",
+        "receipt": {
+          "result_digest": "6f7b477ffdd19bcc11d9982e78772aaa6a5a7312360cdacfe409e76cd38c6992"
+        },
+        "status": "settled",
+        "units": 1
+      },
+      "acb46748442c4ac1bc9a4335dc1f5706": {
+        "action": "verify:command",
+        "kind": "validation",
+        "phase_id": "6128c11d460a4d268db50a2e0447854c",
+        "receipt": {
+          "result_digest": "3f5d8438ea70b08757c4eb55c07c15a442ac9af3baaf1728ec918e481f8eb08c"
+        },
+        "status": "settled",
+        "units": 1
+      },
+      "ace04227b54c41d1ad7f4cf90a1a3758": {
+        "action": "verify:json",
+        "kind": "validation",
+        "phase_id": "7193c2c3acbf4c0bb92848604ed49c49",
+        "receipt": {
+          "result_digest": "185dda6b6ea0bfba0d798085e592b33934ab4c07a1aa419cfbb3a7c5ea515cb0"
+        },
+        "status": "settled",
+        "units": 1
+      },
+      "e699281c618b4cebb7a500215da74ca3": {
+        "action": "model",
+        "kind": "model",
+        "phase_id": "83892f2a2d5141bb98daf434240aad2a",
+        "receipt": {
+          "result_digest": "ffbd8927747723642863bf6a836f4768e63e1adc11a77558d4d202c39d7582ac"
+        },
+        "status": "settled",
+        "units": 1
+      }
+    },
+    "status": "succeeded",
+    "step": "verify",
+    "updated_at": "2026-10-31T17:59:32.338840+00:00",
+    "version": 31,
+    "wait": null,
+    "budget": {
+      "limits": {
+        "model": 10,
+        "replan": 1,
+        "tool": 10,
+        "total": 30,
+        "validation": 8
+      },
+      "used": {
+        "total": 9,
+        "model": 2,
+        "tool": 2,
+        "validation": 4,
+        "replan": 1
+      },
+      "held": {
+        "total": 0,
+        "model": 0,
+        "tool": 0,
+        "validation": 0,
+        "replan": 0
+      },
+      "remaining": {
+        "model": 8,
+        "replan": 0,
+        "tool": 8,
+        "total": 21,
+        "validation": 4
+      }
+    },
+    "artifact_dir": "C:\\Users\\showfuckersensei\\AppData\\Local\\Temp\\kaze-goal-demo-9k9rmcv8\\goal-runs\\demo-fe4542fc\\artifacts"
+  }
+}
