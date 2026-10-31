@@ -291,6 +291,7 @@ class SchedulerService:
         self._running = False
         self._chat_lane = chat_lane
         self._internal_ticks: dict[str, Callable[[datetime], Coroutine[Any, Any, None]]] = {}
+        self._goal_inputs: Any | None = None
         self._commit_delivery: (
             Callable[[ScheduledJob, str, DeliveryReceipt], Awaitable[None]] | None
         ) = None
@@ -310,6 +311,26 @@ class SchedulerService:
         if not name or name in self._internal_ticks:
             raise ValueError('Internal tick identity already bound or empty')
         self._internal_ticks[name] = callback
+
+    def bind_goal_inputs(self, sources: Any) -> None:
+        if self._goal_inputs is not None:
+            raise RuntimeError('Goal input adapter already bound')
+        self._goal_inputs = sources
+
+    def request_internal_tick(self, name: str) -> None:
+        """Fast hint only; persisted inputs and the ordinary tick repair lost hints."""
+        if not self._running:
+            return
+        self._launch_internal_tick(name, self._now())
+
+    def _launch_internal_tick(self, name: str, now: datetime) -> None:
+        key = f'internal:{name}'
+        if key not in self._active_tasks:
+            async def run_callback() -> None:
+                await self._internal_ticks[name](now)
+            task = asyncio.create_task(run_callback(), name=f'scheduler:{key}')
+            self._active_tasks[key] = task
+            task.add_done_callback(lambda done: self._on_job_task_done(key, done))
 
     async def run(self) -> None:
         self.load_and_recover()
@@ -462,6 +483,8 @@ class SchedulerService:
         """启动时加载持久化 jobs，处理 misfire。"""
         now = self._now()
         jobs = self.store.load()
+        if self._goal_inputs is not None:
+            self._goal_inputs.recover_timers(jobs, now)
         count_loaded = 0
         jobs_changed = False
 
@@ -592,15 +615,13 @@ class SchedulerService:
     async def _tick(self) -> None:
         now = self._now()
         for name, callback in self._internal_ticks.items():
-            key = f'internal:{name}'
-            if key not in self._active_tasks:
-                task = asyncio.create_task(callback(now), name=f'scheduler:{key}')
-                self._active_tasks[key] = task
-                task.add_done_callback(lambda done, key=key: self._on_job_task_done(key, done))
+            self._launch_internal_tick(name, now)
         for job in list(self._jobs.values()):
             if not job.enabled or job.id in self._in_flight:
                 continue
             actual_trigger = compute_actual_trigger(job.fire_at, job.tier, self.tracker)
+            if self._goal_inputs is not None and self._goal_inputs.owns_timer(job):
+                actual_trigger = job.fire_at
             if actual_trigger <= now:
                 label = job.name or job.id[:8]
                 logger.info(
@@ -662,6 +683,8 @@ class SchedulerService:
 
     async def _execute(self, job: ScheduledJob) -> None:
         self._require_session_key(job.session_key)
+        if self._goal_inputs is not None and self._goal_inputs.capture_timer(job, self._now()):
+            return
         label = job.name or job.id[:8]
         if job.tier == "instant":
             result = await self._deliver(job, job.message or "")

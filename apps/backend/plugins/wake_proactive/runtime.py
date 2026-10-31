@@ -120,6 +120,7 @@ class WakeRuntime:
             else None
         )
         self._state = state_store or WakeStateStore(workspace / "wake_proactive.db")
+        self._goal_input_validators = {}
         web_fetch_tool = (
             scope.shared_tools.get_tool("web_fetch")
             if scope.shared_tools is not None
@@ -168,6 +169,7 @@ class WakeRuntime:
         await self._flush_pending_acknowledgements()
         channels = await self._fetch_source_channels()
         self._ingest_source_channels(state, channels)
+        await self._capture_goal_inputs(state, channels)
         state.contents = await self._current_contents()
         await self._flush_pending_acknowledgements()
         self._log_source_summary(state, channels)
@@ -176,6 +178,60 @@ class WakeRuntime:
         if state.alerts:
             return
         await self._prepare_content_interest(state)
+
+    async def _capture_goal_inputs(self, state, channels) -> None:
+        sources = getattr(self._scope, 'goal_input_sources', None)
+        if sources is None:
+            return
+        from proactive_v2.mcp_sources import source_key
+
+        async def validate(kind, event, now):
+            if kind == 'context':
+                route = event.get('_source')
+                if route not in {source_key(s) for s in self._scope.proactive_sources}:
+                    return False
+                expires = event.get('expires_at')
+                return not expires or datetime.fromisoformat(str(expires)) > now
+            return await mcp_sources.validate_alert_async(
+                self._scope.mcp_gateway, self._scope.proactive_sources, event, now=now) == 'valid'
+
+        sources.bind_wake_validator(state.ctx.session_key, validate)
+        self._goal_input_validators[state.ctx.session_key] = validate
+        # Read committed reservoir rows as well: captures survive a crash between
+        # Wake ingestion and this adapter, including upstream ACK/removal.
+        await sources.poll_wake(state.ctx.now_utc)
+        owned = []
+        for kind in ('alert', 'content'):
+            for event in self._state.unread(kind):
+                try:
+                    captured = await sources.capture_wake(state.ctx.session_key, kind, event, state.ctx.now_utc)
+                except ValueError:
+                    captured = False
+                if captured:
+                    owned.append(event)
+        if owned:
+            grouped = {}
+            for event in owned:
+                grouped.setdefault(event['_reservoir_ack_source_id'], []).append(event['_reservoir_source_event_id'])
+            # Input capture is durable before ACK. This is source consumption,
+            # never a fabricated delivery or a Goal-success receipt.
+            self._state.consume_and_queue_ack(item_ids=[e['id'] for e in owned],
+                                              acknowledgements=grouped, now=state.ctx.now_utc)
+        state.alerts = self._state.unread('alert')
+        state.contents = self._state.unread('content')
+        remaining_contexts = []
+        for event, result in zip(channels['context'], state.context_results, strict=False):
+            try:
+                captured = await sources.capture_wake(state.ctx.session_key, 'context', event, state.ctx.now_utc)
+            except ValueError:
+                captured = False
+            if result.signal == 'reevaluate' and not captured:
+                remaining_contexts.append(event)
+        if state.context_event is not None:
+            state.context_event = next(iter(remaining_contexts), None)
+            state.context_reevaluate = (
+                self._state.claim_context_reevaluation(state.ctx.now_utc)
+                if state.context_event is not None else False)
 
     async def _prepare_content_interest(self, state: WakeRunState) -> None:
         """Refresh content interests before evaluating this tick's new items."""
@@ -244,7 +300,7 @@ class WakeRuntime:
         )
         state.context_reevaluate = (
             self._state.claim_context_reevaluation(state.ctx.now_utc)
-            if state.context_event is not None
+            if state.context_event is not None and getattr(self._scope, 'goal_input_sources', None) is None
             else False
         )
         state.alerts = self._state.unread("alert")
@@ -652,6 +708,10 @@ class WakeRuntime:
         return state.next_interval_seconds
 
     def close(self) -> None:
+        sources = getattr(self._scope, 'goal_input_sources', None)
+        if sources is not None:
+            for session, validator in self._goal_input_validators.items():
+                sources.unbind_wake_validator(session, validator)
         if self._message_embeddings is not None:
             self._message_embeddings.close()
         self._state.close()
