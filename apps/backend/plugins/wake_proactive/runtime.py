@@ -427,6 +427,7 @@ class WakeRuntime:
 
         # 1. 固定本轮规则和对话快照；短期设备上下文在各阶段使用前检查有效期。
         memory_text = self._read_memory()
+        notebook_text = await self._read_notebook()
         proactive_context = str(self._scope.workspace_context_fn() or "")
         recent_passive_conversation = self._read_recent_passive_conversation(
             ctx.session_key, ctx.now_utc
@@ -436,6 +437,7 @@ class WakeRuntime:
         base_messages = build_messages(
             ctx=ctx,
             memory_text=memory_text,
+            notebook_text=notebook_text,
             proactive_context=proactive_context,
             recent_passive_conversation=recent_passive_conversation,
             recent_proactive_messages=recent_proactive_messages,
@@ -453,6 +455,7 @@ class WakeRuntime:
         final_base_messages = build_messages(
             ctx=ctx,
             memory_text=memory_text,
+            notebook_text=notebook_text,
             proactive_context=proactive_context,
             recent_passive_conversation=recent_passive_conversation,
             recent_proactive_messages=recent_proactive_messages,
@@ -1186,6 +1189,22 @@ class WakeRuntime:
                 # is not a protocol-level guarantee that no external work ran.
                 raise
             self._state.mark_acknowledged(source_id, event_ids)
+
+    async def _read_notebook(self) -> str:
+        shared = self._scope.shared_tools
+        tool = shared.get_tool("notebook_read") if shared is not None else None
+        if tool is None:
+            return ""
+        # Use the existing scoped read, including its composed Host delivery guard.
+        # Keep one evidence snapshot for screening and the final decision; a change
+        # during either phase invalidates delivery instead of mixing revisions.
+        raw = await tool.execute(query="")
+        if not isinstance(raw, str):
+            raise ValueError("Notebook read must return JSON text")
+        value = json.loads(raw)
+        if not value["ready"] or not value["notes"]:
+            return ""
+        return json.dumps(value["notes"], ensure_ascii=False)
 
     def _read_memory(self) -> str:
         reader = getattr(self._scope.memory, "read_long_term", None)
