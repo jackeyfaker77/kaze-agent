@@ -152,7 +152,7 @@ async def test_wake_final_phase_drops_context_that_expired_during_investigation(
     runtime._state = store
     current = [NOW]
     runtime._clock = SimpleNamespace(now=lambda: current[0])
-    runtime._scope = SimpleNamespace(workspace_context_fn=lambda: "")
+    runtime._scope = SimpleNamespace(workspace_context_fn=lambda: "", shared_tools=None)
     runtime._read_memory = lambda: ""
     runtime._read_recent_passive_conversation = lambda *args: ""
     runtime._read_recent_proactive_messages = lambda *args: []
