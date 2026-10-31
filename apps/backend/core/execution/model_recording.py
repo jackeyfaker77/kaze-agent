@@ -136,7 +136,11 @@ def recorded_model_call(operation):
         except BaseException as exc:
             if scope is not None and not scope.broken:
                 if call.projection is not None and not call.returned:
-                    scope.record('model.response.recorded', {'call_id': call.call_id, 'error_type': type(exc).__name__})
+                    failure: dict = {'call_id': call.call_id, 'error_type': type(exc).__name__}
+                    from agent.provider import ContextLengthError
+                    if isinstance(exc, ContextLengthError):
+                        failure['diagnostics'] = exc.diagnostics
+                    scope.record('model.response.recorded', failure)
                 if owner_token is not None:
                     journal.finish(scope.turn_id, 'failed')
             raise

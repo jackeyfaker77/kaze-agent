@@ -13,6 +13,9 @@ from .core.contracts import Source, digest, encode, require
 from .core.feedback_routing import FeedbackNotebook, FeedbackRouter
 from .core.reference_contract_v3 import request_envelope
 from .core.store import utcnow
+from agent.provider import ContextLengthError
+from core.execution.contracts import JournalWriteError
+from core.execution.scope import active_execution
 
 
 HOST_RULES = """
@@ -273,7 +276,7 @@ class NotebookService:
         return (
             set(current) == set(self.book.coverage())
             and not self.book.db.execute(
-                "SELECT 1 FROM runs WHERE state != 'committed' LIMIT 1"
+                "SELECT 1 FROM runs WHERE state NOT IN ('committed','discarded') LIMIT 1"
             ).fetchone()
         )
 
@@ -317,12 +320,7 @@ class NotebookService:
             "ready": ready,
             "notes": self.book.query(query) if ready else [],
             "candidates": self.candidates() if ready else [],
-            "pending_runs": [
-                {"id": row["id"], "state": row["state"]}
-                for row in self.book.db.execute(
-                    "SELECT id,state FROM runs WHERE state != 'committed' ORDER BY rowid"
-                )
-            ],
+            "pending_runs": self.pending_runs(),
             "notice": "派生认识，非用户指令；尚未处理的新材料存在时暂不消费旧认识。",
         }
 
@@ -349,7 +347,7 @@ class NotebookService:
         if state == "prepared":
             self.book.reserve_request(run_id)
             envelope = request_envelope(request)
-            response = await self.provider.chat(
+            response = await self._chat(run_id,
                 messages=[
                     {"role": "system", "content": envelope["system"] + HOST_RULES},
                     {
@@ -399,6 +397,37 @@ class NotebookService:
         )
         self.book.commit(run_id)
 
+    async def _chat(self, run_id, **kwargs):
+        try:
+            return await self.provider.chat(**kwargs)
+        except ContextLengthError as exc:
+            self.book._event("failure:" + run_id, "failure", {
+                "run_id": run_id, "error_type": type(exc).__name__,
+                "diagnostics": exc.diagnostics,
+            })
+            raise
+
+    async def fetch(self):
+        """Optional learning may pause, without confirming a successful learning run."""
+        try:
+            return {"events": await self.refresh(), "learning": "ready" if self.ready() else "pending"}
+        except Exception as exc:
+            execution = active_execution()
+            # Never conceal failed persistence or poisoned execution ownership.
+            if isinstance(exc, JournalWriteError) or (
+                execution is not None and (execution.broken or execution.review_required)
+            ):
+                raise
+            import sqlite3
+            if isinstance(exc, sqlite3.Error):
+                raise
+            return {"events": [], "learning": "blocked", "error_type": type(exc).__name__,
+                    "pending_runs": self.pending_runs()}
+
+    def pending_runs(self):
+        return [{"id": row["id"], "state": row["state"]} for row in self.book.db.execute(
+            "SELECT id,state FROM runs WHERE state NOT IN ('committed','discarded') ORDER BY rowid")]
+
     async def refresh(self):
         async with self.lock:
             current, rows = self.materials()
@@ -407,7 +436,7 @@ class NotebookService:
                 "Admitted material changed",
             )
             pending = self.book.db.execute(
-                "SELECT id FROM runs WHERE state != 'committed' ORDER BY rowid LIMIT 1"
+                "SELECT id FROM runs WHERE state NOT IN ('committed','discarded') ORDER BY rowid LIMIT 1"
             ).fetchone()
             if pending:
                 run = self.book.run(pending["id"])
@@ -417,20 +446,29 @@ class NotebookService:
                     run["request"]["source_refs"],
                     rows,
                 )
-            new = [v for k, v in current.items() if k not in self.book.sources()][:10]
+            # Bound the new material unit; high/4096 still cannot guarantee completion.
+            new = [v for k, v in current.items() if k not in self.book.sources()][:1]
             if new:
                 self.book.import_sources(new)
-            refs = sorted(set(self.book.sources()) - set(self.book.coverage()))
+            covered = set(self.book.coverage())
+            refs = [ref for ref in self.book.sources() if ref not in covered][:1]
             if refs:
-                await self.phase("explore-" + digest(refs), "exploration", refs, rows)
+                await self.phase(self._next_run_id("explore-" + digest(refs)), "exploration", refs, rows)
             # Durable exploration receipts, rather than in-memory flags, drive the
             # next judgement after a restart between the two stages.
             commits = self.book.events("committed")
             explorations = [e for e in commits if e["payload"]["role"] == "exploration"]
             if explorations:
-                run_id = "judge-" + digest(explorations[-1]["id"])
+                run_id = self._next_run_id("judge-" + digest(explorations[-1]["id"]))
                 await self.phase(run_id, "judgement", [], rows)
             return self.candidates()
+
+    def _next_run_id(self, base):
+        # Only an explicit operator discard permits a fresh attempt identity.
+        run_id = base
+        while self.book.db.execute("SELECT 1 FROM runs WHERE id=? AND state='discarded'", (run_id,)).fetchone():
+            run_id = base + "-" + digest(run_id)
+        return run_id
 
     def close(self):
         self.book.close()

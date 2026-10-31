@@ -208,6 +208,7 @@ async def test_new_input_withdraws_cached_candidate_and_correction_preserves_int
     rig.add("My interest continues")
     rig.add("I have an activity")
     await rig.service.refresh()
+    await rig.service.refresh()
     before = rig.service.book.active_notes()
     interest = {k: n for k, n in before.items() if n["topic"] == "interest"}
     cached = rig.service.candidates()
@@ -238,6 +239,194 @@ async def test_unknown_response_and_invalid_reference_stop_without_retry_after_r
         await rig.reopen().refresh()
     assert len(rig.provider.calls) == 1
     assert rig.service.candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_optional_timeout_is_blocked_without_poll_retry_or_stale_notes(rig):
+    rig.add("activity")
+    rig.provider.fail = True
+    result = await rig.service.fetch()
+    assert result["learning"] == "blocked" and result["events"] == []
+    assert result["error_type"] == "TimeoutError"
+    rig.provider.fail = False
+    result = await rig.reopen().fetch()
+    assert result["learning"] == "blocked"
+    assert len(rig.provider.calls) == 1
+    with scope() as execution:
+        value = json.loads(await NotebookTool(rig.service).execute())
+        assert not value["ready"] and value["notes"] == []
+        assert not hasattr(execution, "proactive_host_guard")
+
+
+@pytest.mark.asyncio
+async def test_recorded_length_failure_does_not_poison_feed_and_can_be_reviewed(rig):
+    from agent.tools.base import Tool
+    from core.execution.journal import ExecutionJournal
+    from core.execution.proactive import run_proactive_recorded
+    from plugins.associative_notebook.recovery import review_length_failure
+    from proactive_v2.mcp_sources import fetch_sources_async
+    from agent.plugins.specs import ProactiveSourceSpec
+    from tests.backend.test_model_context_projection import provider_with_wire
+
+    class Feed(Tool):
+        name = "feed_fetch"
+        description = "offline feed"
+        parameters = {"type": "object", "properties": {}}
+        retry_policy = "read_only"
+
+        async def execute(self, **kwargs):
+            return encode([{"kind": "content", "id": "article", "title": "Other content"}])
+
+    journal = ExecutionJournal(rig.path)
+    provider, wire = await provider_with_wire([{"content": '{"draft":', "finish_reason": "length"}])
+    rig.service.provider = provider
+    rig.add("first activity")
+    rig.add("second interest")
+    registry = ToolRegistry()
+    registry.register(NotebookTool(rig.service, "fetch"), risk="write", source_type="plugin", source_name="associative_notebook")
+    registry.register(Feed(), source_type="plugin", source_name="other_feed")
+    gateway = SharedMcpGateway(rig.path, registry)
+    sources = [RegisteredProactiveSource(name, ProactiveSourceSpec(id=name, channels=("content",),
+                server="plugin:" + name, fetch_tool=tool)) for name, tool in (
+                ("associative_notebook", "notebook_fetch"), ("other_feed", "feed_fetch"))]
+
+    async def operation():
+        channels = await fetch_sources_async(gateway, sources)
+        assert len(channels["content"]) == 1
+        assert channels["content"][0]["id"] == "article"
+        return 0
+
+    try:
+        for key in ("first", "poll"):
+            await run_proactive_recorded(journal, KEY, key, {}, operation)
+            record = journal.find(KEY, "proactive", key)
+            assert record["status"] == "completed"
+            assert journal.proactive_blocker(KEY) is None
+        assert len(wire) == 1
+        pending = rig.service.pending_runs()[0]["id"]
+        failure = rig.service.book.events("failure")[0]["payload"]
+        assert failure["diagnostics"]["reason"] == "output_truncated"
+        assert not rig.service.book.coverage()
+        first = journal.find(KEY, "proactive", "first")
+        args = (rig.service.book.directory, journal.directory / "events.sqlite3", first["turn_id"], pending)
+        preview = review_length_failure(*args, reason="offline review")
+        assert not preview["applied"] and rig.service.book.run(pending)["state"] == "awaiting_result"
+        review_length_failure(*args, reason="offline review", apply=True)
+        assert rig.service.book.run(pending)["state"] == "discarded"
+        events = rig.service.book.events()
+        review_length_failure(*args, reason="offline review", apply=True)
+        assert rig.service.book.events() == events
+        assert not rig.service.book.coverage() and len(wire) == 1
+        rig.service.provider = rig.provider  # only the local draft double may resume
+        await rig.service.refresh()
+        assert len(rig.service.book.coverage()) == 1
+        assert len(rig.provider.calls) == 2
+        assert rig.service.book.run(pending)["state"] == "discarded"
+        assert not rig.service.ready()  # remaining material still uncovered
+        await rig.service.refresh()
+        assert len(rig.service.book.coverage()) == 2 and rig.service.ready()
+    finally:
+        await provider._client.close()
+        journal.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["timeout", "identity", "request", "replies", "live_host"])
+async def test_failure_review_rejects_unknown_mismatch_and_live_host(rig, case):
+    import httpx
+    from bootstrap.host_state import WorkspaceOwner, WorkspaceInUse
+    from core.execution.journal import ExecutionJournal
+    from core.execution.proactive import run_proactive_recorded
+    from plugins.associative_notebook.recovery import review_length_failure
+    from tests.backend.test_model_context_projection import provider_with_wire
+
+    journal = ExecutionJournal(rig.path)
+    provider, wire = await provider_with_wire([{"content": "partial", "finish_reason": "length"}])
+    if case == "timeout":
+        def timeout(request):
+            raise httpx.ReadTimeout("offline unknown outcome", request=request)
+        await provider._client._client.aclose()
+        provider._client._client = httpx.AsyncClient(transport=httpx.MockTransport(timeout))
+    rig.service.provider = provider
+    rig.add("activity")
+    owner = None
+    try:
+        async def operation():
+            assert (await rig.service.fetch())["learning"] == "blocked"
+            return 0
+        await run_proactive_recorded(journal, KEY, "review-rejection", {}, operation)
+        row = journal.find(KEY, "proactive", "review-rejection")
+        book = rig.service.book
+        pending = rig.service.pending_runs()[0]["id"]
+        if case == "identity":
+            marker = book.directory / "sandbox.json"
+            value = json.loads(marker.read_text())
+            marker.write_text(encode({**value, "owner": "another-runtime"}))
+        elif case == "request":
+            value = book.run(pending)["request"]
+            value["source_refs"] = []
+            book.db.execute("UPDATE runs SET request=? WHERE id=?", (encode(value), pending))
+        elif case == "replies":
+            capture = {"receipts": {"job": {"cited_note_ids": ["wrong"]}}, "reply_jobs": {"ref": "job"}}
+            book.db.execute("UPDATE events SET payload=? WHERE id=?", (encode(capture), "capture:" + pending))
+        elif case == "live_host":
+            # No status file: the OS lock, not a cached status, must stop the write.
+            owner = WorkspaceOwner(rig.path, "host")
+        with pytest.raises(WorkspaceInUse if case == "live_host" else NotebookError):
+            review_length_failure(book.directory, journal.directory / "events.sqlite3",
+                                  row["turn_id"], pending, reason="offline rejection", apply=True)
+        assert book.run(pending)["state"] == "awaiting_result"
+        assert not book.coverage() and not book.events("failure_review")
+        assert len(wire) == (0 if case == "timeout" else 1)
+    finally:
+        if owner:
+            owner.close()
+        await provider._client.close()
+        journal.close()
+
+
+@pytest.mark.asyncio
+async def test_invalid_material_disables_only_notebook_consumption(rig):
+    message = rig.add("activity")
+    candidate = (await rig.service.refresh())[0]
+    rig.store.update_message(message["id"], content="rewritten activity")
+    with scope() as execution:
+        read = json.loads(await NotebookTool(rig.service).execute())
+        assert not read["ready"] and read["notes"] == []
+        assert not hasattr(execution, "proactive_host_guard")
+        validation = json.loads(await NotebookTool(rig.service, "validate").execute(event_ids=[candidate["id"]]))
+        assert validation == {"valid_event_ids": []}
+        assert (await rig.service.fetch())["learning"] == "blocked"
+    assert len(rig.provider.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_previously_admitted_backlog_is_learned_one_material_per_tick(rig):
+    for i in range(10):
+        rig.add(f"activity {i}")
+    sources, _ = rig.service.materials()
+    rig.service.book.import_sources(list(sources.values()))
+    assert len(rig.service.book.sources()) == 10
+    await rig.service.refresh()
+    request = json.loads(rig.provider.calls[0]["messages"][1]["content"])["input"]
+    assert request["source_refs"] == [next(iter(sources))]
+    assert len(rig.service.book.coverage()) == 1
+    assert not rig.service.ready() and len(rig.provider.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["journal", "sqlite", "cancelled"])
+async def test_optional_learning_never_hides_persistence_or_cancellation(rig, monkeypatch, kind):
+    import asyncio
+    import sqlite3
+    from core.execution.contracts import JournalWriteError
+    error = {"journal": JournalWriteError, "sqlite": sqlite3.OperationalError,
+             "cancelled": asyncio.CancelledError}[kind]
+    async def broken():
+        raise error("offline failure")
+    monkeypatch.setattr(rig.service, "refresh", broken)
+    with pytest.raises(error):
+        await rig.service.fetch()
 
 
 @pytest.mark.asyncio
