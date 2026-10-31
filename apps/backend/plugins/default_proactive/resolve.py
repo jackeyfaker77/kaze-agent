@@ -243,11 +243,11 @@ class ProactiveResolver:
         return self._build_send_result(ctx, delivery_key)
 
     async def _validate_alerts(self, ctx: AgentTickContext) -> bool:
-        if self._validate_alert_fn is None or not ctx.fetched_alerts:
+        if self._validate_alert_fn is None:
             return True
         cited = set(ctx.cited_item_ids)
         selected = [
-            event for event in ctx.fetched_alerts
+            event for event in [*ctx.fetched_alerts, *[e for e in ctx.fetched_contents if e.get('requires_validation')]]
             if f"{event.get('ack_server', '')}:{event.get('event_id') or event.get('id', '')}" in cited
         ]
         return await self._validate_alert_fn(selected) if selected else True

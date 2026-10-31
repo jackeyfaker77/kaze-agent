@@ -143,3 +143,9 @@ delivery_cooldown_hours = 1
 enabled = false
 max_steps = 20
 min_interval_hours = 3
+
+# 可选联想记事本：复用主动 tick 和当前 light provider；启用后产生模型费用。
+# 首次只接纳启用后的新材料。会话键必须与目标主动会话一致。
+[plugins.associative_notebook]
+enabled = false
+session_key = ""

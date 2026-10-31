@@ -168,6 +168,7 @@ class WakeRuntime:
         await self._flush_pending_acknowledgements()
         channels = await self._fetch_source_channels()
         self._ingest_source_channels(state, channels)
+        state.contents = await self._current_contents()
         await self._flush_pending_acknowledgements()
         self._log_source_summary(state, channels)
 
@@ -181,8 +182,18 @@ class WakeRuntime:
         if self._scope.interaction_embeddings_fn is not None:
             await self._scope.interaction_embeddings_fn(state.ctx.now_utc)
         await self._cache_event_embeddings()
-        state.contents = self._state.unread("content")
+        state.contents = await self._current_contents()
         self._apply_semantic_interest(state.contents, state.ctx.now_utc)
+
+    async def _current_contents(self) -> list[dict[str, Any]]:
+        current = []
+        for event in self._state.unread('content'):
+            if event.get('requires_validation') and await mcp_sources.validate_alert_async(
+                    self._scope.mcp_gateway, self._scope.proactive_sources, event,
+                    now=self._clock.now()) != 'valid':
+                continue
+            current.append(event)
+        return current
 
     async def _fetch_source_channels(self) -> dict[str, list[dict[str, Any]]]:
         """拉取所有 source；全量失败时保留原始异常。"""
@@ -594,6 +605,14 @@ class WakeRuntime:
         effect = AsyncEffect(
             lambda: self._consume_events(selected_events, state.ctx.now_utc)
         )
+        async def validate_content() -> bool:
+            for event in selected_events:
+                if event.get('requires_validation') and await mcp_sources.validate_alert_async(
+                        self._scope.mcp_gateway, self._scope.proactive_sources, event,
+                        now=self._clock.now()) != 'valid':
+                    return False
+            return True
+
         result = TurnResult(
             decision="reply",
             outbound=TurnOutbound(
@@ -609,6 +628,7 @@ class WakeRuntime:
                 },
             ),
             success_side_effects=[effect],
+            delivery_guard=validate_content,
         )
         return bool(
             await self._require_orchestrator().handle_proactive_turn(

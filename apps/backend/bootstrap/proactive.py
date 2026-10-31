@@ -66,6 +66,13 @@ class _PushPort:
             defer_before_delivery()
             observe('deliver.deferred', reason='user_activity_before_delivery')
             return False
+        host_guard = getattr(proactive_scope(), 'proactive_host_guard', None)
+        if (not getattr(proactive_scope(), 'proactive_receipts_only', False)
+                and host_guard is not None and not await host_guard()):
+            from core.execution.proactive import defer_before_delivery
+            defer_before_delivery()
+            observe('deliver.deferred', reason='source_changed_before_delivery')
+            return False
         push = self.runtime.push_tool
         if hasattr(push, "send"):
             outbox = getattr(push, 'outbox', None)
