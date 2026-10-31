@@ -28,7 +28,7 @@ class _StoreWriteMixin:
         happened_at: str | None = None,
         emotional_weight: int = 0,
     ) -> str:
-        """写入或强化一条记忆。返回 'new:id' 或 'reinforced:id'"""
+        """写入或强化有效记忆；已失效的相同内容返回 'skipped:id'。"""
         chash = _content_hash(summary, memory_type)
         emotional_weight = _coerce_emotional_weight(emotional_weight)
         existing = self._db.execute(
@@ -38,15 +38,11 @@ class _StoreWriteMixin:
         if existing:
             row_id, status = existing
             if status == "superseded":
-                self._db.execute(
-                    "UPDATE memory_items SET status='active', reinforcement=reinforcement+1, updated_at=?, emotional_weight=MAX(emotional_weight, ?) WHERE id=?",
-                    (_now_iso(), emotional_weight, row_id),
-                )
-            else:
-                self._db.execute(
-                    "UPDATE memory_items SET reinforcement=reinforcement+1, updated_at=?, emotional_weight=MAX(emotional_weight, ?) WHERE id=?",
-                    (_now_iso(), emotional_weight, row_id),
-                )
+                return f"skipped:{row_id}"
+            self._db.execute(
+                "UPDATE memory_items SET reinforcement=reinforcement+1, updated_at=?, emotional_weight=MAX(emotional_weight, ?) WHERE id=?",
+                (_now_iso(), emotional_weight, row_id),
+            )
             self._db.commit()
             return f"reinforced:{row_id}"
 
@@ -118,17 +114,14 @@ class _StoreWriteMixin:
             if existing:
                 row_id, status = existing
                 if status == "superseded":
-                    self._db.execute(
-                        "UPDATE memory_items SET status='active', reinforcement=reinforcement+1, updated_at=?, emotional_weight=MAX(emotional_weight, ?), happened_at=COALESCE(NULLIF(happened_at, ''), ?) WHERE id=?",
-                        (_now_iso(), emotional_weight, happened_at, row_id),
-                    )
+                    result = f"skipped:{row_id}"
                 else:
                     self._db.execute(
                         "UPDATE memory_items SET reinforcement=reinforcement+1, updated_at=?, emotional_weight=MAX(emotional_weight, ?), happened_at=COALESCE(NULLIF(happened_at, ''), ?) WHERE id=?",
                         (_now_iso(), emotional_weight, happened_at, row_id),
                     )
+                    result = f"reinforced:{row_id}"
                 item_id = row_id
-                result = f"reinforced:{row_id}"
             else:
                 item_id = hashlib.md5(f"{chash}{time.time()}".encode()).hexdigest()[:12]
                 cur = self._db.execute(
