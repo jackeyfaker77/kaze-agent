@@ -28,6 +28,11 @@ def encode(value: Any) -> str:
 
 class ExecutionJournal(SpawnHandoff):
     def __init__(self, workspace: Path):
+        from bootstrap.host_state import journal_maintenance
+        with journal_maintenance(workspace):
+            self._initialize(workspace)
+
+    def _initialize(self, workspace: Path):
         self.directory = workspace / "private_runtime" / "execution"
         self.directory.mkdir(parents=True, exist_ok=True)
         self.epoch = uuid4().hex
@@ -68,7 +73,7 @@ class ExecutionJournal(SpawnHandoff):
                     raise RuntimeError("Unsupported execution journal version")
                 self.root_id = identity["root_id"]
             ensure_spawn_schema(self._conn)
-            self.rebuild_projection()
+            self._rebuild_projection()
             self.recover_abandoned()
             self.reconcile_spawn_completions()
         except BaseException:
@@ -147,6 +152,11 @@ class ExecutionJournal(SpawnHandoff):
         self._conn.execute("INSERT INTO execution_checkpoint VALUES (1,?) ON CONFLICT(id) DO UPDATE SET seq=excluded.seq", (after,))
 
     def rebuild_projection(self):
+        from bootstrap.host_state import journal_maintenance
+        with journal_maintenance(self.directory.parent.parent):
+            self._rebuild_projection()
+
+    def _rebuild_projection(self):
         # One transaction: interruption leaves either the previous view or the
         # complete replacement, never a half rebuilt admission index.
         with self._lock:
