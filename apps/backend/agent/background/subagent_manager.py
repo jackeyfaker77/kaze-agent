@@ -8,7 +8,6 @@ from dataclasses import asdict, dataclass, replace
 from contextvars import copy_context
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from agent.background.runtime import (
     AgentBackgroundJobRunner,
@@ -30,7 +29,7 @@ from bus.events import SpawnCompletionItem
 from bus.queue import MessageBus
 from core.common.strategy_trace import build_strategy_trace_envelope
 from core.net.http import HttpRequester
-from core.execution.contracts import ExecutionNeedsReview, JournalWriteError
+from core.execution.contracts import ExecutionConflict, ExecutionNeedsReview, JournalWriteError
 from core.execution.journal import ExecutionJournal
 from core.execution.scope import ExecutionScope, current_execution, current_effect
 from prompts.background import build_spawn_subagent_prompt
@@ -110,7 +109,8 @@ class SubagentManager:
 
         适合：调研后需要立即回复用户的任务，预计 ≤ 10 次工具调用。
         """
-        job_id = uuid.uuid4().hex[:8]
+        job_id = uuid.uuid4().hex
+        self._reserve_job(job_id, task, label, profile, synchronous=True)
         display_label = (label or task[:30] or job_id).strip()
         task_dir = self._job_task_dir(job_id)
 
@@ -184,8 +184,12 @@ class SubagentManager:
         origin_session_key: str = "",
     ) -> str:
         """创建后台 subagent 任务，并立即把控制权还给主 agent。"""
-        job_id = uuid.uuid4().hex[:8]
+        job_id = uuid.uuid4().hex
         display_label = (label or task[:30] or job_id).strip()
+        reservation = self._reserve_job(job_id, task, display_label, profile,
+                                        origin_channel, origin_chat_id, origin_session_key)
+        if reservation is not None:
+            retry_count = reservation['retry_count']
         task_dir = self._job_task_dir(job_id)
         # 1. 先生成 job_id 和 trace，确保后台任务还没起时也能追踪来源。
         self._append_spawn_trace(
@@ -259,9 +263,12 @@ class SubagentManager:
         return [asdict(job) for job in self._running_jobs.values()]
 
     async def cancel(self, job_id: str) -> bool:
+        durable_cancelled = False
+        if self.execution_journal is not None:
+            durable_cancelled = self.execution_journal.cancel_spawn(job_id)
         task = self._running_tasks.get(job_id)
         if task is None or task.done():
-            return False
+            return durable_cancelled
         job = self._running_jobs.get(job_id)
         if job is not None:
             self._cancel_announced.add(job_id)
@@ -271,6 +278,30 @@ class SubagentManager:
             await self._announce_cancelled_job(job)
         logger.info("[spawn] cancel requested job_id=%s", job_id)
         return True
+
+    def _reserve_job(self, job_id, task, label, profile, channel='', chat_id='', session_key='', *, synchronous=False):
+        journal = self.execution_journal
+        if journal is None:
+            return None
+        scope = current_execution.get()
+        if synchronous and scope is None:
+            return None
+        if scope is None or not scope.active or scope.journal is not journal:
+            raise ExecutionConflict('持久子任务需要有效的父执行身份')
+        if synchronous and not journal.spawn_parent_context(scope.turn_id)['followup']:
+            return None  # Ordinary synchronous execution retains its existing contract.
+        metadata = {'session_key_override': session_key} if session_key else {}
+        if not synchronous and channel not in {'desktop', 'cli'}:
+            account = self._bus.outbox.accounts.get(channel) if self._bus.outbox is not None else None
+            if not account:
+                raise ExecutionConflict('渠道账号尚未就绪，不能创建持久后台任务')
+            metadata['_spawn_account'] = account
+        return journal.reserve_spawn(job_id, scope.turn_id, profile, {
+            'channel': channel, 'chat_id': chat_id, 'label': label or task[:30] or job_id,
+            'task': task, 'timestamp': datetime.now(timezone.utc).isoformat(),
+            'artifact_refs': [str(self._workspace / 'subagent-runs' / job_id)],
+            'metadata': metadata,
+        })
 
     def _forget_running_job(self, job_id: str) -> None:
         self._running_tasks.pop(job_id, None)
@@ -317,7 +348,7 @@ class SubagentManager:
                         task=task,
                         max_iterations=_SPAWN_MAX_ITERATIONS,
                         completion_mode="message_bus",
-                        persistence_mode="ephemeral",
+                        persistence_mode="execution_journal" if self.execution_journal is not None else "ephemeral",
                     ),
                     on_exception=lambda e: logger.exception(
                         "[spawn] subagent failed job_id=%s err=%s", job_id, e
@@ -495,6 +526,18 @@ class SubagentManager:
         origin_session_key: str = "",
     ) -> None:
         """把后台结果包装成内部事件，重新投回主 agent 的消息总线。"""
+        if self.execution_journal is not None:
+            journal = self.execution_journal
+            if journal.spawn_completion(job_id) is None and status == 'cancelled':
+                # Cancellation can win before the detached coroutine's first step.
+                row, created = journal.admit(f'subagent:{job_id}', 'subagent', job_id,
+                                             {'cancelled_before_start': True})
+                if created:
+                    journal.finish(row['turn_id'], 'interrupted')
+            if journal.spawn_completion(job_id) is not None:
+                # The bus polls committed intents; never enqueue a second in-memory copy.
+                return
+            raise JournalWriteError('子任务结果尚未持久提交，不能以内存消息替代')
         payload_result = result
         # 1. 先裁剪过长结果，避免 completion event 把主会话和 trace 撑爆。
         if len(payload_result) > _RESULT_MAX_CHARS:

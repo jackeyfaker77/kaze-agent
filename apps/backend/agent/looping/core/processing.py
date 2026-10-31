@@ -9,7 +9,7 @@ from datetime import datetime
 
 from core.error_context import current_session_key
 from core.execution.journal import ExecutionJournal
-from core.execution.runner import run_recorded
+from core.execution.runner import run_recorded, run_spawn_recorded
 from core.execution.scope import current_execution
 from ..interrupt import (
     TurnInterruptState,
@@ -18,6 +18,7 @@ from bus.events import (
     InboundItem,
     InboundMessage,
     OutboundMessage,
+    SpawnCompletionItem,
 )
 from bus.processing import ProcessingState
 from bus.queue import inbound_job
@@ -45,11 +46,16 @@ class _ProcessingMixin:
 
             key = item.session_key
             transport_key = item.metadata.get('_transport_id')
-            token = inbound_job.set(transport_key)
+            completion_key = ('spawn:' + item.event.job_id if isinstance(item, SpawnCompletionItem)
+                              and item.metadata.get('_spawn_claim') else None)
+            delivery_key = transport_key or completion_key
+            token = inbound_job.set(delivery_key)
             task = asyncio.create_task(self._process_session_scoped(item, key))
             try:
                 result = await task
-                if transport_key and self.bus.transport.db.execute('SELECT 1 FROM jobs WHERE id=?', ('reply:'+transport_key,)).fetchone() is None:
+                if completion_key and item.channel in {'desktop', 'cli'} and item.metadata.get('_spawn_reply_needs_dispatch'):
+                    await self.bus.publish_outbound(result)
+                if delivery_key and item.channel not in {'desktop', 'cli'} and self.bus.outbox is not None and self.bus.transport.db.execute('SELECT 1 FROM jobs WHERE id=?', ('reply:'+delivery_key,)).fetchone() is None:
                     # Also closes the completed-execution -> enqueue crash gap on recovery.
                     await self.bus.publish_outbound(result)
             except asyncio.CancelledError:
@@ -58,12 +64,12 @@ class _ProcessingMixin:
                     raise
                 logger.info(f"Turn cancelled for {key}")
             except ExecutionUnavailable:
-                if not transport_key:
+                if not delivery_key:
                     raise
                 logger.warning('Durable input requires execution review: %s', transport_key)
             except Exception as e:
                 logger.error(f"处理消息出错: {e}", exc_info=True)
-                if transport_key:
+                if delivery_key:
                     continue
                 error_metadata = dict(getattr(item, "metadata", {}) or {})
                 await self.bus.publish_outbound(
@@ -200,7 +206,11 @@ class _ProcessingMixin:
                                                busy_session_key=busy_session_key,
                                                dispatch_outbound=dispatch_outbound)
                 journal = getattr(getattr(self, "session_manager", None), "execution_journal", None)
-                if isinstance(item, InboundMessage) and not stateless and isinstance(journal, ExecutionJournal):
+                if isinstance(item, SpawnCompletionItem) and item.metadata.get('_spawn_claim') and isinstance(journal, ExecutionJournal):
+                    self.bus.validate_spawn_account(item)
+                    return await run_spawn_recorded(journal, item, session_key, execute)
+                if (isinstance(item, InboundMessage) and (not stateless or item.channel == 'scheduler')
+                        and isinstance(journal, ExecutionJournal)):
                     return await run_recorded(journal, item, session_key, execute)
                 # Stateless/internal work must not inherit a parent's execution id.
                 token = current_execution.set(None)

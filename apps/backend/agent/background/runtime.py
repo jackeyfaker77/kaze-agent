@@ -9,7 +9,7 @@ from core.execution.contracts import ExecutionNeedsReview, JournalWriteError
 
 AgentBackgroundJobKind = Literal["conversation_spawn"]
 AgentBackgroundCompletionMode = Literal["message_bus", "direct_notify"]
-AgentBackgroundPersistenceMode = Literal["ephemeral", "task_dir"]
+AgentBackgroundPersistenceMode = Literal["ephemeral", "task_dir", "execution_journal"]
 AgentBackgroundStatus = Literal["completed", "incomplete", "error"]
 
 

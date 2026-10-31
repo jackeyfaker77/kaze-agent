@@ -30,6 +30,8 @@ class ChannelHub:
         return f'{channel}:{chat_id}'
 
     def mark_delivery(self, message: OutboundMessage, *, default_channel, delivery_status, external_message_id=''):
+        if message.metadata.get('spawn_completion_notice'):
+            return  # A handoff stop notice must not mark an unrelated assistant reply delivered.
         key = str(message.metadata.get('session_key_override') or f'{default_channel}:{message.chat_id}')
         if '_delivery_message_id' in message.metadata:
             return self.sessions.mark_latest_assistant_delivery(
