@@ -13,6 +13,162 @@ from tests.backend.test_goal_inputs import NOW, setup, subscribe
 from tests.backend.test_spawn_handoff import completed_child, parent
 
 
+@pytest.mark.parametrize("item", ["items", "item_id", "schema_version"])
+def test_legacy_baseline_item_names_are_not_format_markers(tmp_path, item):
+    journal, store, service = setup(tmp_path)
+    try:
+        service.inputs.publish(
+            "wake.content",
+            "feed_plugin:main",
+            item,
+            "1",
+            1,
+            {"release": "old"},
+            owner_session="telegram:1",
+        )
+        subscribe(service)
+        with journal._transaction():
+            state = store._read("g")
+            state["source_inputs"]["input:dep"] = {item: {"release": {"value": "old"}}}
+            store._save(state, "legacy_fixture")
+        service.inputs.publish(
+            "wake.content",
+            "feed_plugin:main",
+            "new",
+            "1",
+            1,
+            {"release": "new"},
+            owner_session="telegram:1",
+        )
+        assert service.inputs.consume() == 1
+        snapshots = store.get("g")["source_inputs"]["input:dep"]["items"]
+        assert set(snapshots) == {item, "new"}
+        assert snapshots[item]["fields"]["release"]["value"] == "old"
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize("late_subscription", [False, True])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"available": False},
+        {"expires_at": "invalid"},
+        {"expires_at": "2000-01-01T00:00:00+00:00"},
+    ],
+)
+async def test_unusable_context_never_poisons_recovery(
+    tmp_path, late_subscription, bad
+):
+    from types import SimpleNamespace
+    from plugins.wake_proactive.runtime import WakeRuntime
+    from proactive_v2.frame import new_proactive_frame
+    from tests.backend.proactive_v2.akashic_wake.test_runtime import (
+        _scope,
+        _source,
+        FakeContextGateway,
+        FakeOrchestrator,
+        FixedClock,
+    )
+
+    journal, store, service = setup(tmp_path)
+    gateway = FakeContextGateway({"revision": 2, "observed_at": NOW.isoformat(), **bad})
+    scope = _scope(
+        tmp_path,
+        gateway,
+        SimpleNamespace(chat=AsyncMock()),
+        FakeOrchestrator(),
+        _source("context"),
+    )
+    scope.goal_input_sources = service.input_sources
+    runtime = WakeRuntime(scope, clock=FixedClock(NOW))
+
+    def arm():
+        service.input_sources.subscribe(
+            "context",
+            "g",
+            kind="wake.context",
+            source_id="feed_plugin:main",
+            fields=["presence"],
+            owner_session="telegram:1",
+            expected_version=store.get("g")["version"],
+        )
+
+    try:
+        if not late_subscription:
+            arm()
+        await runtime.ingest(runtime.begin(new_proactive_frame("telegram:1")))
+        if late_subscription:
+            arm()
+        assert service.inputs.consume() == 0
+        assert store.get("g")["status"] == "waiting"
+        assert service.inputs.get("context")["positions"] == {}
+        gateway.snapshot = {
+            "revision": 3,
+            "observed_at": NOW.isoformat(),
+            "presence": "active",
+        }
+        await runtime.ingest(runtime.begin(new_proactive_frame("telegram:1")))
+        assert service.inputs.consume() == 1
+        assert (
+            store.get("g")["source_inputs"]["input:context"]["items"][
+                "feed_plugin:main"
+            ]["fields"]["presence"]["value"]
+            == "active"
+        )
+    finally:
+        runtime.close()
+        journal.close()
+
+
+async def test_wildcard_delivers_complete_snapshot_after_restart(tmp_path):
+    from types import SimpleNamespace
+    from agent.provider import LLMResponse
+    from core.goals.executor import GoalSubagentExecutor
+    import json
+
+    journal, store, service = setup(tmp_path)
+
+    def publish(item, version, release):
+        service.inputs.publish(
+            "wake.content",
+            "feed_plugin:main",
+            item,
+            str(version),
+            version,
+            {"release": release},
+            owner_session="telegram:1",
+        )
+
+    publish("baseline", 1, "old")
+    subscribe(service)
+    publish("A", 1, "a-new")
+    publish("B", 1, "b-new")
+    assert service.inputs.consume() == 2
+    journal.close()
+    journal = ExecutionJournal(tmp_path)
+    try:
+        store = GoalStore(journal, tmp_path)
+        provider = SimpleNamespace(
+            chat=AsyncMock(return_value=LLMResponse(content="done"))
+        )
+        service = GoalService(store, GoalSubagentExecutor(provider, "fake"))
+        await service.advance("g", expected_version=store.get("g")["version"])
+        messages = provider.chat.call_args.kwargs["messages"]
+        request = json.loads(
+            next(m["content"] for m in messages if m["role"] == "user")
+        )
+        items = request["source_inputs"]["input:dep"]["items"]
+        assert {
+            key: value["fields"]["release"]["value"] for key, value in items.items()
+        } == {"baseline": "old", "A": "a-new", "B": "b-new"}
+        publish("A", 2, "a-newer")
+        assert service.inputs.consume() == 1
+        assert store.get("g")["source_inputs"]["input:dep"]["items"]["B"] == items["B"]
+    finally:
+        journal.close()
+
+
 def two_owners(store, service, kind, source):
     store.create(
         "other", demo_definition(store.workspace / "trusted"), demo_authorization()

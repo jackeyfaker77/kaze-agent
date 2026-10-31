@@ -98,7 +98,12 @@ async def test_duplicate_out_of_order_and_unrelated_fields_infer_once(tmp_path):
         await service.tick(NOW)
         state = store.get("g")
         assert state["budget"]["used"]["model"] == 1
-        assert state["source_inputs"]["input:dep"]["fields"]["release"]["value"] == 4
+        assert (
+            state["source_inputs"]["input:dep"]["items"]["dependency"]["fields"][
+                "release"
+            ]["value"]
+            == 4
+        )
         assert len(state["attempts"]) == 1
         outcomes = [r["outcome"] for r in service.inputs.receipts("dep")]
         assert outcomes == ["unchanged", "applied", "stale"]
@@ -140,7 +145,12 @@ def test_peer_consumers_share_atomic_cursor_and_receipt(tmp_path):
             counts = list(pool.map(lambda s: s.inputs.consume(), [service, peer]))
         assert sum(counts) == 1
         assert len(service.inputs.receipts("dep")) == 1
-        assert store.get("g")["source_inputs"]["input:dep"]["version"] == "2"
+        assert (
+            store.get("g")["source_inputs"]["input:dep"]["items"]["dependency"][
+                "version"
+            ]
+            == "2"
+        )
     finally:
         peer_journal.close()
         journal.close()
@@ -383,7 +393,7 @@ async def test_committed_child_result_maps_without_touching_completion_ack(tmp_p
         assert store.get("g")["budget"]["used"]["model"] == 1
         assert journal.spawn_completion("child")["acked"] == 0
         snapshot = store.get("g")["source_inputs"]["input:child"]
-        assert snapshot["item_id"] == child
+        assert snapshot["items"][child]["item_id"] == child
         assert len(service.inputs.receipts("child")) == 1
         service.input_sources.poll_results()
         assert service.inputs.consume() == 0
@@ -671,7 +681,9 @@ async def test_real_kaze_subagent_receives_committed_input_snapshot(tmp_path):
             if self.calls == 1:
                 request = json.loads(kwargs["messages"][-1]["content"])
                 assert (
-                    request["source_inputs"]["input:dep"]["fields"]["release"]["value"]
+                    request["source_inputs"]["input:dep"]["items"]["dependency"][
+                        "fields"
+                    ]["release"]["value"]
                     == 2
                 )
                 assert request["input_versions"]["input:dep"]
