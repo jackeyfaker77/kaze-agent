@@ -123,7 +123,7 @@ async def test_web_fetch_procedure_tagger_and_store_cover_core_paths(tmp_path: P
     item_id = first.split(":", 1)[1]
     assert store.upsert_item("procedure", "hello world", [1.0, 0.0]).startswith("reinforced:")
     store.mark_superseded(item_id)
-    assert store.upsert_item("procedure", "hello world", [1.0, 0.0]).startswith("reinforced:")
+    assert store.upsert_item("procedure", "hello world", [1.0, 0.0]) == f"skipped:{item_id}"
     store.mark_superseded_batch([item_id])
     assert store.get_all_with_embedding(include_superseded=True)
     assert store.has_item_by_source_ref("s1", "procedure") is True
