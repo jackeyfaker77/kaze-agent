@@ -130,6 +130,7 @@ class GoalSubagentExecutor:
                 "criteria": state["definition"]["criteria"],
                 "previous_acceptance": state["evidence"][-1:],
                 "input_versions": state["observed_sources"],
+                "source_inputs": state.get("source_inputs", {}),
             },
             ensure_ascii=False,
         )

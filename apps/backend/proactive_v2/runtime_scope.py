@@ -36,3 +36,4 @@ class ProactiveRuntimeScope:
     tool_hooks: list[ToolHook] = field(default_factory=list)
     schedule_fn: Callable[[float | None], int] | None = None
     interaction_embeddings_fn: Callable[[datetime], Awaitable[int]] | None = None
+    goal_input_sources: Any | None = None

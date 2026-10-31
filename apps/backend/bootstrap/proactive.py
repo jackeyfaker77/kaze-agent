@@ -224,6 +224,7 @@ class KazeProactiveLoop(ProactiveLoop):
             scope,
             provider=RecordedProactiveProvider(scope.provider),
             shared_tools=snapshot.tool_registry if snapshot else scope.shared_tools,
+            goal_input_sources=getattr(getattr(self.runtime, 'goal_service', None), 'input_sources', None),
             interaction_embeddings_fn=lambda now: self._interaction_embeddings.refresh(
                 getattr(self._memory, "embedding_api", None),
                 now=now,

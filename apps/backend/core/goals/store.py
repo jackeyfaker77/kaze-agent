@@ -321,26 +321,32 @@ class GoalStore:
             state = self._read(goal_id)
             if expected_version is not None:
                 self._expected(state, expected_version)
-            if (
-                state["status"] in TERMINAL
-                or state["observed_sources"].get(source_id) == source_version
-            ):
-                return state
-            state["observed_sources"][source_id] = source_version
-            condition = state["wait"] or {}
-            wake = (
-                condition.get("kind") == "source"
-                and condition.get("source_id") == source_id
-                and condition.get("after_version") != source_version
-            )
-            if state["status"] == "succeeded":
-                state.update(
-                    status="ready", step="verify", reason="acceptance_inputs_changed"
-                )
-            elif state["status"] == "waiting" and wake:
-                state.update(status="ready", wait=None, reason="waiting_condition_changed")
-            self._save(state, "source_observed")
+            return self._observe_source(state, source_id, source_version)
+
+    def _observe_source(self, state, source_id, source_version, *, source_input=None):
+        """Transaction-local observation; input receipt joins this same commit."""
+        if (
+            state["status"] in TERMINAL
+            or state["observed_sources"].get(source_id) == source_version
+        ):
             return state
+        state["observed_sources"][source_id] = source_version
+        if source_input is not None:
+            state.setdefault("source_inputs", {})[source_id] = source_input
+        condition = state["wait"] or {}
+        wake = (
+            condition.get("kind") == "source"
+            and condition.get("source_id") == source_id
+            and condition.get("after_version") != source_version
+        )
+        if state["status"] == "succeeded":
+            state.update(
+                status="ready", step="verify", reason="acceptance_inputs_changed"
+            )
+        elif state["status"] == "waiting" and wake:
+            state.update(status="ready", wait=None, reason="waiting_condition_changed")
+        self._save(state, "source_observed")
+        return state
 
     def wake_time(self, goal_id, now):
         with self.journal._transaction():

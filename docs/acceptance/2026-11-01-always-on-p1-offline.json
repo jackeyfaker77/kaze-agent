@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-31T18:43:18.003104+00:00",
+  "workspace": "C:\\Users\\SHOWFU~1\\AppData\\Local\\Temp\\kaze-input-demo-11qcjy27",
+  "mode": "offline_fake_executor_real_sqlite_and_python_validator",
+  "idle_model_calls": 0,
+  "goal_status": "succeeded",
+  "attempts": 2,
+  "budget": {
+    "limits": {
+      "model": 10,
+      "replan": 1,
+      "tool": 10,
+      "total": 30,
+      "validation": 8
+    },
+    "used": {
+      "total": 9,
+      "model": 2,
+      "tool": 2,
+      "validation": 4,
+      "replan": 1
+    },
+    "held": {
+      "total": 0,
+      "model": 0,
+      "tool": 0,
+      "validation": 0,
+      "replan": 0
+    },
+    "remaining": {
+      "model": 8,
+      "replan": 0,
+      "tool": 8,
+      "total": 21,
+      "validation": 4
+    }
+  },
+  "receipts": [
+    {
+      "subscription_id": "release",
+      "event_seq": 2,
+      "outcome": "applied",
+      "goal_version": 4,
+      "input_version": "b7095690278e2c1deb3b1ac74bc0001ab4e06d797f70e1c9c1468139cdc14d44",
+      "created_at": "2026-10-31T18:43:17.252826+00:00"
+    },
+    {
+      "subscription_id": "release",
+      "event_seq": 3,
+      "outcome": "stale",
+      "goal_version": 4,
+      "input_version": null,
+      "created_at": "2026-10-31T18:43:17.252826+00:00"
+    }
+  ],
+  "source_input": {
+    "event_seq": 2,
+    "fields": {
+      "release": {
+        "value": "2.0"
+      }
+    },
+    "item_id": "library",
+    "kind": "wake.content",
+    "position": 3,
+    "source_id": "isolated:dependency",
+    "version": "3"
+  },
+  "test_returncodes": [
+    1,
+    0
+  ],
+  "phase_execution_ids": [
+    "c812e31e525149d7bfb6b5077a288765",
+    "542a560ef522470c8af06c7b4aab3e8a",
+    "61f0f80c029b4f64ae0c2509462c9fa7",
+    "fcca81897d6648409bb202c01e8af140",
+    "8d82055739484a26a0e8b141a25fad3c"
+  ],
+  "transitions_after_restart": [
+    {
+      "status": "ready",
+      "step": "execute",
+      "reason": "bounded_revision_prepared"
+    },
+    {
+      "status": "ready",
+      "step": "verify",
+      "reason": "execution_completed_acceptance_pending"
+    },
+    {
+      "status": "succeeded",
+      "step": "verify",
+      "reason": "all_executable_criteria_passed"
+    }
+  ],
+  "duplicate_model_calls": 0,
+  "cancelled_goal_status": "cancelled",
+  "cancelled_model_calls": 0
+}

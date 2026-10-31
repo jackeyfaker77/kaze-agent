@@ -71,9 +71,17 @@ class GoalContext:
 class GoalService:
     def __init__(self, store, executor):
         self.store, self.executor = store, executor
+        from .inputs import GoalInputs
+        from .input_sources import GoalInputSources
+
+        self.inputs = GoalInputs(store)
+        self.input_sources = GoalInputSources(self.inputs)
 
     def bind_scheduler(self, scheduler):
         scheduler.bind_internal_tick("goals", self.tick)
+        self.input_sources.scheduler = scheduler
+        scheduler.bind_goal_inputs(self.input_sources)
+        self.inputs.bind_signal(lambda: scheduler.request_internal_tick("goals"))
 
     def refresh_inputs(self, goal_id):
         state = self.store.get(goal_id)
@@ -94,6 +102,7 @@ class GoalService:
     async def tick(self, now=None):
         self.store.recover()
         now = now or datetime.now(timezone.utc)
+        await self.input_sources.poll(now)
         for state in self.store.list():
             if state["status"] in TERMINAL:
                 continue
