@@ -300,5 +300,12 @@
       "scheduledArguments": "\"E:\\CODE\\hasaki-agent\\release\\hosts\\a573804ae04a6a826667dca00bd4b338d50a3777\\apps\\backend\\windows_host.py\" \"host\" \"--workspace\" \"E:\\CODE\\hasaki-agent\\workspace\" \"--config\" \"E:\\CODE\\hasaki-agent\\workspace\\config.toml\" \"--remote-port\" \"8765\" \"--remote-token-file\" \"E:\\CODE\\hasaki-agent\\workspace\\private_runtime\\windows-host\\runtime-token\""
     },
     "verification_scope": "Deployment identity, exact backend bytes and authenticated health only; historical Telegram scenarios were not rerun after this deployment."
+  },
+  "integrated_live_followup": {
+    "verified_at": "2026-10-31T21:04:35.231676+00:00",
+    "revision": "a573804ae04a6a826667dca00bd4b338d50a3777",
+    "report": "2026-11-01-integrated-live-host.json",
+    "scope": "Real Telegram normal/cancel and production real-model Goal; controlled input replay and graceful restart. See report boundaries.",
+    "passed": true
   }
 }

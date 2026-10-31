@@ -1,0 +1,211 @@
+{
+  "verified_at": "2026-10-31T21:04:35.231676+00:00",
+  "revision": "a573804ae04a6a826667dca00bd4b338d50a3777",
+  "passed_scoped_acceptance": true,
+  "telegram": [
+    {
+      "job_id": "c330492dac2b492d9dab6de0f0dec427",
+      "consumer_turn_id": "ccb34674720341b78c857a1107cc160d",
+      "exit_reason": "completed",
+      "acked": true,
+      "delivery_state": "done",
+      "delivery_attempts": 1,
+      "consumer_event_counts": {
+        "continuation.boundary": 1,
+        "messages.committed": 1,
+        "model.attempt.started": 1,
+        "model.context.observed": 1,
+        "model.request.prepared": 1,
+        "model.response.recorded": 1,
+        "request.accepted": 1,
+        "run.ended": 1,
+        "run.started": 1
+      }
+    },
+    {
+      "job_id": "ffee49ca55e8433c8e01cbaafcce0ad8",
+      "consumer_turn_id": "2002e9f500a54be8b0460a29f4e5e131",
+      "exit_reason": "cancelled",
+      "acked": true,
+      "delivery_state": "done",
+      "delivery_attempts": 1,
+      "consumer_event_counts": {
+        "request.accepted": 1,
+        "run.ended": 1,
+        "run.started": 1
+      }
+    }
+  ],
+  "goals": [
+    {
+      "goal_id": "live-r3-20261101-normal",
+      "status": "succeeded",
+      "attempts": 1,
+      "phase_count": 2,
+      "settled_reservations": 9,
+      "held_reservations": 0,
+      "used": {
+        "model": 8,
+        "tool": 3,
+        "validation": 2,
+        "replan": 0
+      },
+      "checks": [
+        {
+          "id": "json",
+          "kind": "json",
+          "passed": true,
+          "returncode": null,
+          "stdout": null,
+          "sha256": "ee8634823009b8eb1ab7f522d2049b52d98840b3aa85880eb5e6e0ecc787eddd"
+        },
+        {
+          "id": "test",
+          "kind": "command",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "PASS\r\n",
+          "sha256": null
+        }
+      ],
+      "phase_event_counts": {
+        "25eb811f18ca406fbcf795fecd0a8ad3": {
+          "interaction.tool_result": 3,
+          "model.attempt.started": 4,
+          "model.context.observed": 4,
+          "model.request.prepared": 4,
+          "model.response.recorded": 4,
+          "request.accepted": 1,
+          "run.ended": 1,
+          "run.started": 1,
+          "tool.dispatched": 3,
+          "tool.returned": 3
+        },
+        "4d5ba439fc314d7e9a881406a1f606b7": {
+          "request.accepted": 1,
+          "run.ended": 1,
+          "run.started": 1
+        }
+      },
+      "unchanged_after_replay_and_restart": true
+    },
+    {
+      "goal_id": "live-r3-20261101-cancel",
+      "status": "cancelled",
+      "attempts": 0,
+      "phase_count": 0,
+      "settled_reservations": 0,
+      "held_reservations": 0,
+      "used": {
+        "model": 0,
+        "tool": 0,
+        "validation": 0,
+        "replan": 0
+      },
+      "checks": [],
+      "phase_event_counts": {},
+      "unchanged_after_replay_and_restart": true
+    }
+  ],
+  "p1_input_receipts": {
+    "normal": {
+      "applied": 2,
+      "unchanged": 1,
+      "stale": 1
+    },
+    "cancel": {
+      "goal_terminal": 3,
+      "stale": 1
+    }
+  },
+  "exact_duplicate_same_sequence": true,
+  "telegram_exact_admission_replays": [
+    {
+      "turn_id": "81ebae517258476593c60a68ba0e3ebe",
+      "created": false
+    },
+    {
+      "turn_id": "21ead0084d404619bf61570a5b01323d",
+      "created": false
+    }
+  ],
+  "preservation": {
+    "config_files_unchanged": {
+      "config.toml": true,
+      "channels.json": true,
+      "mcp_servers.json": true,
+      "proactive_sources.json": true
+    },
+    "original_messages": 461,
+    "all_original_messages_unchanged": true,
+    "all_original_sessions_preserved": true,
+    "original_event_max_seq": 108593,
+    "original_event_prefix_unchanged": true,
+    "same_execution_root": true,
+    "journal_integrity": "ok"
+  },
+  "health": {
+    "ok": true,
+    "architecture": "sessions",
+    "execution_contract_version": 1,
+    "root_id": "55ffe118c00c404b92e89d1ce2cf2f16",
+    "epoch": "1f80cca260c04341a093acbd1d6d1708",
+    "pending_chat_writes": 0,
+    "transport": "remote",
+    "protocol": 1
+  },
+  "boundaries": [
+    "Telegram messages were real client inputs; exact duplicate Telegram identities were replayed through journal admission during maintenance, not redelivered by Telegram servers.",
+    "Goal source facts were controlled timer-type inputs prepared offline; real production model and scheduler executed the Goal after restart.",
+    "Goal cancellation was before dispatch; running cancellation was verified through real Telegram spawn.",
+    "No forced crash of production validator and no Telegram-to-Goal creation flow were claimed."
+  ],
+  "verified_source_files": [
+    "apps/backend/bootstrap/tools.py",
+    "apps/backend/core/execution/journal.py",
+    "apps/backend/core/goals/store.py",
+    "apps/backend/core/goals/inputs.py",
+    "apps/backend/core/goals/service.py",
+    "apps/backend/core/goals/executor.py"
+  ],
+  "source_comparison": "Git blob and deployed source match after CRLF-to-LF normalization only",
+  "host": {
+    "owner_id": "71cb45e3693f4dc98217517857b8b7a4",
+    "pid": 4440,
+    "mode": "host",
+    "started_at": "2026-10-31T21:02:12.357599+00:00",
+    "healthy": true,
+    "workers": {
+      "agent_loop": true,
+      "bus_dispatch_outbound": true,
+      "scheduler": true,
+      "transport_outbox": true,
+      "proactive": true
+    },
+    "mcp_health": {
+      "feed": true,
+      "device": true,
+      "calendar": true,
+      "gmail": true
+    },
+    "channel_health": {
+      "telegram": true
+    },
+    "dependencies_ready": true,
+    "epoch": "1f80cca260c04341a093acbd1d6d1708",
+    "root_id": "55ffe118c00c404b92e89d1ce2cf2f16"
+  },
+  "artifact": {
+    "value": {
+      "ok": true,
+      "marker": "LIVE-R3",
+      "sum": 18
+    },
+    "sha256": "ee8634823009b8eb1ab7f522d2049b52d98840b3aa85880eb5e6e0ecc787eddd"
+  },
+  "restart": {
+    "before_epoch": "ce61d49d1e9e4324a976352495f19522",
+    "after_epoch": "1f80cca260c04341a093acbd1d6d1708",
+    "root_preserved": true
+  }
+}

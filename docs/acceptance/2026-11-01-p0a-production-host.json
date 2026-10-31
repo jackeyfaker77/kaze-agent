@@ -98,5 +98,12 @@
     "same_execution_root": true,
     "journal_integrity": "ok"
   },
-  "scope": "Real production Host, existing real model, localhost desktop RPC and durable journal; readonly fixture files. Telegram health checked; no Telegram test message sent; no crash injection."
+  "scope": "Real production Host, existing real model, localhost desktop RPC and durable journal; readonly fixture files. Telegram health checked; no Telegram test message sent; no crash injection.",
+  "integrated_live_followup": {
+    "verified_at": "2026-10-31T21:04:35.231676+00:00",
+    "revision": "a573804ae04a6a826667dca00bd4b338d50a3777",
+    "report": "2026-11-01-integrated-live-host.json",
+    "scope": "Real Telegram normal/cancel and production real-model Goal; controlled input replay and graceful restart. See report boundaries.",
+    "passed": true
+  }
 }
