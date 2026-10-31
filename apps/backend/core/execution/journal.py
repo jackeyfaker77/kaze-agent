@@ -108,7 +108,7 @@ class ExecutionJournal(SpawnHandoff):
         after = checkpoint[0] if checkpoint else 0
         for event in self._conn.execute("SELECT * FROM events WHERE seq>? ORDER BY seq", (after,)).fetchall():
             # Conversation facts have their own strict projection and identities.
-            if event["kind"] not in {"conversation.baseline", "conversation.changed"}:
+            if event["kind"] not in {"conversation.baseline", "conversation.changed", "goal.state"}:
                 old = self._conn.execute("SELECT state FROM execution_views WHERE turn_id=?", (event["turn_id"],)).fetchone()
                 state = project_event(json.loads(old[0]) if old else None,
                                       {**dict(event), "payload": json.loads(event["payload"])}, self.root_id)

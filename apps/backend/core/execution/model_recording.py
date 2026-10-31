@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from functools import wraps
+from collections.abc import Callable
 from uuid import uuid4
 
 from .contracts import ExecutionNeedsReview, JournalWriteError
@@ -28,6 +29,7 @@ class ModelCall:
 
 current_model_call: ContextVar[ModelCall | None] = ContextVar('current_model_call', default=None)
 history_lane: ContextVar[bool] = ContextVar('model_history_lane', default=False)
+model_attempt_guard: ContextVar[Callable[[], None] | None] = ContextVar('model_attempt_guard', default=None)
 
 
 async def history_chat(provider, **kwargs):
@@ -85,6 +87,9 @@ def _ephemeral(request, transport):
 
 
 def model_attempt():
+    guard = model_attempt_guard.get()
+    if guard is not None:
+        guard()
     call = current_model_call.get()
     if call is not None:
         _check(call.scope)
