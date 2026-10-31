@@ -52,7 +52,11 @@ class ContentSafetyError(Exception):
 
 
 class ContextLengthError(Exception):
-    """LLM provider 因上下文超长拒绝请求"""
+    """Length failure; incomplete output is evidence, never a usable response."""
+
+    def __init__(self, message, *, reason="unknown", partial_response=None):
+        super().__init__(message)
+        self.diagnostics = {"reason": reason, "partial_response": partial_response}
 
 
 @dataclass
@@ -296,7 +300,10 @@ class LLMProvider:
             ),
         )
         if getattr(resp.choices[0], 'finish_reason', None) == 'length':
-            raise ContextLengthError('模型输出被长度限制截断，不能作为完整交互结果')
+            raise ContextLengthError(
+                '模型输出被长度限制截断，不能作为完整交互结果',
+                reason="output_truncated", partial_response=resp.model_dump(mode="json"),
+            )
         if getattr(resp.choices[0], 'finish_reason', None) == 'content_filter':
             raise ContentSafetyError('模型输出被内容审查截断')
         msg = resp.choices[0].message
@@ -409,7 +416,13 @@ class LLMProvider:
                     await on_content_delta({"content_delta": content_piece})
 
         if finish_reason == 'length':
-            raise ContextLengthError('模型流输出被长度限制截断，不能作为完整交互结果')
+            raise ContextLengthError(
+                '模型流输出被长度限制截断，不能作为完整交互结果',
+                reason="output_truncated",
+                partial_response={"finish_reason": finish_reason,
+                    "content": "".join(content_parts), "reasoning_content": "".join(reasoning_parts),
+                    "tool_call_chunks": tool_call_chunks, "total_tokens": total_tokens},
+            )
         if finish_reason == 'content_filter':
             raise ContentSafetyError('模型流输出被内容审查截断')
         if finish_reason not in {'stop', 'tool_calls', 'function_call'}:
@@ -487,7 +500,7 @@ class LLMProvider:
                 if self._is_safety_error(e):
                     raise ContentSafetyError(str(e)) from e
                 if self._is_context_length_error(e):
-                    raise ContextLengthError(str(e)) from e
+                    raise ContextLengthError(str(e), reason="input_limit") from e
                 retryable = self._is_retryable(e)
                 exhausted = attempt >= self._max_retries
                 if (not retryable) or exhausted:
