@@ -123,9 +123,12 @@ class NotebookService:
         sessions: Any,
         provider: Any,
         model: str,
+        exploration_reasoning_effort: str = "inherit",
         outbox: Any = None,
         clock=utcnow,
     ):
+        require(exploration_reasoning_effort in {"inherit", "low"}, "Invalid exploration reasoning effort")
+        self.exploration_reasoning_effort = exploration_reasoning_effort
         self.sessions, self.session_key = sessions, session_key
         self.provider = copy(provider)
         # Do not change the shared provider or its client. No physical retry for
@@ -347,6 +350,11 @@ class NotebookService:
         if state == "prepared":
             self.book.reserve_request(run_id)
             envelope = request_envelope(request)
+            # Request-local override: judgement and the shared provider retain
+            # their configured reasoning policy. Never change an awaiting call.
+            overrides = {"extra_body": {"reasoning_effort": "low"}} if (
+                role == "exploration" and self.exploration_reasoning_effort == "low"
+            ) else {}
             response = await self._chat(run_id,
                 messages=[
                     {"role": "system", "content": envelope["system"] + HOST_RULES},
@@ -367,6 +375,7 @@ class NotebookService:
                 tools=[],
                 model=self.model,
                 max_tokens=4096,
+                **overrides,
             )
             self.book._event(
                 "response:" + run_id, "response", {"content": response.content}

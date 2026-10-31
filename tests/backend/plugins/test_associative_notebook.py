@@ -196,9 +196,94 @@ async def test_real_canonical_materials_two_phase_and_no_poll_relearning(rig):
     ]
     assert len(rig.provider.calls) == 2
     assert all(c["tools"] == [] and c["max_tokens"] == 4096 for c in rig.provider.calls)
+    assert all("extra_body" not in c for c in rig.provider.calls)
     assert await rig.service.refresh() == candidates
     assert rig.reopen().read() == rig.service.read()
     assert len(rig.provider.calls) == 2
+
+
+def test_exploration_policy_rejects_unreviewed_values():
+    assert NotebookConfig().exploration_reasoning_effort == "inherit"
+    assert NotebookConfig(exploration_reasoning_effort="low").exploration_reasoning_effort == "low"
+    for value in ("medium", "high", "max", "", None):
+        with pytest.raises(ValueError):
+            NotebookConfig.model_validate({"exploration_reasoning_effort": value})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy,inherited,disabled", [
+    ("inherit", "high", False), ("low", "high", False),
+    ("inherit", "max", False), ("low", "max", False), ("low", "high", True),
+])
+async def test_plugin_exploration_policy_is_local_on_real_sdk_wire(rig, policy, inherited, disabled):
+    import httpx
+    from agent.provider import LLMProvider
+
+    wire = []
+    async def handle(request):
+        body = json.loads(request.content)
+        wire.append(body)
+        if body["messages"][-1]["content"] == "main conversation":
+            content = "main answer"
+        else:
+            content = (await rig.provider.chat(messages=body["messages"])).content
+        return httpx.Response(200, json={"id": "offline", "object": "chat.completion", "created": 0,
+            "model": "offline", "choices": [{"index": 0, "finish_reason": "stop",
+                "message": {"role": "assistant", "content": content}}]})
+
+    shared = LLMProvider(api_key="offline", provider_name="deepseek", max_retries=1,
+                         extra_body={"reasoning_effort": inherited}, force_disable_thinking=disabled)
+    await shared._client._client.aclose()
+    shared._client._client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    registry = ToolRegistry()
+    plugin = AssociativeNotebookPlugin()
+    plugin.context = cast(Any, SimpleNamespace(
+        config=NotebookConfig.model_validate({"enabled": True, "session_key": KEY,
+                                             "exploration_reasoning_effort": policy}),
+        workspace=rig.path, session_manager=rig.service.sessions,
+        light_provider=shared, light_model="deepseek-v4-flash", tool_registry=registry))
+    try:
+        await plugin.initialize()
+        service = cast(Any, plugin.service)
+        service.book.clock = lambda: NOW
+        rig.add("activity")
+        assert len(await service.refresh()) == 1
+        assert await shared.chat(messages=[{"role": "user", "content": "main conversation"}],
+                                 tools=[], model="deepseek-v4-flash", max_tokens=777)
+        assert len(wire) == 3
+        assert [json.loads(w["messages"][-1]["content"])["input"]["role"] for w in wire[:2]] == ["exploration", "judgement"]
+        assert [w["max_tokens"] for w in wire] == [4096, 4096, 777]
+        if disabled:
+            assert all(w["thinking"] == {"type": "disabled"} and "reasoning_effort" not in w for w in wire)
+        else:
+            assert [w["reasoning_effort"] for w in wire] == [
+                "low" if policy == "low" else inherited, inherited, inherited]
+        assert shared._extra_body == {"reasoning_effort": inherited}
+        assert shared._max_retries == 1 and service.provider._max_retries == 0
+        assert service.provider._client is shared._client
+        await service.refresh()
+        assert len(wire) == 3  # No model call without new material.
+    finally:
+        await plugin.terminate()
+        await shared._client.close()
+
+
+@pytest.mark.asyncio
+async def test_switching_exploration_policy_does_not_resubmit_unknown_run(rig):
+    rig.add("activity")
+    rig.provider.fail = True
+    assert (await rig.service.fetch())["learning"] == "blocked"
+    old = rig.service.pending_runs()
+    service = NotebookService(directory=rig.service.book.directory, session_key=KEY,
+        sessions=rig.service.sessions, provider=rig.provider, model="offline-fake",
+        exploration_reasoning_effort="low", clock=lambda: NOW)
+    try:
+        rig.provider.fail = False
+        assert (await service.fetch())["learning"] == "blocked"
+        assert service.pending_runs() == old and len(rig.provider.calls) == 1
+        assert not service.book.coverage() and not service.book.events("response")
+    finally:
+        service.close()
 
 
 @pytest.mark.asyncio
@@ -848,7 +933,9 @@ async def test_host_loader_and_recorded_native_source_entrypoint(rig):
         session_manager=rig.service.sessions,
         light_provider=rig.provider,
         light_model="offline-fake",
-        plugin_configs={"associative_notebook": {"enabled": True, "session_key": KEY}},
+        plugin_configs={"associative_notebook": {
+            "enabled": True, "session_key": KEY, "exploration_reasoning_effort": "low",
+        }},
     )
     journal = ExecutionJournal(rig.path)
     try:
@@ -875,6 +962,8 @@ async def test_host_loader_and_recorded_native_source_entrypoint(rig):
         assert record["status"] == "completed"
         assert any(e["kind"] == "tool" for e in record["effects"])
         assert len(rig.provider.calls) == 2
+        assert rig.provider.calls[0]["extra_body"] == {"reasoning_effort": "low"}
+        assert "extra_body" not in rig.provider.calls[1]
     finally:
         await manager.terminate_all()
         journal.close()
