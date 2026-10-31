@@ -1,0 +1,50 @@
+{
+  "inbound_job": "in:telegram:8659319400:6351167021:202",
+  "turn_id": "c31e04bd1b754ac48d04f51d431caa0f",
+  "inbound_state": "needs_review",
+  "execution_status": "interrupted",
+  "model_error": "CancelledError",
+  "final_result": null,
+  "linked_reply_job_found": false,
+  "durable_delivery_receipt_found": false,
+  "tool_effects": 0,
+  "nearby_message_metadata": [
+    {
+      "seq": 153,
+      "role": "user",
+      "external_message_id": "199",
+      "delivery_status": null,
+      "ts": "2026-11-01T03:44:26.311606+08:00",
+      "request_id": "in:telegram:8659319400:6351167021:199",
+      "inbound_message_id": "199"
+    },
+    {
+      "seq": 154,
+      "role": "assistant",
+      "external_message_id": "200",
+      "delivery_status": "sent",
+      "ts": "2026-11-01T03:44:26.311606+08:00",
+      "request_id": "in:telegram:8659319400:6351167021:199",
+      "inbound_message_id": "199"
+    },
+    {
+      "seq": 155,
+      "role": "user",
+      "external_message_id": null,
+      "delivery_status": null,
+      "ts": "2026-11-01T03:44:30.182511+08:00",
+      "request_id": null,
+      "inbound_message_id": null
+    },
+    {
+      "seq": 156,
+      "role": "assistant",
+      "external_message_id": "201",
+      "delivery_status": "sent",
+      "ts": "2026-11-01T03:44:30.182511+08:00",
+      "request_id": null,
+      "inbound_message_id": null
+    }
+  ],
+  "decision": "Keep needs_review; no retry, send or fabricated completion. Independent transient streaming previews cannot be ruled out from durable records."
+}

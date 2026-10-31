@@ -7,12 +7,42 @@ import os
 import time
 from pathlib import Path
 from uuid import uuid4
+from contextlib import contextmanager
+from weakref import WeakValueDictionary
 
 from core.execution.lease import EpochLease
 
 
 class WorkspaceInUse(RuntimeError):
     pass
+
+
+_OWNERS = WeakValueDictionary()
+
+
+@contextmanager
+def journal_maintenance(workspace: Path):
+    """Exclude external journal initialization/rebuild from a live Host.
+
+    Hold the same OS lock through cold maintenance so a Host cannot start in
+    the gap between a status check and a projection rebuild.
+    """
+    directory = _directory(workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        lease = EpochLease(directory / "owner.lock")
+    except (BlockingIOError, PermissionError) as exc:
+        owner = _OWNERS.get(str(directory))
+        if owner is None or owner.lease.file.closed or owner.base["pid"] != os.getpid():
+            raise WorkspaceInUse(
+                "Host owns this workspace; use read-only SQLite inspection or stop Host before journal maintenance"
+            ) from exc
+        yield  # The owning Host initializes its journal in this same process.
+    else:
+        try:
+            yield
+        finally:
+            lease.close()
 
 
 def _directory(workspace: Path) -> Path:
@@ -61,6 +91,7 @@ class WorkspaceOwner:
         self.owner_id = uuid4().hex
         self.base = {"owner_id": self.owner_id, "pid": os.getpid(), "mode": mode,
                      "started_at": datetime.now(timezone.utc).isoformat()}
+        _OWNERS[str(self.directory)] = self
 
     def publish(self, state: str, **details) -> None:
         _write(self.directory / "status.json", {**self.base, **details, "state": state,
