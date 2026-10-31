@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 from agent.plugins import Plugin
@@ -13,6 +15,7 @@ from .service import NotebookService
 class NotebookConfig(BaseModel):
     enabled: bool = False
     session_key: str = Field(default="", max_length=200)
+    exploration_reasoning_effort: Literal["inherit", "low"] = "inherit"
 
     @model_validator(mode="after")
     def explicit_scope(self):
@@ -122,6 +125,7 @@ class AssociativeNotebookPlugin(Plugin):
             sessions=self.context.session_manager,
             provider=self.context.light_provider,
             model=self.context.light_model,
+            exploration_reasoning_effort=cfg.exploration_reasoning_effort,
             outbox=getattr(push, "outbox", None),
         )
         for action in ("read", "fetch", "validate"):
