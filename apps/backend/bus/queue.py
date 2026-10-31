@@ -3,17 +3,18 @@ import logging
 from dataclasses import asdict
 from datetime import datetime
 from contextvars import ContextVar
+from collections.abc import Awaitable, Callable
 
 from bus.durable import TransportStore, Outbox
 from bus.transport_review import inbound_account
-from bus.events import InboundMessage
+from bus.events import InboundItem, InboundMessage, OutboundMessage, SpawnCompletionItem
+from bus.internal_events import SpawnCompletionEvent
+
+from bus.chat_lane import ChatLane
+from core.execution.contracts import ExecutionUnavailable
 
 inbound_job: ContextVar[str | None] = ContextVar('inbound_job', default=None)
-from collections.abc import Awaitable, Callable
-
-from bus.events import InboundItem, OutboundMessage
-from bus.chat_lane import ChatLane
-
+spawn_delivery_account: ContextVar[tuple[str, str | None] | None] = ContextVar('spawn_delivery_account', default=None)
 logger = logging.getLogger(__name__)
 
 
@@ -51,6 +52,16 @@ class MessageBus:
     async def consume_inbound(self) -> InboundItem:
         """阻塞直到有消息可消费"""
         while True:
+            if self.journal is not None:
+                completion = self.journal.claim_spawn_completion(accounts=self.outbox.accounts if self.outbox else {})
+                if completion is not None:
+                    token = completion.pop('claim_token')
+                    completion['event'] = SpawnCompletionEvent(**completion['event'])
+                    completion['timestamp'] = datetime.fromisoformat(completion['timestamp'])
+                    completion['metadata'] = {**completion.get('metadata', {}), '_spawn_claim': token}
+                    msg = SpawnCompletionItem(**completion)
+                    await self.chat_lane.mark_passive_pending(msg.channel, msg.chat_id)
+                    return msg
             if self.transport is not None:
                 rows = self.transport.pending('inbound')
                 if rows:
@@ -74,6 +85,10 @@ class MessageBus:
     async def publish_outbound(self, msg: OutboundMessage) -> None:
         """agent → channel"""
         if self.outbox is not None and msg.channel not in {'desktop', 'cli'}:
+            binding = spawn_delivery_account.get()
+            expected = binding[1] if binding is not None and binding[0] == msg.channel else msg.metadata.get('_spawn_account')
+            if binding is not None or '_spawn_account' in msg.metadata:
+                self._validate_spawn_account(msg.channel, expected)
             key = inbound_job.get() or msg.metadata.get('_transport_id')
             payload = asdict(msg)
             payload['media'] = [self.transport.snapshot_file(p) if not p.startswith(('http://', 'https://')) else p for p in msg.media]
@@ -83,6 +98,14 @@ class MessageBus:
         await self._outbound.put(msg)
 
     async def complete_inbound(self, msg: InboundItem) -> None:
+        if isinstance(msg, SpawnCompletionItem) and self.journal is not None and msg.metadata.get('_spawn_claim'):
+            handled = bool(msg.metadata.get('_spawn_handled'))
+            if handled:
+                try:
+                    self._ensure_spawn_reply(msg)
+                except ExecutionUnavailable:
+                    handled = False  # Account changed while processing; leave unacknowledged.
+            self.journal.settle_spawn_completion(msg.event.job_id, msg.metadata['_spawn_claim'], handled=handled)
         key = msg.metadata.get('_transport_id')
         if self.transport is not None and key:
             record = self.journal.find(msg.session_key, msg.channel, msg.metadata['execution_request_id']) if self.journal else None
@@ -98,6 +121,41 @@ class MessageBus:
             self.transport.state(key, state, delay=2)
             self.transport.active.discard(key)
         await self.chat_lane.mark_passive_done(msg.channel, msg.chat_id)
+
+    def _validate_spawn_account(self, channel, expected):
+        if channel not in {'desktop', 'cli'} and (
+                not expected or self.outbox is None or expected != self.outbox.accounts.get(channel)):
+            raise ExecutionUnavailable('后台结果的原渠道账号不可用，请核对渠道配置')
+
+    def validate_spawn_account(self, msg: SpawnCompletionItem):
+        self._validate_spawn_account(msg.channel, msg.metadata.get('_spawn_account'))
+
+    def _ensure_spawn_reply(self, msg: SpawnCompletionItem) -> None:
+        """Consumer receipt and channel delivery are separate durable responsibilities."""
+        if self.transport is None or self.outbox is None or msg.channel in {'desktop', 'cli'}:
+            return
+        self.validate_spawn_account(msg)
+        receipt = self.journal.spawn_completion(msg.event.job_id)
+        if not receipt or not receipt['consumer_turn_id']:
+            return
+        record = self.journal.get(receipt['consumer_turn_id'])
+        if record['status'] in {'accepted', 'running'}:
+            return
+        reply_key = 'reply:spawn:' + msg.event.job_id
+        if self.transport.db.execute('SELECT 1 FROM jobs WHERE id=?', (reply_key,)).fetchone():
+            return  # Includes unknown physical sends; never replace their payload.
+        payload = record['result'] if record['status'] == 'completed' else None
+        if payload is None:
+            payload = asdict(OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
+                content=f"后台结果已接纳，但后续执行未完成。请核对执行 {record['turn_id']}，不会自动重跑。",
+                metadata={'session_key_override': msg.session_key, 'execution_notice': record['turn_id'],
+                          'spawn_completion_notice': True}))
+        else:
+            payload = {**payload, 'media': [self.transport.snapshot_file(p)
+                       if not p.startswith(('http://', 'https://')) else p for p in payload.get('media', [])]}
+        self.outbox.enqueue('bus:' + msg.channel, payload, reply_key)
+        self.transport.link_execution(reply_key, record['turn_id'])
+
 
     def subscribe_outbound(
         self,

@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from .contracts import ACTIVE, CONTRACT_VERSION, TERMINAL, ExecutionConflict, ExecutionIdentity, ExecutionNeedsReview, ExecutionUnavailable
 from .lease import EpochLease
+from .spawn_handoff import SpawnHandoff, ensure_spawn_schema
 from .schema import ensure_event_schema
 from .projection import project_event, public_state, retry_policy, unresolved, unsafe_effects, ExecutionProjectionError
 
@@ -25,7 +26,7 @@ def encode(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-class ExecutionJournal:
+class ExecutionJournal(SpawnHandoff):
     def __init__(self, workspace: Path):
         self.directory = workspace / "private_runtime" / "execution"
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -66,8 +67,10 @@ class ExecutionJournal:
                 if identity["version"] != CONTRACT_VERSION:
                     raise RuntimeError("Unsupported execution journal version")
                 self.root_id = identity["root_id"]
+            ensure_spawn_schema(self._conn)
             self.rebuild_projection()
             self.recover_abandoned()
+            self.reconcile_spawn_completions()
         except BaseException:
             self._conn.close()
             self._lease.close()
@@ -136,7 +139,7 @@ class ExecutionJournal:
                         if deleted.rowcount != 1:
                             raise ExecutionProjectionError('Released candidate does not belong to this attempt')
                 self._conn.execute("""INSERT INTO executions(rowid,turn_id,run_id,epoch,session_key,source,request_key,input,status,result)
-                    VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(turn_id) DO UPDATE SET status=excluded.status,result=excluded.result""",
+                    VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(turn_id) DO UPDATE SET status=excluded.status,result=excluded.result,epoch=excluded.epoch""",
                     (state["cursor"], state["turn_id"], state["run_id"], state["epoch"], state["session_key"],
                      state["source"], state["request_key"], encode(state["input"]), state["status"],
                      encode(state["result"]) if state["result"] is not None else None))
@@ -175,35 +178,38 @@ class ExecutionJournal:
                 raise
 
     def admit(self, session_key: str, source: str, request_key: str, payload: dict) -> tuple[dict, bool]:
+        with self._transaction():
+            return self._admit(session_key, source, request_key, payload)
+
+    def _admit(self, session_key: str, source: str, request_key: str, payload: dict):
         if not all(isinstance(s, str) and s.strip() for s in (session_key, source, request_key)):
             raise ValueError("Execution identity must not be empty")
         serialized = encode(payload)
-        with self._transaction():
-            old = self._conn.execute("SELECT * FROM executions WHERE source=? AND session_key=? AND request_key=?",
-                                     (source, session_key, request_key)).fetchone()
-            if old is not None:
-                if old["input"] != serialized:
-                    raise ExecutionConflict("执行请求标识已用于不同内容")
-                return self._decode(old), False
-            # A fresh transport/request id must not bypass pending human review.
-            # Only the exact same desktop input is held; distinct requests and
-            # external transports retain their existing admission semantics.
-            if source == "desktop":
-                pending = self._conn.execute(
-                    "SELECT turn_id FROM executions WHERE source=? AND session_key=? AND input=? AND status IN ('failed','interrupted','needs_review')",
-                    (source, session_key, serialized),
-                ).fetchall()
-                for candidate in pending:
-                    state = self._state(candidate["turn_id"])
-                    if unsafe_effects(state) and not state["retry_turn_id"] and not (state["review"] and state["review"]["decision"] == "close"):
-                        error = ExecutionNeedsReview if state["status"] == "needs_review" else ExecutionUnavailable
-                        raise error("同一输入已有外部操作，请在工作台核对执行记录并处置；请勿直接重发", state)
-            identity = ExecutionIdentity(self.root_id, self.epoch, session_key, source, request_key, uuid4().hex, uuid4().hex)
-            row = asdict(identity)
-            if self._conn.execute("SELECT 1 FROM executions WHERE session_key=? AND status IN ('accepted','running') AND (source='proactive')=?", (session_key, source == 'proactive')).fetchone():
-                raise ExecutionConflict("此会话已有接纳的执行，请查询其状态")
-            self._event(row, "request.accepted", {"identity": row, "input": payload})
-            return {**row, "input": payload, "status": "accepted", "result": None}, True
+        old = self._conn.execute("SELECT * FROM executions WHERE source=? AND session_key=? AND request_key=?",
+                                 (source, session_key, request_key)).fetchone()
+        if old is not None:
+            if old["input"] != serialized:
+                raise ExecutionConflict("执行请求标识已用于不同内容")
+            return self._decode(old), False
+        # A fresh transport/request id must not bypass pending human review.
+        # Only the exact same desktop input is held; distinct requests and
+        # external transports retain their existing admission semantics.
+        if source == "desktop":
+            pending = self._conn.execute(
+                "SELECT turn_id FROM executions WHERE source=? AND session_key=? AND input=? AND status IN ('failed','interrupted','needs_review')",
+                (source, session_key, serialized),
+            ).fetchall()
+            for candidate in pending:
+                state = self._state(candidate["turn_id"])
+                if unsafe_effects(state) and not state["retry_turn_id"] and not (state["review"] and state["review"]["decision"] == "close"):
+                    error = ExecutionNeedsReview if state["status"] == "needs_review" else ExecutionUnavailable
+                    raise error("同一输入已有外部操作，请在工作台核对执行记录并处置；请勿直接重发", state)
+        identity = ExecutionIdentity(self.root_id, self.epoch, session_key, source, request_key, uuid4().hex, uuid4().hex)
+        row = asdict(identity)
+        if self._conn.execute("SELECT 1 FROM executions WHERE session_key=? AND status IN ('accepted','running') AND (source='proactive')=?", (session_key, source == 'proactive')).fetchone():
+            raise ExecutionConflict("此会话已有接纳的执行，请查询其状态")
+        self._event(row, "request.accepted", {"identity": row, "input": payload})
+        return {**row, "input": payload, "status": "accepted", "result": None}, True
 
     def _row(self, turn_id: str):
         row = self._conn.execute("SELECT * FROM executions WHERE turn_id=?", (turn_id,)).fetchone()
@@ -372,6 +378,7 @@ class ExecutionJournal:
                 raise ExecutionConflict("Execution already ended or belongs to another epoch")
             status = "needs_review" if self._unresolved(turn_id) else status
             self._event(row, "run.ended", {"status": status, "result": result})
+            self._derive_spawn_completion(self._row(turn_id))
 
     def recover_abandoned(self):
         with self._transaction():
@@ -383,11 +390,16 @@ class ExecutionJournal:
                 continue  # The original runtime still owns this epoch.
             try:
                 with self._transaction():
-                    for row in self._conn.execute("SELECT * FROM executions WHERE epoch=? AND status IN ('accepted','running')", (epoch,)).fetchall():
-                        status = "needs_review" if self._unresolved(row["turn_id"]) else "interrupted"
-                        self._event(row, "run.recovered", {"status": status, "recovered_by_epoch": self.epoch, "automatic_retry": False})
+                    self._recover_epoch(epoch)
             finally:
                 lease.close()
+
+    def _recover_epoch(self, epoch):
+        # Caller holds the dead epoch's OS lease and the journal transaction.
+        for row in self._conn.execute("SELECT * FROM executions WHERE epoch=? AND status IN ('accepted','running')", (epoch,)).fetchall():
+            status = 'needs_review' if self._unresolved(row['turn_id']) else 'interrupted'
+            self._event(row, 'run.recovered', {'status': status, 'recovered_by_epoch': self.epoch, 'automatic_retry': False})
+            self._derive_spawn_completion(self._row(row['turn_id']))
 
     def _decode(self, row) -> dict:
         return {**dict(row), "root_id": self.root_id, "input": json.loads(row["input"]),

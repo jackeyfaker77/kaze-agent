@@ -40,6 +40,12 @@ def project_event(previous: dict | None, event: dict, root_id: str) -> dict:
     if kind == "run.started":
         require(state["status"] == "accepted")
         state["status"] = "running"
+        state['started'] = True
+    elif kind == 'spawn.admission.reclaimed':
+        require(state['source'] == 'spawn_completion' and state['status'] == 'interrupted'
+                and not state.get('started') and (state.get('review') or {}).get('decision') != 'close')
+        require(isinstance(payload.get('epoch'), str) and bool(payload['epoch']))
+        state.update(status='accepted', epoch=payload['epoch'])
     elif kind == 'continuation.started':
         require(state['status'] == 'accepted' and not state.get('continuation'))
         require(payload.get('version') == 1 and payload.get('source_turn_id') != state['turn_id'])

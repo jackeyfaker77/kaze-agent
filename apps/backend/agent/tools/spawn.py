@@ -8,6 +8,7 @@ from agent.policies.delegation import DelegationPolicy
 from agent.tool_hooks.base import ToolHook
 from agent.tools.base import Tool
 from agent.tools.registry import ToolRegistry
+from core.execution.contracts import ExecutionConflict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -113,7 +114,7 @@ subagent 没有看过当前会话。像给刚进房间的同事写交接文档�
                 },
                 "retry_count": {
                     "type": "integer",
-                    "description": "当前后台任务已重试次数。首次调用为 0，重试时传 1。",
+                    "description": "兼容字段；实际补做次数与限额由 Host 按父执行身份持久裁决。",
                     "minimum": 0,
                 },
             },
@@ -176,14 +177,18 @@ subagent 没有看过当前会话。像给刚进房间的同事写交接文档�
             ).strip()
             if origin_session_key:
                 spawn_kwargs["origin_session_key"] = origin_session_key
-            return await self._manager.spawn(
-                **spawn_kwargs,
-            )
+            try:
+                return await self._manager.spawn(**spawn_kwargs)
+            except ExecutionConflict as exc:
+                return f"任务被拦截：{exc}"
 
         ctx = self._tool_registry.get_context()
 
         spawn_sync_kwargs = {"task": task, "label": label, "profile": profile}
-        return await self._manager.spawn_sync(**spawn_sync_kwargs)
+        try:
+            return await self._manager.spawn_sync(**spawn_sync_kwargs)
+        except ExecutionConflict as exc:
+            return f"任务被拦截：{exc}"
 
 
 class SpawnManageTool(Tool):

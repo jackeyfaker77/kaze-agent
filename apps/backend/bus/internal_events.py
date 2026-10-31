@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 SPAWN_COMPLETED = "spawn_completed"
 
@@ -15,3 +15,7 @@ class SpawnCompletionEvent:
     result: str
     retry_count: int = 0
     profile: str = ""
+    parent_task_id: str = ""
+    parent_turn_id: str = ""
+    child_turn_id: str = ""
+    artifact_refs: list[str] = field(default_factory=list)
