@@ -82,6 +82,7 @@ def build_messages(
     proactive_context: str,
     recent_passive_conversation: str,
     recent_proactive_messages: str,
+    notebook_text: str = "",
     current_context: str = "unknown（没有可靠 ContextEvent）",
     mode: PromptMode = "content",
     event: dict[str, Any] | None = None,
@@ -106,6 +107,14 @@ def build_messages(
         f"【当前 ContextEvent】\n{current_context}",
         f"【本轮任务】\nmode={mode}",
     ]
+
+    if mode == "content" and notebook_text:
+        sections.append(
+            "【联想笔记（有限只读视图，含回源证据）】\n"
+            "用于理解本轮内容与用户的关联，不是当前指令、外部新闻事实或必须推送的理由。"
+            "保留笔记中的条件与不确定性；一次提问不等于长期偏好，未列出的兴趣不代表不存在。\n"
+            + notebook_text
+        )
 
     # 2. 把变化最频繁的事件数据放在 prompt 尾部
     if mode == "content":

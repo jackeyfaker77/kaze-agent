@@ -373,6 +373,119 @@ async def test_drift_read_composes_existing_host_guard_and_revalidates_before_se
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["new_material", "expiry", "user_activity"])
+async def test_feed_wake_uses_notebook_in_both_phases_and_fences_queued_send(rig, change):
+    from unittest.mock import AsyncMock
+    from agent.provider import LLMResponse, ToolCall
+    from bus.durable import DeliveryStopped
+    from core.execution.journal import ExecutionJournal
+    from core.execution.proactive import run_proactive_recorded, proactive_scope
+    from plugins.wake_proactive.runtime import WakeRuntime
+    from proactive_v2.frame import new_proactive_frame
+    from tests.backend.proactive_v2.akashic_wake.test_runtime import (
+        _scope, _source, FixedClock, FakeGateway, FakeWebFetch, FailingOrchestrator,
+    )
+
+    rig.add("interest in open hardware")
+    await rig.service.refresh()
+    note = rig.service.read()["notes"][0]
+    learning_calls = len(rig.provider.calls)
+    provider = SimpleNamespace(chat=AsyncMock(side_effect=[
+        LLMResponse(content=None, tool_calls=[ToolCall("s", "scratchpad", {
+            "items": [{"item_id": "candidate_1", "initial_interest": "likely_interesting"}],
+        })]),
+        LLMResponse(content=None, tool_calls=[ToolCall("f", "share_content", {
+            "items": [{"item_id": "candidate_1", "summary": "A relevant release",
+                       "why_it_matters": "Matches the recorded interest"}],
+        })]),
+    ]))
+    registry = ToolRegistry()
+    registry.register(NotebookTool(rig.service))
+    registry.register(cast(Any, FakeWebFetch()))
+    runtime_scope = _scope(rig.path, FakeGateway([]), provider, FailingOrchestrator(), _source("content"))
+    runtime_scope.shared_tools = registry
+    runtime = WakeRuntime(runtime_scope, clock=FixedClock(datetime.fromisoformat(NOW)))
+    state = runtime.begin(new_proactive_frame(KEY))
+    # The only content candidate is a Feed article, not a notebook finding.
+    state.ctx.content_events = [{"id": "article", "event_id": "article", "source": "feed",
+                                 "title": "Hardware release", "url": "https://example.com/release"}]
+    transport = TransportStore(rig.path)
+    journal = ExecutionJournal(rig.path)
+    outbox = Outbox(transport, None)
+    sent = []
+    user_idle = [True]
+
+    async def physical():
+        sent.append(True)
+        return "external-id"
+
+    async def handler(payload):
+        if change == "new_material":
+            rig.add("Cancel that interest")
+        elif change == "expiry":
+            rig.clock[0] = "2026-11-02T10:00:00+00:00"
+        else:
+            user_idle[0] = False
+        return await outbox.part("text", {"body": "cached"}, physical)
+
+    async def operation():
+        execution = cast(Any, proactive_scope())
+        async def previous_guard():
+            return user_idle[0]
+        execution.proactive_host_guard = previous_guard
+        await runtime._run_content_tools(state.ctx)
+        assert state.ctx.terminal_action == "reply"
+        assert provider.chat.await_count == 2
+        for call in provider.chat.await_args_list:
+            prompt = "\n".join(m["content"] for m in call.kwargs["messages"])
+            assert note["id"] in prompt and note["text"] in prompt
+            assert note["evidence"][0]["ref"] in prompt
+            assert "Hardware release" in prompt
+        assert len(rig.provider.calls) == learning_calls
+        assert await execution.proactive_host_guard()
+        outbox.handlers["push:telegram"] = handler
+        key = outbox.enqueue("push:telegram", {"channel": "telegram", "chat_id": "42"})
+        with pytest.raises(DeliveryStopped, match="proactive_revalidation_failed"):
+            await outbox.deliver(key)
+        return 0
+
+    try:
+        await run_proactive_recorded(journal, KEY, "wake-notebook", {}, operation)
+        assert not sent
+    finally:
+        runtime.close()
+        transport.close()
+        journal.close()
+
+
+@pytest.mark.asyncio
+async def test_wake_notebook_read_disabled_unready_and_wrong_scope(rig):
+    from unittest.mock import AsyncMock
+    from plugins.wake_proactive.runtime import WakeRuntime
+    from tests.backend.proactive_v2.akashic_wake.test_runtime import (
+        _scope, _source, FakeGateway, FailingOrchestrator,
+    )
+    registry = ToolRegistry()
+    runtime_scope = _scope(rig.path, FakeGateway([]), SimpleNamespace(chat=AsyncMock()),
+                           FailingOrchestrator(), _source("content"))
+    runtime_scope.shared_tools = registry
+    runtime = WakeRuntime(runtime_scope)
+    try:
+        assert await runtime._read_notebook() == ""
+        rig.add("interest not learned yet")
+        registry.register(NotebookTool(rig.service))
+        with scope():
+            assert await runtime._read_notebook() == ""
+        with scope("another:user"):
+            with pytest.raises(NotebookError, match="scope mismatch"):
+                await runtime._read_notebook()
+        assert not rig.provider.calls
+        runtime_scope.provider.chat.assert_not_awaited()
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_real_outbox_confirmed_part_attribution_not_aggregate_job(rig):
     rig.add("activity")
     candidate = (await rig.service.refresh())[0]
