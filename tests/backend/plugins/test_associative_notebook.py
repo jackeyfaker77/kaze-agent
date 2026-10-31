@@ -25,11 +25,129 @@ from proactive_v2.mcp_sources import (
 )
 from agent.plugins.specs import RegisteredProactiveSource
 from session.store import SessionStore
+from agent.tools.forget_memory import ForgetMemoryTool
+from core.memory.engine import MemoryToolSpec
+from memory2.store import MemoryStore2
+from plugins.default_memory.engine import DefaultMemoryEngine
 from bus.durable import TransportStore, Outbox
 
 
 NOW = "2026-10-31T10:00:00+00:00"
 KEY = "desktop:owner"
+
+
+@pytest.mark.asyncio
+async def test_unified_forget_retires_both_stores_without_unrelated_loss(rig):
+    rig.add("activity")
+    await rig.service.refresh()
+    rig.add("interest")
+    await rig.service.refresh()
+    with correction_memory(rig.path) as (store, engine, tool):
+        memory_id = store.upsert_item("profile", "activity", None).split(":")[1]
+        unrelated = store.upsert_item("preference", "interest", None).split(":")[1]
+        registry = ToolRegistry()
+        registry.register(tool)
+        plugin = AssociativeNotebookPlugin()
+        plugin.context = cast(Any, SimpleNamespace(
+            config=NotebookConfig(enabled=True, session_key=KEY), workspace=rig.path,
+            session_manager=rig.service.sessions, light_provider=rig.provider,
+            light_model="fake", tool_registry=registry, memory_engine=engine))
+        import plugins.associative_notebook.plugin as plugin_module
+        from unittest.mock import patch
+        with patch.object(plugin_module, "NotebookService", return_value=rig.service):
+            await plugin.initialize()
+        try:
+            target = rig.service.read("activity")["notes"][0]
+            old_ref = target["evidence"][0]["ref"]
+            rig.add("that activity was wrong")
+            assert not rig.service.read()["ready"]
+            assert rig.service.read()["correction_targets"] == []
+            assert target["forget_id"] in [n["forget_id"] for n in rig.service.read(for_correction=True)["correction_targets"]]
+            with scope(), pytest.raises(NotebookError, match="Proactive consumption"):
+                await NotebookTool(rig.service).execute(for_correction=True)
+            with scope(proactive=False):
+                result = json.loads(await tool.execute(ids=[memory_id, target["forget_id"]], session_key=KEY))
+            assert set(result["superseded_ids"]) == {memory_id, target["forget_id"]}
+            assert result["missing_ids"] == []
+            assert store.get_item_for_admin(memory_id)["status"] == "superseded"
+            assert store.get_item_for_admin(unrelated)["status"] == "active"
+            assert target["id"] not in rig.service.book.active_notes()
+            assert any(n["text"] == "interest" for n in rig.service.book.active_notes().values())
+            assert not rig.service.book.preview()
+            from plugins.associative_notebook.core.contracts import Note
+            with pytest.raises(NotebookError, match="Corrected evidence"):
+                rig.service.book._validate_note(Note(topic="activity", title="activity", text="reworded",
+                    kind="statement", evidence=[{"ref": old_ref, "quote": "activity"}], related=[], occurred_at=None),
+                    {old_ref}, {"activity", "interest"})
+            assert store.upsert_item("profile", "activity", None) == "skipped:" + memory_id
+            with scope(proactive=False):
+                assert json.loads(await tool.execute(ids=[target["forget_id"], memory_id], session_key=KEY))[
+                    "superseded_ids"] == result["superseded_ids"]
+        finally:
+            await plugin.terminate()
+        assert tool.notebook is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_write", [False, True])
+async def test_unified_forget_recovers_interrupted_memory_write_after_reopen(rig, after_write):
+    rig.add("activity")
+    await rig.service.refresh()
+    with correction_memory(rig.path) as (store, engine, tool):
+        memory_id = store.upsert_item("profile", "activity", None).split(":")[1]
+        target = rig.service.read()["notes"][0]["forget_id"]
+        tool.notebook = rig.service
+        original = engine.mutate
+        async def fail(request):
+            if after_write:
+                await original(request)
+            raise OSError("interrupted")
+        engine.mutate = fail
+        with scope(proactive=False), pytest.raises(OSError, match="interrupted"):
+            await tool.execute(ids=[memory_id, target], session_key=KEY)
+        assert not rig.service.read()["ready"] and not rig.service.candidates()
+        reopened = rig.reopen()
+        assert not reopened.ready()
+        engine.mutate = original
+        reopened.memory_engine = engine
+        await reopened.refresh()
+        assert store.get_item_for_admin(memory_id)["status"] == "superseded"
+        assert not reopened.book.active_notes() and not reopened.pending_corrections()
+        assert len(reopened.book.events("forget_completed")) == 1
+        await reopened.refresh()
+        assert len(reopened.book.events("forget_completed")) == 1
+
+
+@pytest.mark.asyncio
+async def test_unified_forget_rejects_foreign_execution_and_reports_missing_targets(rig):
+    rig.add("activity")
+    await rig.service.refresh()
+    with correction_memory(rig.path) as (store, engine, tool):
+        memory_id = store.upsert_item("profile", "activity", None).split(":")[1]
+        target = rig.service.read()["notes"][0]["forget_id"]
+        tool.notebook = rig.service
+        with scope(key="desktop:other", proactive=False), pytest.raises(NotebookError, match="recorded"):
+            await tool.execute(ids=[memory_id, target], session_key=KEY)
+        with scope(), pytest.raises(NotebookError, match="recorded"):
+            await tool.execute(ids=[memory_id, target], session_key=KEY)
+        assert store.get_item_for_admin(memory_id)["status"] == "active"
+        assert not rig.service.book.events("correction")
+        with scope(proactive=False):
+            result = json.loads(await tool.execute(ids=["missing", "notebook:missing"], session_key=KEY))
+        assert result["superseded_ids"] == []
+        assert set(result["missing_ids"]) == {"missing", "notebook:missing"}
+
+
+@contextmanager
+def correction_memory(path):
+    store = MemoryStore2(path / "memory2.db")
+    engine = DefaultMemoryEngine.__new__(DefaultMemoryEngine)
+    engine._v2_store = store
+    tool = ForgetMemoryTool(engine, MemoryToolSpec(description="forget", parameters=ForgetMemoryTool.parameters))
+    try:
+        yield store, engine, tool
+    finally:
+        store.close()
 
 
 class Provider:
