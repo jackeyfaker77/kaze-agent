@@ -195,6 +195,30 @@ async def test_direct_registered_source_does_not_require_managed_connection(proa
 
 
 @pytest.mark.asyncio
+async def test_native_plugin_source_passes_host_health_gate_and_still_polls_300(proactive_setup):
+    setup = proactive_setup
+    setup.runtime.mcp_registry = SimpleNamespace(health=lambda: {'unrelated_optional': False})
+    for name, callback in (('native_fetch', setup.fetch), ('native_ack', setup.ack)):
+        setup.runtime.tools.register(SourceTool(name, callback), source_type='plugin', source_name='notebook-test')
+    (setup.sessions.workspace / 'proactive_sources.json').write_text(json.dumps({'sources': [{
+        'server': 'plugin:notebook-test', 'channel': 'alert', 'get_tool': 'native_fetch', 'ack_tool': 'native_ack',
+    }]}), encoding='utf-8')
+    loop = await setup.start()
+    await loop._tick()
+    setup.fetch.assert_awaited_once()
+    setup.sender.assert_awaited_once()
+    setup.ack.assert_awaited_once()
+    assert loop._next_interval() == 300
+    # A same-named tool owned by another plugin cannot satisfy the declared source.
+    setup.runtime.tools.unregister('native_fetch')
+    setup.runtime.tools.register(SourceTool('native_fetch', setup.fetch), source_type='plugin', source_name='other')
+    before = setup.sessions.execution_journal.list_executions()
+    await loop._tick()
+    assert setup.sessions.execution_journal.list_executions() == before
+    setup.fetch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_wake_delivers_without_heartbeat_and_persists_only_after_receipt(
     proactive_setup,
 ):

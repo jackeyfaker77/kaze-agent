@@ -577,3 +577,67 @@ async def test_host_loader_and_recorded_native_source_entrypoint(rig):
         await manager.terminate_all()
         journal.close()
     assert registry.get_tool("notebook_read") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("edit", ["content", "attribution"])
+async def test_projection_rewrite_never_backfills_or_invalidates_unchanged_facts(
+    rig, edit
+):
+    rig.add("old interest before activation")
+    service = NotebookService(
+        directory=rig.path / "late-book",
+        session_key=KEY,
+        sessions=rig.service.sessions,
+        provider=rig.provider,
+        model="offline-fake",
+        clock=lambda: NOW,
+    )
+    service.provider = rig.provider
+
+    def rewrite():
+        rows = rig.store.fetch_session_messages(KEY)
+        rig.store.replace_session_messages(
+            KEY,
+            rows=[
+                {**row, "extra": {"metadata": row.get("metadata", {})}} for row in rows
+            ],
+            updated_at=NOW,
+            last_consolidated=0,
+            next_seq=rig.store.next_seq(KEY),
+        )
+
+    try:
+        rewrite()
+        assert service.materials()[0] == {}
+        assert await service.refresh() == []
+        assert not rig.provider.calls
+        new = rig.add("new activity after activation")
+        await service.refresh()
+        before = service.read()
+        sources = service.book.sources()
+        rig.store.update_message(
+            new["id"], extra={"metadata": {"display_label": "UI-only change"}}
+        )
+        rewrite()
+        assert service.read() == before
+        assert service.materials()[0] == sources
+        await service.refresh()
+        assert len(rig.provider.calls) == 2
+        if edit == "content":
+            rig.store.update_message(new["id"], content="different activity")
+        else:
+            rig.store.update_message(
+                new["id"],
+                extra={
+                    "metadata": {
+                        "transport_channel": "telegram",
+                        "transport_chat_id": "different",
+                    }
+                },
+            )
+        with pytest.raises(NotebookError, match="edited or deleted"):
+            service.read()
+        assert len(rig.provider.calls) == 2
+    finally:
+        service.close()

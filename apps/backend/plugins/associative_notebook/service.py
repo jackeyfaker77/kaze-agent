@@ -141,6 +141,11 @@ class NotebookService:
                 "activation",
                 {
                     "through_seq": snapshot["through_seq"],
+                    "existing_user_ids": [
+                        row["id"]
+                        for row in snapshot["messages"]
+                        if row["role"] == "user"
+                    ],
                 },
             )
 
@@ -153,13 +158,15 @@ class NotebookService:
             str(snapshot["root_id"]) == self.book.identity["owner"],
             "Runtime root changed",
         )
-        cutoff = self.book.events("activation")[0]["payload"]["through_seq"]
+        excluded = set(
+            self.book.events("activation")[0]["payload"]["existing_user_ids"]
+        )
         sources, rows = {}, {}
         for row in snapshot["messages"]:
             if row["role"] != "user" or row.get("proactive"):
                 continue
             link = snapshot["links"].get(row["id"])
-            if not link or int(link["seq"]) <= cutoff:
+            if not link or row["id"] in excluded:
                 continue
             content = row.get("content")
             metadata = row.get("metadata") or {}
@@ -168,13 +175,28 @@ class NotebookService:
                 content = metadata.get("user_text")
             if not isinstance(content, str) or not content.strip():
                 continue
+            # Projection rewrites and UI metadata do not create new user facts.
+            # Keep source identity stable, while fencing actual text/attribution edits.
+            version = digest(
+                [
+                    content,
+                    {
+                        key: metadata.get(key)
+                        for key in (
+                            "reply_to_message_id",
+                            "transport_channel",
+                            "transport_chat_id",
+                        )
+                    },
+                ]
+            )
             value = Source(
                 id=str(row["id"]),
-                version=digest([content, metadata]),
+                version=version,
                 kind="user",
                 text=content,
                 locator="runtime:"
-                + digest([snapshot["root_id"], self.session_key, row["id"], link]),
+                + digest([snapshot["root_id"], self.session_key, row["id"], version]),
             )
             sources[value.ref], rows[value.ref] = asdict(value), row
         return sources, rows
