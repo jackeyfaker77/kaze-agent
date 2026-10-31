@@ -61,6 +61,18 @@ async def test_send_markdown_splits_long_code_block_into_multiple_messages():
 @pytest.mark.asyncio
 async def test_outbound_limiter_retries_after_cooling_down(monkeypatch):
     from infra.channels import telegram_utils as mod
+    from infra.channels.telegram_utils import limiter as limiter_module
+
+    # The cooldown assertion must not depend on CI logging/scheduling latency.
+    # Patch only this module's asyncio view, not the event loop's real clock.
+    clock = [100.0]
+    async def advance(delay):
+        clock[0] += delay
+    sleep_mock = AsyncMock(side_effect=advance)
+    monkeypatch.setattr(limiter_module, "asyncio", SimpleNamespace(
+        Lock=asyncio.Lock, sleep=sleep_mock,
+        get_running_loop=lambda: SimpleNamespace(time=lambda: clock[0]),
+    ))
 
     limiter = TelegramOutboundLimiter(
         send_interval_s=2.0,
@@ -68,13 +80,13 @@ async def test_outbound_limiter_retries_after_cooling_down(monkeypatch):
         retry_padding_s=1.0,
         max_attempts=2,
     )
-    sleep_mock = AsyncMock()
-    monkeypatch.setattr("infra.channels.telegram_utils.asyncio.sleep", sleep_mock)
     calls = 0
+    call_times = []
 
     async def action():
         nonlocal calls
         calls += 1
+        call_times.append(clock[0])
         if calls == 1:
             raise mod.RetryAfter(cast(Any, 3.0))
         return "ok"
@@ -83,7 +95,8 @@ async def test_outbound_limiter_retries_after_cooling_down(monkeypatch):
 
     assert result == "ok"
     assert calls == 2
-    assert sleep_mock.await_args_list[0].args[0] >= 3.9
+    sleep_mock.assert_awaited_once_with(4.0)
+    assert call_times == [100.0, 104.0]
 
 
 @pytest.mark.asyncio
