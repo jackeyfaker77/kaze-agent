@@ -66,6 +66,13 @@ class _PushPort:
             defer_before_delivery()
             observe('deliver.deferred', reason='user_activity_before_delivery')
             return False
+        host_guard = getattr(proactive_scope(), 'proactive_host_guard', None)
+        if (not getattr(proactive_scope(), 'proactive_receipts_only', False)
+                and host_guard is not None and not await host_guard()):
+            from core.execution.proactive import defer_before_delivery
+            defer_before_delivery()
+            observe('deliver.deferred', reason='source_changed_before_delivery')
+            return False
         push = self.runtime.push_tool
         if hasattr(push, "send"):
             outbox = getattr(push, 'outbox', None)
@@ -251,9 +258,16 @@ class KazeProactiveLoop(ProactiveLoop):
         health = registry.health() if registry is not None else {}
         # Plugins may register source tools directly without a managed stdio
         # connection. Managed offline connections must still block stale tools.
+        def source_ready(source):
+            spec = source.spec
+            if spec.server.startswith('plugin:'):
+                return spec.fetch_tool in self.runtime.tools.get_tool_names_by_source(
+                    'plugin', spec.server.removeprefix('plugin:'))
+            return health.get(spec.server, self.runtime.tools.has_tool(
+                f'mcp_{spec.server}__{spec.fetch_tool}'))
+
         if registry is not None and any(
-            not health.get(source.spec.server, self.runtime.tools.has_tool(
-                f'mcp_{source.spec.server}__{source.spec.fetch_tool}'))
+            not source_ready(source)
             for source in self._plugin_proactive_sources
         ):
             logger.warning('主动来源 MCP 尚未就绪；等待连接恢复，不派发工具或模型请求')

@@ -41,9 +41,11 @@ class SharedMcpGateway:
     ) -> Any:
         if self._tools is None:
             raise RuntimeError("共享 ToolRegistry 不可用")
-        names = self._tools.get_tool_names_by_source("mcp", server)
+        native = server.startswith('plugin:')
+        names = self._tools.get_tool_names_by_source(
+            'plugin' if native else 'mcp', server.removeprefix('plugin:') if native else server)
         registered_name = (
-            tool_name if tool_name in names else f"mcp_{server}__{tool_name}"
+            tool_name if tool_name in names or native else f"mcp_{server}__{tool_name}"
         )
         if registered_name not in names:
             raise RuntimeError(f"MCP tool 不可用: {server}.{tool_name}")

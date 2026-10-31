@@ -955,6 +955,7 @@ def build_drift_tool_registry(
     shared = deps.shared_tools
     for name in (
         "recall_memory",
+        "notebook_read",
         "web_fetch",
         "web_search",
         "fetch_messages",

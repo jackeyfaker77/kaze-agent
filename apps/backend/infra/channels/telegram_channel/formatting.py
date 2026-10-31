@@ -167,7 +167,7 @@ def _build_inbound_text_with_reply(
         if getattr(reply_msg, "photo", None):
             reply_text = "[图片]"
         else:
-            return text, {"reply_to_message_id": int(reply_msg.message_id)}
+            return text, {"reply_to_message_id": int(reply_msg.message_id), "user_text": text}
 
     reply_sender = ""
     from_user = getattr(reply_msg, "from_user", None)
@@ -182,5 +182,6 @@ def _build_inbound_text_with_reply(
     )
     return merged, {
         "reply_to_message_id": int(reply_msg.message_id),
+        "user_text": text,
         "reply_to_sender": sender_label,
     }
