@@ -380,7 +380,7 @@ class GoalStore:
                 return None
             # P0 runs one goal phase at a time, including across journal instances.
             if any(
-                json.loads(r[0])["active_phase"]
+                self._blocks_dispatch(json.loads(r[0]))
                 for r in self.journal._conn.execute("SELECT state FROM goal_views")
             ):
                 return None
@@ -534,6 +534,43 @@ class GoalStore:
         if denied:
             raise GoalBlocked(denied["detail"])
         return reservation_id
+
+    @staticmethod
+    def _blocks_dispatch(state):
+        return state["active_phase"] or any(
+            item["action"] == "verify:command"
+            and item["status"] != "settled"
+            and not item.get("command_resolution")
+            for item in state["reservations"].values()
+        )
+
+    def resolve_command(
+        self, goal_id, reservation_id, *, expected_version, confirmed_stopped, note
+    ):
+        """Host attestation only: release serialization, never refund or retry work."""
+        if (
+            confirmed_stopped is not True
+            or not isinstance(note, str)
+            or not note.strip()
+        ):
+            raise ValueError("Confirm command exit and record the artifact inspection")
+        with self.journal._transaction():
+            state = self._read(goal_id)
+            self._expected(state, expected_version)
+            item = state["reservations"][reservation_id]
+            if state["active_phase"] or item["action"] != "verify:command":
+                raise GoalConflict(
+                    "Only an inactive command reservation can be resolved"
+                )
+            if item["status"] == "settled" or item.get("command_resolution"):
+                raise GoalConflict("Command already has a receipt or resolution")
+            item["command_resolution"] = {
+                "confirmed_stopped": True,
+                "note": note.strip(),
+                "created_at": utcnow(),
+            }
+            self._save(state, "command_stop_confirmed_by_host")
+            return state
 
     def settle(self, goal_id, reservation_id, *, known, receipt):
         receipt = json.loads(encode(receipt))

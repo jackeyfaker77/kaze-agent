@@ -112,6 +112,12 @@ def main():
     cancel.add_argument("goal_id")
     cancel.add_argument("--version", type=int, required=True)
     cancel.add_argument("--revoke", action="store_true")
+    resolve = sub.add_parser("resolve-command")
+    resolve.add_argument("goal_id")
+    resolve.add_argument("reservation_id")
+    resolve.add_argument("--version", type=int, required=True)
+    resolve.add_argument("--confirm-stopped", action="store_true", required=True)
+    resolve.add_argument("--note", required=True)
     args = parser.parse_args()
     if args.command == "demo":
         if args.workspace:
@@ -135,6 +141,14 @@ def main():
                     spec["definition"],
                     spec["authorization"],
                     parent_execution_id=spec.get("parent_execution_id", ""),
+                )
+            elif args.command == "resolve-command":
+                result = store.resolve_command(
+                    args.goal_id,
+                    args.reservation_id,
+                    expected_version=args.version,
+                    confirmed_stopped=args.confirm_stopped,
+                    note=args.note,
                 )
             elif args.command == "cancel":
                 result = store.cancel(
