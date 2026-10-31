@@ -373,6 +373,11 @@ async def test_truncated_nonstream_response_cannot_dispatch_tools(tmp_path, fini
             response = next(e['payload'] for e in journal.events(scope.turn_id, limit=500)['events']
                             if e['kind'] == 'model.response.recorded')
             assert 'error_type' in response and 'response' not in response
+            if finish == 'length':
+                assert response['diagnostics']['reason'] == 'output_truncated'
+                partial = response['diagnostics']['partial_response']
+                assert partial['choices'][0]['message']['content'] == 'unfinished'
+                assert partial['choices'][0]['finish_reason'] == 'length'
             assert journal.interaction_history(scope.turn_id)['messages'] == []
             assert not journal.get(scope.turn_id)['effects'] and len(wire) == 1
     finally:

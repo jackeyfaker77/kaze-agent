@@ -6,7 +6,7 @@ from agent.plugins import Plugin
 from agent.plugins.specs import ProactiveSourceSpec
 from agent.tools.base import Tool
 from core.execution.scope import active_execution
-from .core.contracts import digest, encode, require
+from .core.contracts import NotebookError, digest, encode, require
 from .service import NotebookService
 
 
@@ -63,9 +63,12 @@ class NotebookTool(Tool):
                 getattr(scope, "proactive", False),
                 "Only the existing proactive tick may learn",
             )
-            return encode(await self.service.refresh())
+            return encode(await self.service.fetch())
         if self.action == "validate":
-            ids = {item["id"] for item in self.service.candidates()}
+            try:
+                ids = {item["id"] for item in self.service.candidates()}
+            except NotebookError:
+                ids = set()
             return encode(
                 {
                     "valid_event_ids": [
@@ -74,8 +77,12 @@ class NotebookTool(Tool):
                 }
             )
         query = kwargs.get("query", "")
-        value = self.service.read(query)
-        if getattr(scope, "proactive", False):
+        try:
+            value = self.service.read(query)
+        except NotebookError as exc:
+            value = {"ready": False, "notes": [], "candidates": [],
+                     "pending_runs": self.service.pending_runs(), "error_type": type(exc).__name__}
+        if value["ready"] and getattr(scope, "proactive", False):
             previous = getattr(scope, "proactive_host_guard", None)
             captured = digest(value)
 
