@@ -1,0 +1,102 @@
+{
+  "verified_at": "2026-10-31T18:32:15.244128+00:00",
+  "revision": "cf5779c8805646123ae37f35921b022b374bad78",
+  "source_directory": "E:\\CODE\\hasaki-agent\\release\\hosts\\cf5779c8805646123ae37f35921b022b374bad78",
+  "backend_source_files_verified": 445,
+  "backup": "E:\\CODE\\hasaki-agent\\release\\host-backups\\before-p0a-20261101-022355",
+  "host": {
+    "healthy": true,
+    "pid": 64672,
+    "owner_id": "d592b5d6b26948a9ae93470dd0a02e77",
+    "epoch": "4897fae0776e4a51abd6b8f1a7f8153b",
+    "root_preserved": true,
+    "workers": {
+      "agent_loop": true,
+      "bus_dispatch_outbound": true,
+      "scheduler": true,
+      "transport_outbox": true,
+      "proactive": true
+    },
+    "mcp_health": {
+      "feed": true,
+      "device": true,
+      "calendar": true,
+      "gmail": true
+    },
+    "channel_health": {
+      "telegram": true
+    }
+  },
+  "handoff": {
+    "passed": true,
+    "job_id": "988ccf8174e14b55a379cc2ed59fbe11",
+    "child_read_calls": 4,
+    "consumer_turn_id": "c83140400faf47a887dfb77df0417a21",
+    "ack": true,
+    "visible_result_messages": 1
+  },
+  "cancellation": {
+    "passed": true,
+    "cases": [
+      {
+        "session": "desktop:p0a-host-20261101-cancel",
+        "job_id": "d0cd588105c5437cb04e29ee0e146597",
+        "cancelled": true,
+        "consumer_model_calls": 0,
+        "consumer_tool_calls": 0,
+        "ack": true
+      },
+      {
+        "session": "desktop:p0a-host-20261101-cancel-wire",
+        "job_id": "5faef51349c54657b5ec4285ff98d754",
+        "cancelled": true,
+        "consumer_model_calls": 0,
+        "consumer_tool_calls": 0,
+        "ack": true
+      }
+    ],
+    "observed_stop_notifications": 1
+  },
+  "hard_limit": {
+    "passed": true,
+    "actual_spawn_calls": 3,
+    "admitted_jobs": 2,
+    "host_retry_counts": [
+      0,
+      1
+    ],
+    "model_retry_counts": [
+      999,
+      0,
+      0
+    ],
+    "denial": "父任务委派额度已耗尽：最多初次执行和一次补做"
+  },
+  "retry_chain": {
+    "passed": true,
+    "initial_exit": "tool_loop",
+    "supplementary_exit": "tool_loop",
+    "admitted_jobs": 2,
+    "host_retry_counts": [
+      0,
+      1
+    ],
+    "shared_parent_task_id": "29dca2b19d1f431cbd737bc517890bfc",
+    "supplementary_parent_is_initial_consumer": true,
+    "desktop_result_notifications": 2
+  },
+  "active_acceptance_executions": 0,
+  "baseline": {
+    "configuration_unchanged": true,
+    "original_sessions": 43,
+    "missing_sessions": 0,
+    "original_messages": 417,
+    "missing_messages": 0,
+    "changed_messages": 0,
+    "original_event_max_seq": 103157,
+    "original_events_unchanged": true,
+    "same_execution_root": true,
+    "journal_integrity": "ok"
+  },
+  "scope": "Real production Host, existing real model, localhost desktop RPC and durable journal; readonly fixture files. Telegram health checked; no Telegram test message sent; no crash injection."
+}

@@ -1,0 +1,304 @@
+{
+  "verified_at": "2026-10-31T19:59:32.164462+00:00",
+  "final_host_revision": "0b24ab63f2788067944dae787500208358b68f64",
+  "scope": "Real Telegram Desktop user messages, real model and production Host; only readonly fixture tasks. No desktop RPC injected tests.",
+  "passed": true,
+  "host": {
+    "owner_id": "38bdfc8976e44435bb2ba90428492940",
+    "pid": 59704,
+    "mode": "host",
+    "started_at": "2026-10-31T19:52:23.594822+00:00",
+    "healthy": true,
+    "workers": {
+      "agent_loop": true,
+      "bus_dispatch_outbound": true,
+      "scheduler": true,
+      "transport_outbox": true,
+      "proactive": true
+    },
+    "mcp_health": {
+      "feed": true,
+      "device": true,
+      "calendar": true,
+      "gmail": true
+    },
+    "dependencies_ready": true,
+    "channels": [
+      "telegram"
+    ],
+    "channel_health": {
+      "telegram": true
+    },
+    "channel_failures": [],
+    "proactive": "running",
+    "root_id": "55ffe118c00c404b92e89d1ce2cf2f16",
+    "epoch": "b955a468c598409abf23f2e1cafef80d",
+    "execution_contract_version": 1,
+    "transport_queues": {
+      "bus:telegram:done": 69,
+      "inbound:done": 62,
+      "inbound:needs_review": 6,
+      "push:telegram:done": 6,
+      "telegram-update:telegram:8659319400:done": 68
+    },
+    "state": "running",
+    "updated_at": "2026-10-31T19:59:31.554489+00:00"
+  },
+  "cases": {
+    "normal": [
+      {
+        "job_id": "0ee4271eca2a4f39a5b08bc6389a9d8a",
+        "parent_task_id": "aa65cbcf48f94361bbb97e02ef48cd9d",
+        "parent_turn_id": "aa65cbcf48f94361bbb97e02ef48cd9d",
+        "profile": "research",
+        "retry_count": 0,
+        "cancelled": 0,
+        "label": "TG回传验收",
+        "exit_reason": "completed",
+        "consumer_turn_id": "43b1df5904df47c6ae58567c43ab62ed",
+        "acked": true,
+        "consumer_model_calls": 1,
+        "consumer_tool_calls": 0,
+        "owner_epoch": "0f222ea8b7384dda85fa7cd9f0ec809c",
+        "outbound": {
+          "id": "reply:spawn:0ee4271eca2a4f39a5b08bc6389a9d8a",
+          "state": "done",
+          "attempts": 1
+        },
+        "receipts": [
+          {
+            "part": "0:text:0",
+            "state": "done",
+            "result": "{\"message_id\": \"201\"}"
+          }
+        ]
+      }
+    ],
+    "cancel": [
+      {
+        "job_id": "cfbb39ac3db943468a662e1458f356a5",
+        "parent_task_id": "f081cd6f982848a0bad40c4e80372896",
+        "parent_turn_id": "f081cd6f982848a0bad40c4e80372896",
+        "profile": "research",
+        "retry_count": 0,
+        "cancelled": 1,
+        "label": "TG取消验收R2",
+        "exit_reason": "cancelled",
+        "consumer_turn_id": "2f884243bf9c40b4b56ce805b869a523",
+        "acked": true,
+        "consumer_model_calls": 0,
+        "consumer_tool_calls": 0,
+        "owner_epoch": "b955a468c598409abf23f2e1cafef80d",
+        "outbound": {
+          "id": "reply:spawn:cfbb39ac3db943468a662e1458f356a5",
+          "state": "done",
+          "attempts": 1
+        },
+        "receipts": [
+          {
+            "part": "0:text:0",
+            "state": "done",
+            "result": "{\"message_id\": \"205\"}"
+          }
+        ]
+      }
+    ],
+    "limit": [
+      {
+        "job_id": "c62ea9dece33495cabcfb029b0200982",
+        "parent_task_id": "e777b0a3073040329660cc19eedd8c6e",
+        "parent_turn_id": "e777b0a3073040329660cc19eedd8c6e",
+        "profile": "research",
+        "retry_count": 0,
+        "cancelled": 0,
+        "label": "TG限额验收1",
+        "exit_reason": "completed",
+        "consumer_turn_id": "49dfb14a34424bc5b6b58343d40f8cba",
+        "acked": true,
+        "consumer_model_calls": 1,
+        "consumer_tool_calls": 0,
+        "owner_epoch": "b955a468c598409abf23f2e1cafef80d",
+        "outbound": {
+          "id": "reply:spawn:c62ea9dece33495cabcfb029b0200982",
+          "state": "done",
+          "attempts": 1
+        },
+        "receipts": [
+          {
+            "part": "0:text:0",
+            "state": "done",
+            "result": "{\"message_id\": \"208\"}"
+          }
+        ]
+      },
+      {
+        "job_id": "8d5b81befe8c47139e997bc67b3e87b2",
+        "parent_task_id": "e777b0a3073040329660cc19eedd8c6e",
+        "parent_turn_id": "e777b0a3073040329660cc19eedd8c6e",
+        "profile": "research",
+        "retry_count": 1,
+        "cancelled": 0,
+        "label": "TG限额验收2",
+        "exit_reason": "completed",
+        "consumer_turn_id": "cbb26f928afb4f10989c1a3f06c933e4",
+        "acked": true,
+        "consumer_model_calls": 1,
+        "consumer_tool_calls": 0,
+        "owner_epoch": "b955a468c598409abf23f2e1cafef80d",
+        "outbound": {
+          "id": "reply:spawn:8d5b81befe8c47139e997bc67b3e87b2",
+          "state": "done",
+          "attempts": 1
+        },
+        "receipts": [
+          {
+            "part": "0:text:0",
+            "state": "done",
+            "result": "{\"message_id\": \"209\"}"
+          }
+        ]
+      }
+    ],
+    "retry": [
+      {
+        "job_id": "302d3e62ec3d46879af5bd986dee4f6e",
+        "parent_task_id": "fcfd49b8ed344e55a7c0296d6f0594f4",
+        "parent_turn_id": "fcfd49b8ed344e55a7c0296d6f0594f4",
+        "profile": "research",
+        "retry_count": 0,
+        "cancelled": 0,
+        "label": "TG重试验收1",
+        "exit_reason": "tool_loop",
+        "consumer_turn_id": "b1029eddaff641fb85a1a6004f227c1d",
+        "acked": true,
+        "consumer_model_calls": 2,
+        "consumer_tool_calls": 1,
+        "owner_epoch": "b955a468c598409abf23f2e1cafef80d",
+        "outbound": {
+          "id": "reply:spawn:302d3e62ec3d46879af5bd986dee4f6e",
+          "state": "done",
+          "attempts": 1
+        },
+        "receipts": [
+          {
+            "part": "0:text:0",
+            "state": "done",
+            "result": "{\"message_id\": \"212\"}"
+          }
+        ]
+      },
+      {
+        "job_id": "ca4b690bc9e74799b5c381f726d8d4fd",
+        "parent_task_id": "fcfd49b8ed344e55a7c0296d6f0594f4",
+        "parent_turn_id": "b1029eddaff641fb85a1a6004f227c1d",
+        "profile": "research",
+        "retry_count": 1,
+        "cancelled": 0,
+        "label": "TG重试验收2",
+        "exit_reason": "tool_loop",
+        "consumer_turn_id": "3289d45b791f441391720e887b7cb140",
+        "acked": true,
+        "consumer_model_calls": 1,
+        "consumer_tool_calls": 0,
+        "owner_epoch": "b955a468c598409abf23f2e1cafef80d",
+        "outbound": {
+          "id": "reply:spawn:ca4b690bc9e74799b5c381f726d8d4fd",
+          "state": "done",
+          "attempts": 1
+        },
+        "receipts": [
+          {
+            "part": "0:text:0",
+            "state": "done",
+            "result": "{\"message_id\": \"213\"}"
+          }
+        ]
+      }
+    ]
+  },
+  "limit_actual_spawn_calls": 3,
+  "limit_model_retry_counts": [
+    999,
+    0,
+    0
+  ],
+  "limit_denial": "父任务委派额度已耗尽：最多初次执行和一次补做",
+  "active_acceptance_executions": [],
+  "interruption": {
+    "turn_id": "c31e04bd1b754ac48d04f51d431caa0f",
+    "status": "interrupted",
+    "reason": "Concurrent deployment stopped Host before spawn; first cancellation probe excluded; new R2 probe passed",
+    "original_inbound_state": "needs_review"
+  },
+  "desktop_absence": "Kaze desktop was already closed before testing; no Kaze/shiori/electron processes found at initial, intermediate and final observations. Desktop was not launched for these tests.",
+  "ui_observations": [
+    "NORMAL result TG-P0A-RESULT-48 received 03:44 CST",
+    "R2 cancellation confirmation and stop notice received 03:55 CST",
+    "LIMIT third dispatch rejection and two result messages received 03:56 CST",
+    "RETRY first failure, one supplementary dispatch, and terminal two-failures summary received 03:58 CST; no third retry"
+  ],
+  "deployment_context": "Concurrent P1 deployment changed Host during testing. NORMAL passed in epoch 0f222ea8b7384dda85fa7cd9f0ec809c on the first 0b24ab6 deployment (PID 8040). A temporary cf5779c rollback interrupted the original cancel probe. CANCEL R2, LIMIT and RETRY passed in final epoch b955a468c598409abf23f2e1cafef80d on 0b24ab6 (PID 59704). Final revision field is verified against the final process command, not inferred for every epoch.",
+  "process_evidence": {
+    "checkedAt": "2026-11-01T03:58:44.6016858+08:00",
+    "desktopProcessCount": 0,
+    "hostPid": 59704,
+    "hostHealthy": true,
+    "hostCommand": "\"C:\\Users\\showfuckersensei\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\pythonw.exe\" \"E:\\CODE\\hasaki-agent\\release\\hosts\\0b24ab63f2788067944dae787500208358b68f64\\apps\\backend\\windows_host.py\" \"host\" \"--workspace\" \"E:\\CODE\\hasaki-agent\\workspace\" \"--config\" \"E:\\CODE\\hasaki-agent\\workspace\\config.toml\" \"--remote-port\" \"8765\" \"--remote-token-file\" \"E:\\CODE\\hasaki-agent\\workspace\\private_runtime\\windows-host\\runtime-token\""
+  },
+  "final_merged_host_confirmation": {
+    "verified_at": "2026-10-31T20:48:29.723332+00:00",
+    "merge_commit": "a573804ae04a6a826667dca00bd4b338d50a3777",
+    "source_directory": "E:\\CODE\\hasaki-agent\\release\\hosts\\a573804ae04a6a826667dca00bd4b338d50a3777",
+    "backup": "E:\\CODE\\hasaki-agent\\release\\host-backups\\before-final-merged-20261101-044500",
+    "backend_files_byte_verified": 469,
+    "authenticated_rpc_health": true,
+    "host": {
+      "owner_id": "cb038f1025da44978ba27abc373a05b2",
+      "pid": 62012,
+      "mode": "host",
+      "started_at": "2026-10-31T20:45:38.476436+00:00",
+      "healthy": true,
+      "workers": {
+        "agent_loop": true,
+        "bus_dispatch_outbound": true,
+        "scheduler": true,
+        "transport_outbox": true,
+        "proactive": true
+      },
+      "mcp_health": {
+        "feed": true,
+        "device": true,
+        "calendar": true,
+        "gmail": true
+      },
+      "dependencies_ready": true,
+      "channels": [
+        "telegram"
+      ],
+      "channel_health": {
+        "telegram": true
+      },
+      "channel_failures": [],
+      "proactive": "running",
+      "root_id": "55ffe118c00c404b92e89d1ce2cf2f16",
+      "epoch": "e951d6a1b0794cbb90b24ef2e6b33e12",
+      "execution_contract_version": 1,
+      "transport_queues": {
+        "bus:telegram:done": 69,
+        "inbound:done": 62,
+        "inbound:needs_review": 6,
+        "push:telegram:done": 6,
+        "telegram-update:telegram:8659319400:done": 68
+      },
+      "state": "running",
+      "updated_at": "2026-10-31T20:48:28.657861+00:00"
+    },
+    "process": {
+      "checkedAt": "2026-11-01T04:46:13.4217244+08:00",
+      "hostPid": 62012,
+      "hostCommand": "\"C:\\Users\\showfuckersensei\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\pythonw.exe\" \"E:\\CODE\\hasaki-agent\\release\\hosts\\a573804ae04a6a826667dca00bd4b338d50a3777\\apps\\backend\\windows_host.py\" \"host\" \"--workspace\" \"E:\\CODE\\hasaki-agent\\workspace\" \"--config\" \"E:\\CODE\\hasaki-agent\\workspace\\config.toml\" \"--remote-port\" \"8765\" \"--remote-token-file\" \"E:\\CODE\\hasaki-agent\\workspace\\private_runtime\\windows-host\\runtime-token\"",
+      "scheduledArguments": "\"E:\\CODE\\hasaki-agent\\release\\hosts\\a573804ae04a6a826667dca00bd4b338d50a3777\\apps\\backend\\windows_host.py\" \"host\" \"--workspace\" \"E:\\CODE\\hasaki-agent\\workspace\" \"--config\" \"E:\\CODE\\hasaki-agent\\workspace\\config.toml\" \"--remote-port\" \"8765\" \"--remote-token-file\" \"E:\\CODE\\hasaki-agent\\workspace\\private_runtime\\windows-host\\runtime-token\""
+    },
+    "verification_scope": "Deployment identity, exact backend bytes and authenticated health only; historical Telegram scenarios were not rerun after this deployment."
+  }
+}
