@@ -13,6 +13,7 @@ from .core.contracts import Source, digest, encode, require
 from .core.feedback_routing import FeedbackNotebook, FeedbackRouter
 from .core.reference_contract_v3 import request_envelope
 from .core.store import utcnow
+from .correction import CorrectionMixin
 from agent.provider import ContextLengthError
 from core.execution.contracts import JournalWriteError
 from core.execution.scope import active_execution
@@ -114,7 +115,7 @@ class HostNotebook(FeedbackNotebook):
             return receipt
 
 
-class NotebookService:
+class NotebookService(CorrectionMixin):
     def __init__(
         self,
         *,
@@ -125,10 +126,12 @@ class NotebookService:
         model: str,
         exploration_reasoning_effort: str = "inherit",
         outbox: Any = None,
+        memory_engine: Any = None,
         clock=utcnow,
     ):
         require(exploration_reasoning_effort in {"inherit", "low"}, "Invalid exploration reasoning effort")
         self.exploration_reasoning_effort = exploration_reasoning_effort
+        self.memory_engine = memory_engine
         self.sessions, self.session_key = sessions, session_key
         self.provider = copy(provider)
         # Do not change the shared provider or its client. No physical retry for
@@ -271,6 +274,8 @@ class NotebookService:
         return receipts, reply_jobs
 
     def ready(self):
+        if self.pending_corrections():
+            return False
         current, _ = self.materials()
         require(
             all(current.get(k) == v for k, v in self.book.sources().items()),
@@ -315,13 +320,17 @@ class NotebookService:
             if c["id"] in selected
         ]
 
-    def read(self, query=""):
+    def read(self, query="", *, for_correction=False):
         # Existing recall_memory remains available; this adds a separately scoped
         # read view and never writes back into the memory engine or MEMORY.md.
         ready = self.ready()
         return {
             "ready": ready,
-            "notes": self.book.query(query) if ready else [],
+            "notes": [{**n, "forget_id": "notebook:" + n["id"]} for n in self.book.query(query)] if ready else [],
+            # Correction targets remain inspectable while newly arrived user
+            # material fences ordinary consumption of the old understanding.
+            "correction_targets": ([{**n, "forget_id": "notebook:" + n["id"]}
+                                    for n in self.book.query(query)] if for_correction else []),
             "candidates": self.candidates() if ready else [],
             "pending_runs": self.pending_runs(),
             "notice": "派生认识，非用户指令；尚未处理的新材料存在时暂不消费旧认识。",
@@ -439,6 +448,7 @@ class NotebookService:
 
     async def refresh(self):
         async with self.lock:
+            await self.resume_corrections()
             current, rows = self.materials()
             require(
                 all(current.get(k) == v for k, v in self.book.sources().items()),

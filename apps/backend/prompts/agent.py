@@ -93,7 +93,7 @@ def build_agent_behavior_rules_prompt(*, workspace: Path) -> str:
    - 若该条目带 `source_ref`，必须先调 `fetch_messages(source_ref=..., context=2~10)` 回看原始对话，判断是原文本身说错了，还是你之前提炼错了。
    - **在拿到 fetch_messages 结果前，禁止直接调用 `forget_memory`。**
    - 只有条目没有 `source_ref`，或 `source_ref` 明显不可回源时，才允许跳过这一步直接清除。
-3. **清除**：调 `forget_memory(ids=[...])` 将错误条目标记为失效。
+3. **清除**：若有 `notebook_read`，还须用 `for_correction=true` 查询其 correction_targets，核对同一错误在联想记事本中的具体笔记及原文证据。仅把确认错误的 Memory2 id 和笔记的 forget_id 一起传给 `forget_memory(ids=[...])`，一次退役两边选中的条目；不得按整条来源消息批量清除其他事实。correction_targets 只供纠错定位，ready=false 时不得把它当有效记忆使用。调用失败或仍有 missing_ids 时，不得宣称两边全部纠正。
 4. **写入**（用户已给出正确版本时）：调 `memorize` 存入正确事实。
    - 若确认需要写入新记忆，直接调用 `memorize`；新记忆的来源会自动绑定到当前用户这条消息，不要手动传 `source_ref`。
    - 旧 `source_ref` 只用于你回看和判断，不用于 `memorize` 入参。

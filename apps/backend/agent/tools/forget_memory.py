@@ -28,6 +28,7 @@ class ForgetMemoryTool(Tool):
         self._spec = spec
         self.description = self._spec.description
         self.parameters = self._spec.parameters
+        self.notebook: Any = None
 
     async def execute(
         self,
@@ -44,17 +45,21 @@ class ForgetMemoryTool(Tool):
         resolved_session_key = str(session_key or "").strip()
         if not resolved_session_key and channel and chat_id:
             resolved_session_key = chat_id if channel == "desktop" else f"{channel}:{chat_id}"
-        result = await self._memory.mutate(
-            MemoryMutation(
-                kind="forget",
-                ids=tuple(clean_ids),
-                scope=MemoryScope(
-                    session_key=resolved_session_key,
-                    channel=channel or "",
-                    chat_id=chat_id or "",
-                ),
-            )
+        request = MemoryMutation(
+            kind="forget",
+            ids=tuple(clean_ids),
+            scope=MemoryScope(
+                session_key=resolved_session_key,
+                channel=channel or "",
+                chat_id=chat_id or "",
+            ),
         )
+        if self.notebook is not None and resolved_session_key == self.notebook.session_key:
+            result = await self.notebook.forget(request, self._memory)
+        else:
+            if any(i.startswith("notebook:") for i in clean_ids):
+                raise ValueError("Notebook correction requires its configured session")
+            result = await self._memory.mutate(request)
         return _render_forget_result(
             clean_ids,
             result.affected_ids,
