@@ -17,6 +17,8 @@ import type { DesktopVoiceController } from "../voice/controller.js";
 import type { BrowserVoicePlayback } from "../voice/playback.js";
 import { registerVoiceIpc } from "../voice/ipc.js";
 import { openExternalLink } from "../externalLinks.js";
+import { createResidentModelSettings, type ResidentModelSettings } from "../residentSettings.js";
+import { verifyLocalHost } from "./localHostCapabilities.js";
 import type {
   LocalAssetOpenRequest,
   LocalAssetOpenResult,
@@ -95,11 +97,13 @@ export function registerDesktopIpc({
   onVoiceSettingsChanged,
   onPetVisibilityChanged,
 }: RegisterDesktopIpcOptions): void {
+  let residentSettings: ResidentModelSettings | undefined;
   // [消息链路 3/6] Electron 主进程在这里接收 Renderer 的 desktop:invoke。
   ipcMain.handle("desktop:invoke", async (_event: IpcMainInvokeEvent, request: { method: string; payload: Record<string, unknown> }) => {
     if (request.method.startsWith("observation.")) {
       throw new Error("observation bridge methods are restricted to the main process");
     }
+    if (request.method.startsWith("codex.") && bridge.mode === "remote") await verifyLocalHost(bridge);
     // 本地传输写入 Python stdin；远程传输发送给 Host。
     // 服务器返回的路径不能获得客户端本地文件权限。
     const response = await bridge.invoke(request);
@@ -138,6 +142,7 @@ export function registerDesktopIpc({
   ipcMain.handle("desktop:bridge-status", async () => {
     return {
       mode: bridge.mode ?? "local",
+      localHost: Boolean(bridge.localWorkspace),
       running: bridge.isRunning(),
       lastError: bridge.getLastError(),
     };
@@ -159,10 +164,20 @@ export function registerDesktopIpc({
     }
   });
   ipcMain.handle("desktop:settings-read", async () => {
+    if (bridge.localWorkspace) {
+      const health = await verifyLocalHost(bridge);
+      const snapshot = loadSettingsData(false);
+      return { ...snapshot, formData: { ...snapshot.formData, modelRevision: health.model_revision } };
+    }
     if (bridge.mode === "remote") throw new Error("远程模式请在服务器管理配置");
     return loadSettingsData();
   });
   ipcMain.handle("desktop:settings-save", async (_event: IpcMainInvokeEvent, formData: SettingsFormData) => {
+    if (bridge.localWorkspace) {
+      await verifyLocalHost(bridge);
+      residentSettings ??= createResidentModelSettings(bridge.localWorkspace, bridge);
+      return residentSettings.save(formData);
+    }
     if (bridge.mode === "remote") throw new Error("远程模式请在服务器管理配置");
     const result = await saveSettings(
       formData,

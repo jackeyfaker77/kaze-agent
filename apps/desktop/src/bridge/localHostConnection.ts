@@ -13,5 +13,6 @@ export function desktopRuntimeConnection(env: NodeJS.ProcessEnv, workspace: stri
   }
   const url = new URL(data.url);
   if (url.protocol !== "ws:" || url.hostname !== "127.0.0.1") throw new Error("本机 Runtime Host 必须连接 127.0.0.1");
-  return remoteConnectionFromEnvironment({ KAZE_RUNTIME_URL: data.url, KAZE_RUNTIME_TOKEN_FILE: data.tokenFile });
+  const connection = remoteConnectionFromEnvironment({ KAZE_RUNTIME_URL: data.url, KAZE_RUNTIME_TOKEN_FILE: data.tokenFile });
+  return connection ? { ...connection, localWorkspace: resolve(workspace) } : null;
 }

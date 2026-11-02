@@ -13,6 +13,7 @@ export function useConversation() {
   const [error, setError] = useState("");
   const connectionError = useRef("");
   const [mode, setMode] = useState<"local" | "remote" | null>(null);
+  const [localHost, setLocalHost] = useState(false);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -52,7 +53,7 @@ export function useConversation() {
   }
   useEffect(() => {
     alive.current = true;
-    void (async () => { const status = await window.miraDesktop.bridgeStatus(); if (alive.current) setMode(status.mode ?? "local"); await rpc("health"); await selectCurrent(); await refresh(); if (alive.current) { setReady(true); clearConnectionError(); } })().catch(failConnection);
+    void (async () => { const status = await window.miraDesktop.bridgeStatus(); if (alive.current) { setMode(status.mode ?? "local"); setLocalHost(Boolean(status.localHost)); } await rpc("health"); await selectCurrent(); await refresh(); if (alive.current) { setReady(true); clearConnectionError(); } })().catch(failConnection);
     const resync = async () => {
       const selectedKey = key.current;
       const version = historyVersion.current;
@@ -160,6 +161,6 @@ export function useConversation() {
   const hasLiveTurn = liveTurns.some(turn => turn.phase === "running");
   const waitingForReply = busy && Boolean(activeAttempt) && !hasLiveTurn && !session?.messages.some(message =>
     message.role === "assistant" && record(message.metadata).execution_request_id === activeAttempt);
-  return { mode, entries, session, rows, display: display[selectedKey], hasLiveTurn, waitingForReply, draft, setDraft, attachments, setAttachments, error, setError, ready, busy, loading, tool, fail, refresh, selectCurrent, open, startNew, send, rename, remove,
+  return { mode, localHost, entries, session, rows, display: display[selectedKey], hasLiveTurn, waitingForReply, draft, setDraft, attachments, setAttachments, error, setError, ready, busy, loading, tool, fail, refresh, selectCurrent, open, startNew, send, rename, remove,
     cancel: () => rpc("chat.cancel", { session_key: key.current }) };
 }

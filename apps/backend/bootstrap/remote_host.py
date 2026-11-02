@@ -25,6 +25,8 @@ REMOTE_METHODS = frozenset({
     "tasks.list", "memory.tasks.list", "memory.get", "memory.save", "runtime.catalog", "document.get",
     "execution.get", "execution.events", "execution.context", "executions.list", "execution.review", "execution.retry", "execution.plan", "execution.continue",
     "transport.list", "transport.get", "transport.review",
+    "models.save",
+    "codex.status", "codex.models", "codex.login.start", "codex.login.status", "codex.login.cancel",
 })
 MUTATIONS = frozenset({"session.create", "session.rename", "session.delete", "chat.send", "chat.cancel", "execution.review", "execution.retry", "execution.continue", "transport.review"})
 
@@ -37,8 +39,10 @@ def read_remote_token(path: Path) -> str:
 
 
 class RemoteHostServer:
-    def __init__(self, runtime, token: str, *, port: int):
+    def __init__(self, runtime, token: str, *, port: int, config_path: Path | None = None):
         self.service = DesktopBridgeService(runtime)
+        from desktop_bridge.host_models import HostModelSettings
+        self.models = HostModelSettings(runtime, config_path) if config_path else None
         self.token = token
         self.port = port
         self.ready = asyncio.Event()
@@ -129,10 +133,27 @@ class RemoteHostServer:
 
                 async def execute(request=internal, original_id=request_id):
                     try:
-                        result = await self.service.handle(request, chat_admission=self.dispatcher.integration_slot)
+                        if request["method"] == "models.save":
+                            try:
+                                if self.models is None:
+                                    raise ValueError("Host 未配置模型管理路径")
+                                if self.service._chat_tasks:
+                                    raise ValueError("有正在进行的对话，请稍后切换模型")
+                                result = BridgeResponse(id=original_id, type="response", method="models.save",
+                                    payload=self.models.save(request["payload"]))
+                            except Exception as exc:
+                                result = BridgeResponse(id=original_id, type="response", method="models.save",
+                                    error=BridgeError(code="model_settings_failed", message=str(exc)))
+                        else:
+                            result = await self.service.handle(request, chat_admission=self.dispatcher.integration_slot)
                         result.id = original_id
                         if request["method"] == "health":
-                            result.payload.update({"transport": "remote", "protocol": 1})
+                            result.payload.update({"transport": "remote", "protocol": 1,
+                                "local_desktop_version": 2, "workspace": str(self.service.workspace.resolve()),
+                                "default_model_id": self.service.runtime.config.model_registrations[0].id,
+                                "model": getattr(self.service.runtime.provider, 'model', self.service.runtime.config.model),
+                                "model_revision": self.models.revision if self.models else None,
+                                "busy": bool(self.service._chat_tasks or self.service.runtime.loop.active_turn_states)})
                         self.enqueue(socket, queue, result.to_dict())
                         if not result.error and request["method"] in MUTATIONS:
                             await self.broadcast({"id": uuid4().hex, "type": "event", "method": "sessions.changed", "payload": {}})

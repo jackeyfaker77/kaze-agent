@@ -171,9 +171,9 @@ export function removeUnconfiguredModelExample(path: string): void {
   writeFileSync(path, next, { encoding: "utf-8" });
 }
 
-export function loadSettingsData(): SettingsSnapshot {
+export function loadSettingsData(cleanupExample = true): SettingsSnapshot {
   const configuredPath = requireConfigPath();
-  removeUnconfiguredModelExample(configuredPath);
+  if (cleanupExample) removeUnconfiguredModelExample(configuredPath);
   const content = existsSync(configuredPath) ? readFileSync(configuredPath, "utf-8") : "";
   const parsed = parseToml(content);
   const llm = asRecord(parsed.llm);

@@ -14,6 +14,8 @@ test("installed localhost Host is used on ordinary desktop launches; absent depl
     const file = join(root, ".desktop/runtime-connection.json");
     writeFileSync(file, "\uFEFF" + JSON.stringify({ version: 1, url: "ws://127.0.0.1:8765", tokenFile }));
     assert.equal(desktopRuntimeConnection({}, root)?.url, "ws://127.0.0.1:8765/");
+    assert.equal(desktopRuntimeConnection({}, root)?.localWorkspace, root);
+    assert.equal(desktopRuntimeConnection({ KAZE_RUNTIME_URL: "ws://127.0.0.1:8765", KAZE_RUNTIME_TOKEN_FILE: tokenFile }, root)?.localWorkspace, undefined);
     assert.equal(desktopRuntimeConnection({ KAZE_RUNTIME_URL: "wss://example.com", KAZE_RUNTIME_TOKEN_FILE: tokenFile }, root)?.url, "wss://example.com/");
     assert.throws(() => desktopRuntimeConnection({ KAZE_RUNTIME_URL: "wss://example.com" }, root));
     for (const content of ["{", "null", JSON.stringify({version:2}), JSON.stringify({version:1,url:"ws://example.com",tokenFile}), JSON.stringify({version:1,url:"ws://127.0.0.1:8765",tokenFile:"relative"})]) {

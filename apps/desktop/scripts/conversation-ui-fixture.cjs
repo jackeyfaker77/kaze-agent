@@ -3,7 +3,10 @@ const { contextBridge } = require('electron');
 const listeners = new Set();
 const calls = [];
 const errors = [];
-const mode = process.argv.includes('--fixture-remote') ? 'remote' : 'local';
+const codexLogins = new Map();
+const localHost = process.argv.includes('--fixture-resident');
+const mode = localHost || process.argv.includes('--fixture-remote') ? 'remote' : 'local';
+let settings = { models: { registrations: localHost ? [{id:'first', model:'First',provider:'openai',baseUrl:'',apiKey:'',effort:'none'}, {id:'second',model:'Second',provider:'openai',baseUrl:'',apiKey:'',effort:'none'}] : [] } };
 const sessions = {
   'desktop:a': { session_key: 'desktop:a', title: 'Fixture A', messages: [
     { id: 'old-user', role: 'user', content: '历史问题' },
@@ -28,19 +31,34 @@ function saveAnswer(interrupted = false) {
   return clone(sessions[p.key]);
 }
 const api = {
-  bridgeStatus: async () => ({ mode }),
-  readSettings: async () => ({ formData: { models: { registrations: [] } } }),
+  bridgeStatus: async () => ({ mode, localHost }),
+  readSettings: async () => ({ formData: clone(settings) }),
+  saveSettings: async value => { calls.push("settings.save"); settings=clone(value); return {ok:true,health:{ok:true}}; },
+  syncPet: async visible => { calls.push(visible ? "pet.show" : "pet.hide"); },
   onEvent: fn => { listeners.add(fn); return () => listeners.delete(fn); },
   onVoiceState: () => () => {},
   reportRendererDiagnostic: value => errors.push(value),
-  openExternal: async () => {},
+  openExternal: async url => { calls.push(`external:${url}`); return {ok:true,error:null}; },
   invoke: async ({ method, payload }) => {
     calls.push(method);
     const id = `rpc-${++sequence}`;
+    if (method === 'codex.status') return response(id, method, {configured:codexLogins.get(payload.connection_id)?.status === 'connected'});
+    if (method === 'codex.login.start') {
+      const login = {login_id:id,status:'waiting',authorization_url:'https://auth.openai.com/oauth/authorize?fixture=1',interval:1};
+      codexLogins.set(payload.connection_id, login);
+      return response(id, method, login);
+    }
+    if (method === 'codex.login.status' || method === 'codex.login.cancel') {
+      const login = codexLogins.get(payload.connection_id);
+      login.status = method.endsWith('cancel') ? 'cancelled' : 'connected';
+      return response(id, method, login);
+    }
+    if (method === 'codex.models') return response(id, method, {models:[{id:'fixture-codex',efforts:['low','high']}]});
     if (method === 'health' && startupFailure) {
       startupFailure = false;
       return { id, method, type: 'response', payload: {}, error: { code: 'remote_unavailable', message: 'fixture: Host not ready yet' } };
     }
+    if (method === 'pet.get') return response(id,method,{packages:[{id:'pet',display_name:'Fixture Pet'}],selected_package_id:'pet'});
     if (method === 'sessions.list') return response(id, method, { sessions: Object.values(sessions).map(s => ({ key: s.session_key, metadata: { title: s.title }, message_count: s.messages.length })) });
     if (method === 'session.get') {
       const value = response(id, method, clone(sessions[payload.session_key] || { session_key: payload.session_key, title: '', messages: [] }));

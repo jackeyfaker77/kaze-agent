@@ -438,6 +438,9 @@ def build_core_runtime(
     bus = MessageBus()
     event_bus = EventBus()
     provider, light_provider, agent_provider = build_providers(config, workspace)
+    from bootstrap.switchable_provider import DefaultModel, SwitchableProvider
+    provider = SwitchableProvider(provider, config.model)
+    config.model = DefaultModel(config.model)
     loop_provider = provider
     loop_model = config.model
     session_manager = SessionManager(workspace)

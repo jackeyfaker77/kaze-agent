@@ -130,7 +130,7 @@ async def serve_host(config_path: str, workspace: Path | None = None, *, remote_
             raise ValueError("--remote-port requires --remote-token-file")
         token = read_remote_token(remote_token_file)
         async def serve_remote(core):
-            await RemoteHostServer(core, token, port=remote_port).run()
+            await RemoteHostServer(core, token, port=remote_port, config_path=Path(config_path)).run()
         attachment = serve_remote
     runtime = build_app_runtime(Config.load(config_path), workspace=workspace or resolve_default_workspace())
     await RuntimeHost(runtime).run(attachment, handle_signals=True)

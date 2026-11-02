@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import type { BridgeRequest, BridgeResponse } from "./shared.js";
 import { bridgeRequestTimeoutMs } from "./bridgeTimeoutPolicy.js";
 
-export type RemoteConnection = { url: string; token: string };
+export type RemoteConnection = { url: string; token: string; localWorkspace?: string };
 
 export function remoteConnectionFromEnvironment(env: NodeJS.ProcessEnv): RemoteConnection | null {
   if (!env.KAZE_RUNTIME_URL && !env.KAZE_RUNTIME_TOKEN_FILE) return null;
@@ -32,6 +32,7 @@ type Connection = {
 /** No local process fallback; reconnection never replays accepted mutations. */
 export class RemoteBridgeClient extends EventEmitter {
   readonly mode = "remote";
+  get localWorkspace(): string | undefined { return this.options.localWorkspace; }
   private connection: Connection | null = null;
   private enabled = false;
   private retry: NodeJS.Timeout | null = null;

@@ -115,6 +115,8 @@ export type ProactiveSettingsFormData = {
 };
 
 export type SettingsFormData = {
+  /** Revision of the Host config read with this form; prevents stale model edits. */
+  modelRevision?: string;
   proactive?: ProactiveSettingsFormData;
   models: {
     registrations: ModelRegistrationFormData[];
@@ -248,7 +250,7 @@ export type DesktopApi = {
   localAssetUrl(path: string): string;
   startAttachmentDrag(request: StartAttachmentDragRequest): void;
   reportRendererDiagnostic(payload: RendererDiagnosticPayload): void;
-  bridgeStatus(): Promise<{ running: boolean; lastError: string | null; mode?: "local" | "remote" }>;
+  bridgeStatus(): Promise<{ running: boolean; lastError: string | null; mode?: "local" | "remote"; localHost?: boolean }>;
   restartBridge(): Promise<{
     ok: boolean;
     running: boolean;
