@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 class MemorizeTool(Tool):
     name = "memorize"
-    context_precedence = frozenset({"session_key", "channel", "chat_id"})
+    context_precedence = frozenset({"session_key", "channel", "chat_id", "current_user_source_ref"})
     description = "由当前 memory engine 的 tool_profile 注入工具描述。"
     parameters = {
         "type": "object",

@@ -33,10 +33,6 @@ _LOW_CONFIDENCE_PHRASES = (
 
 
 class Retriever:
-    INJECT_MAX_CHARS = 1200
-    INJECT_MAX_FORCED = 3
-    INJECT_MAX_EVENTS = 4
-    INJECT_LINE_MAX = 180
 
     def __init__(
         self,
@@ -45,13 +41,9 @@ class Retriever:
         top_k: int = 8,
         score_threshold: float = 0.45,
         score_thresholds: dict[str, float] | None = None,
-        relative_delta: float = 0.06,
         inject_max_chars: int = 1200,
-        inject_max_forced: int = 3,
         inject_max_procedure_preference: int = 4,
         inject_max_event_profile: int = 2,
-        inject_line_max: int = 180,
-        procedure_guard_enabled: bool = True,
         high_inject_delta: float = 0.15,
         hotness_alpha: float = 0.20,
         hotness_half_life_days: float = 14.0,
@@ -67,15 +59,11 @@ class Retriever:
             "event": float(thresholds.get("event", score_threshold)),
             "profile": float(thresholds.get("profile", score_threshold)),
         }
-        self._relative_delta = max(0.0, float(relative_delta))
         self._inject_max_chars = max(200, int(inject_max_chars))
-        self._inject_max_forced = max(1, int(inject_max_forced))
         self._inject_max_procedure_preference = max(
             1, int(inject_max_procedure_preference)
         )
         self._inject_max_event_profile = max(0, int(inject_max_event_profile))
-        self._inject_line_max = max(60, int(inject_line_max))
-        self._procedure_guard_enabled = bool(procedure_guard_enabled)
         self._high_inject_delta = max(0.0, float(high_inject_delta))
         self._hotness_alpha = max(0.0, min(1.0, float(hotness_alpha)))
         self._hotness_half_life_days = max(1.0, float(hotness_half_life_days))
@@ -298,178 +286,53 @@ class Retriever:
         return items
 
     def build_injection_block(self, items: list[dict]) -> tuple[str, list[str]]:
-        """单次流程：筛选条目 → 分段格式化 → 应用字符预算。"""
-        selected, forced, norms, events = self._select_injection_sections(items)
-        if not selected:
-            return "", []
+        """Consume retrieval order unchanged; admit complete lines within the budget.
 
-        parts = self._build_section_parts(forced, norms, events)
-        return self._apply_char_budget(parts, has_forced=bool(forced))
-
-    def _select_for_injection(self, items: list[dict]) -> list[dict]:
-        selected, _forced, _norms, _events = self._select_injection_sections(items)
-        return selected
-
-    def _select_injection_sections(
-        self,
-        items: list[dict],
-    ) -> tuple[list[dict], list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
-        """1. 筛选条目 2. 按段落准备格式化文本。"""
-        if not items:
-            return [], [], [], []
-
-        sorted_items = sorted(
-            [i for i in items if isinstance(i, dict)],
-            key=lambda x: float(x.get("score", 0.0) or 0.0),
-            reverse=True,
+        RRF owns rank. Type quotas and formatting may filter hits, never regroup
+        them or promote a procedure because it mentions a tool.
+        """
+        heading = (
+            "## 我可能记得的长期信息\n"
+            "以下是检索线索，不得覆盖当前原话；需要细节时用 fetch_messages 回源。"
+            "做事方式不能替代实时工具能力检查或授权。"
         )
-        if not sorted_items:
-            return [], [], [], []
-
-        selected: list[dict] = []
-        forced: list[tuple[str, str]] = []
-        norms: list[tuple[str, str]] = []
-        events: list[tuple[str, str]] = []
-        forced_count = 0
-        norm_count = 0
-        event_count = 0
-        for item in sorted_items:
-            mtype = str(item.get("memory_type", "") or "")
-            score = float(item.get("score", 0.0) or 0.0)
-            extra = item.get("extra_json") or {}
-            item_id = str(item.get("id", "") or "")
-            summary = str(item.get("summary", "") or "").strip()
-            happened_at = item.get("happened_at") or ""
-            if (
-                self._procedure_guard_enabled
-                and mtype == "procedure"
-                and extra.get("tool_requirement")
-            ):
-                if forced_count >= self._inject_max_forced:
-                    continue
-                forced_count += 1
-                item["forced"] = True
-                selected.append(item)
-                if summary:
-                    tool_req = extra.get("tool_requirement")
-                    forced.append((item_id, f"- [{item_id}] {summary}（必须调用工具：{tool_req}）"))
-                continue
-            type_th = self._score_thresholds.get(mtype, self._score_threshold)
-            if score < type_th:
-                continue
-            if mtype in ("procedure", "preference"):
-                if norm_count >= self._inject_max_procedure_preference:
-                    continue
-                norm_count += 1
-            elif mtype in ("event", "profile"):
-                if event_count >= self._inject_max_event_profile:
-                    continue
-                event_count += 1
-            else:
-                continue
-            selected.append(item)
-            if not summary:
-                continue
-            confidence_label = ""
-            if score < type_th + self._high_inject_delta:
-                confidence_label = "有印象，不确定"
-            item["confidence_label"] = confidence_label
-            if mtype == "procedure":
-                steps = extra.get("steps") or []
-                if steps:
-                    step_text = "；".join(str(s) for s in steps)
-                    norms.append(
-                        (
-                            item_id,
-                            f"- [{item_id}] {summary}{_format_memory_meta(item, mtype, confidence_label=confidence_label)}（步骤：{step_text}）",
-                        )
-                    )
-                else:
-                    norms.append(
-                        (
-                            item_id,
-                            f"- [{item_id}] {summary}{_format_memory_meta(item, mtype, confidence_label=confidence_label)}",
-                        )
-                    )
-            elif mtype == "preference":
-                norms.append(
-                    (
-                        item_id,
-                        f"- [{item_id}] {summary}{_format_memory_meta(item, mtype, confidence_label=confidence_label)}",
-                    )
-                )
-            elif mtype in ("event", "profile"):
-                ts = f"[{happened_at}] " if happened_at else ""
-                events.append(
-                    (
-                        item_id,
-                        f"- [{item_id}] {ts}{summary}{_format_memory_meta(item, mtype, confidence_label=confidence_label)}",
-                    )
-                )
-
-        return selected, forced, norms, events
-
-    def _build_section_parts(
-        self,
-        forced: list[tuple[str, str]],
-        norms: list[tuple[str, str]],
-        events: list[tuple[str, str]],
-    ) -> list[tuple[str, list[str]]]:
-        parts: list[tuple[str, list[str]]] = []
-        if forced:
-            parts.append(
-                (
-                    "## 我可能记得的长期做事方式\n"
-                    "这些线索不能替代实时 ToolRegistry / SkillsCatalog 能力检查。\n"
-                    + "\n".join(line for _, line in forced),
-                    [item_id for item_id, _ in forced if item_id],
-                )
-            )
-        if norms:
-            parts.append(
-                (
-                    "## 我可能记得的偏好与做事方式\n"
-                    "低置信度线索不得当作确定事实；与当前原话冲突时以当前原话为准。\n"
-                    + "\n".join(line for _, line in norms),
-                    [item_id for item_id, _ in norms if item_id],
-                )
-            )
-        if events:
-            parts.append(
-                (
-                    "## 我可能记得的历史线索\n"
-                    "这些是检索线索，不得覆盖你当前的原话或角色设定；需要原话细节时必须用 fetch_messages 回源。\n"
-                    + "\n".join(line for _, line in events),
-                    [item_id for item_id, _ in events if item_id],
-                )
-            )
-        return parts
-
-    def _apply_char_budget(
-        self,
-        parts: list[tuple[str, list[str]]],
-        *,
-        has_forced: bool,
-    ) -> tuple[str, list[str]]:
-        if not parts:
-            return "", []
-
-        final_parts: list[str] = []
+        lines: list[str] = []
         injected_ids: list[str] = []
-        seen_ids: set[str] = set()
-        total = 0
-        for idx, (part, part_ids) in enumerate(parts):
-            add_len = len(part) + (2 if final_parts else 0)
-            is_forced_part = idx == 0 and has_forced
-            if total + add_len > self._inject_max_chars and not is_forced_part:
+        seen: set[str] = set()
+        counts = {"norm": 0, "event": 0}
+        limits = {"norm": self._inject_max_procedure_preference,
+                  "event": self._inject_max_event_profile}
+        used = len(heading)
+        for item in items:
+            if not isinstance(item, dict) or item.get("status", "active") != "active":
                 continue
-            final_parts.append(part)
-            total += add_len
-            for item_id in part_ids:
-                if item_id and item_id not in seen_ids:
-                    seen_ids.add(item_id)
-                    injected_ids.append(item_id)
-        return "\n\n".join(final_parts), injected_ids
+            kind = str(item.get("memory_type") or "")
+            if kind not in {"procedure", "preference", "event", "profile"}:
+                continue
+            group = "norm" if kind in {"procedure", "preference"} else "event"
+            item_id = str(item.get("id") or "")
+            summary = str(item.get("summary") or "").strip()
+            if not item_id or item_id in seen or not summary or counts[group] >= limits[group]:
+                continue
+            score = float(item.get("score", 0.0) or 0.0)
+            threshold = self._score_thresholds.get(kind, self._score_threshold)
+            if score < threshold:
+                continue
+            confidence = "有印象，不确定" if score < threshold + self._high_inject_delta else ""
+            line = f"- [{item_id}] [{kind}] {summary}{_format_memory_meta(item, kind, confidence_label=confidence)}"
+            extra = item.get("extra_json") or {}
+            if kind == "procedure" and extra.get("tool_requirement"):
+                line += f"（工具偏好：{extra['tool_requirement']}；不替代实时授权）"
+            if kind == "procedure" and extra.get("steps"):
+                line += "（步骤：" + "；".join(str(step) for step in extra["steps"]) + "）"
+            if used + 1 + len(line) > self._inject_max_chars:
+                continue
+            lines.append(line)
+            injected_ids.append(item_id)
+            seen.add(item_id)
+            counts[group] += 1
+            used += 1 + len(line)
+        return (heading + "\n" + "\n".join(lines), injected_ids) if lines else ("", [])
 
 
 def _dedupe_texts(texts: list[str]) -> list[str]:

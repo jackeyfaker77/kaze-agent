@@ -17,18 +17,14 @@ class RetrievalThresholdsConfig:
 @dataclass(frozen=True)
 class RetrievalInjectConfig:
     max_chars: int = 6000
-    forced: int = 3
     procedure_preference: int = 4
     event_profile: int = 4
-    line_max: int = 600
 
 
 @dataclass(frozen=True)
 class RetrievalConfig:
     top_k_history: int = 8
     score_threshold: float = 0.45
-    relative_delta: float = 0.2
-    procedure_guard_enabled: bool = True
     thresholds: RetrievalThresholdsConfig = field(
         default_factory=RetrievalThresholdsConfig
     )
@@ -59,8 +55,6 @@ def render_default_memory_config(config: DefaultMemoryConfig | None = None) -> s
         "[retrieval]",
         f"top_k_history = {retrieval.top_k_history}",
         f"score_threshold = {retrieval.score_threshold}",
-        f"relative_delta = {retrieval.relative_delta}",
-        f"procedure_guard_enabled = {str(retrieval.procedure_guard_enabled).lower()}",
         "",
         "[retrieval.thresholds]",
         f"procedure = {retrieval.thresholds.procedure}",
@@ -70,10 +64,8 @@ def render_default_memory_config(config: DefaultMemoryConfig | None = None) -> s
         "",
         "[retrieval.inject]",
         f"max_chars = {retrieval.inject.max_chars}",
-        f"forced = {retrieval.inject.forced}",
         f"procedure_preference = {retrieval.inject.procedure_preference}",
         f"event_profile = {retrieval.inject.event_profile}",
-        f"line_max = {retrieval.inject.line_max}",
         "",
     ])
 
@@ -106,10 +98,6 @@ def _build_config(payload: dict[str, Any]) -> DefaultMemoryConfig:
         retrieval=RetrievalConfig(
             top_k_history=int(retrieval.get("top_k_history", 8)),
             score_threshold=float(retrieval.get("score_threshold", 0.45)),
-            relative_delta=float(retrieval.get("relative_delta", 0.2)),
-            procedure_guard_enabled=bool(
-                retrieval.get("procedure_guard_enabled", True)
-            ),
             thresholds=RetrievalThresholdsConfig(
                 procedure=float(thresholds.get("procedure", 0.66)),
                 preference=float(thresholds.get("preference", 0.5)),
@@ -118,10 +106,8 @@ def _build_config(payload: dict[str, Any]) -> DefaultMemoryConfig:
             ),
             inject=RetrievalInjectConfig(
                 max_chars=int(inject.get("max_chars", 6000)),
-                forced=int(inject.get("forced", 3)),
                 procedure_preference=int(inject.get("procedure_preference", 4)),
                 event_profile=int(inject.get("event_profile", 4)),
-                line_max=int(inject.get("line_max", 600)),
             ),
         ),
     )

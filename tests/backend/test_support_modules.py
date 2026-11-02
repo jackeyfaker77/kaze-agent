@@ -189,7 +189,7 @@ async def test_memorize_tool_cover_branches(
 
 
 @pytest.mark.asyncio
-async def test_memorize_tool_should_not_create_second_active_procedure_when_incremental_update():
+async def test_memorize_tool_preserves_similar_procedures_without_explicit_replacement():
     class _Embedder:
         async def embed(self, text: str) -> list[float]:
             return [1.0, 0.0]
@@ -228,9 +228,10 @@ async def test_memorize_tool_should_not_create_second_active_procedure_when_incr
     rows = store._db.execute(
         "SELECT id, summary FROM memory_items WHERE memory_type='procedure' AND status='active'"
     ).fetchall()
-    assert len(rows) == 1
-    assert "steam_mcp" in rows[0][1]
-    assert "区服" in rows[0][1]
+    assert len(rows) == 2
+    assert all("steam_mcp" in row[1] for row in rows)
+    assert any("区服" in row[1] for row in rows)
+    assert any("web_search" in row[1] for row in rows)
 
 
 @pytest.mark.asyncio
@@ -267,7 +268,7 @@ async def test_memorizer_profile_supersede_keeps_high_emotional_weight_item_unde
 
 
 @pytest.mark.asyncio
-async def test_memorizer_profile_supersede_retires_low_emotional_weight_item_at_091():
+async def test_memorizer_profile_similarity_preserves_low_emotional_weight_item():
     class _Embedder:
         async def embed(self, text: str) -> list[float]:
             mapping = {
@@ -296,7 +297,7 @@ async def test_memorizer_profile_supersede_retires_low_emotional_weight_item_at_
     rows = store._db.execute(
         "SELECT source_ref, status FROM memory_items WHERE memory_type='profile' ORDER BY source_ref"
     ).fetchall()
-    assert rows == [("new", "active"), ("old", "superseded")]
+    assert rows == [("new", "active"), ("old", "active")]
 
 
 @pytest.mark.asyncio

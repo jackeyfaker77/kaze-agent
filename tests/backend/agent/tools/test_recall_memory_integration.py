@@ -629,7 +629,8 @@ async def test_recall_memory_answer_intent_passes_time_range_to_searches() -> No
     assert payload["items"][0]["id"] == "deepseek"
     assert store.vector_kwargs == []
     assert store.vector_batch_kwargs
-    assert store.vector_batch_vec_count == 2
+    assert store.vector_batch_vec_count == 1
+    provider.chat.assert_not_called()
     assert store.keyword_kwargs
     assert store.vector_batch_kwargs[0]["memory_types"] is None
     assert store.vector_batch_kwargs[0]["time_start"] is not None

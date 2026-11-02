@@ -29,7 +29,9 @@ def fault(point):
 
 
 class MemoryTasks:
-    VERSION = 1
+    # v2 removes similarity-search steps from memory writes. Ordinal v1
+    # receipts cannot be replayed under this workflow; retain and block them.
+    VERSION = 2
 
     def __init__(self, store, journal, worker):
         self.store, self.journal, self.worker = store, journal, worker

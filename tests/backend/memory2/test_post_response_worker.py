@@ -519,7 +519,7 @@ def test_merge_item_should_refresh_trigger_tags_for_procedure():
     assert "web_search" not in (tags.get("keywords") or []), "merge 后不应保留旧关键词"
 
 
-def test_save_item_with_supersede_does_not_cross_role_scope():
+def test_similar_writes_keep_both_same_role_and_other_role_memories():
     embedder = _StaticEmbedder(
         {
             "Mira 视角：用户偏好中文回复": [1.0, 0.0],
@@ -552,7 +552,6 @@ def test_save_item_with_supersede_does_not_cross_role_scope():
             memory_type="preference",
             extra={"role_id": "mira", "memory_domain": "relationship"},
             source_ref="role:mira:update",
-            supersede_threshold=0.0,
         )
     )
 
@@ -569,4 +568,4 @@ def test_save_item_with_supersede_does_not_cross_role_scope():
 
     assert ("Atlas 视角：用户偏好中文回复", "active", "atlas") in items
     assert ("Mira 视角：用户更偏好简洁中文回复", "active", "mira") in items
-    assert ("Mira 视角：用户偏好中文回复", "superseded", "mira") in items
+    assert ("Mira 视角：用户偏好中文回复", "active", "mira") in items

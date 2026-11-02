@@ -75,6 +75,103 @@ class _StoreWriteMixin:
 
         return f"new:{item_id}"
 
+    def replace_items(
+        self, *, memory_type: str, summary: str, embedding: list[float] | None,
+        source_ref: str, extra: dict, supersedes: list[str],
+        happened_at: str | None = None, emotional_weight: int = 0,
+    ) -> str:
+        """Commit an explicit same-scope replacement, never a similarity verdict.
+
+        Reuse memory_replacements for provenance and undo. A task's outer receipt
+        transaction remains authoritative; ordinary calls use a local savepoint.
+        """
+        if (not isinstance(supersedes, list) or not 1 <= len(supersedes) <= 20
+                or any(not isinstance(i, str) or not i.strip() or i.startswith("notebook:")
+                       for i in supersedes)):
+            raise ValueError("Replacement requires 1-20 Memory2 IDs")
+        if not summary.strip() or not source_ref.strip() or source_ref == "memorize_tool":
+            raise ValueError("Replacement requires content and a recorded source")
+        ids = list(dict.fromkeys(i.strip() for i in supersedes))
+        def owner(value):
+            # Missing domain is the legacy default engine's shared domain.
+            return (str(value.get("role_id") or "").strip(),
+                    str(value.get("memory_domain") or "shared").strip())
+
+        def in_scope(item):
+            value = item.get("extra_json") or {}
+            if owner(value) != owner(extra):
+                return False
+            # Shared personal memory is readable/correctable across channels.
+            # Source channel/chat are provenance, not a second ownership key.
+            if owner(value)[1] == "shared":
+                return True
+            return all(
+                not str(value.get(k) or "").strip()
+                or str(value.get(k) or "").strip() == str(extra.get(k) or "").strip()
+                for k in ("scope_channel", "scope_chat_id")
+            )
+        with self._lock:
+            db = self._db
+            outer_defer = db.defer_commit
+            db.execute("SAVEPOINT explicit_memory_replacement")
+            db.defer_commit = True
+            try:
+                if db.execute(
+                    "SELECT 1 FROM memory_replacements WHERE source_ref=? "
+                    "AND relation_type='supersede_undone' LIMIT 1", (source_ref,),
+                ).fetchone():
+                    raise ValueError("Replacement source has been undone")
+                old_items = self.get_items_by_ids(ids)
+                if len(old_items) != len(ids):
+                    raise ValueError("Replacement target is missing")
+                if any(not in_scope(i) for i in old_items):
+                    raise ValueError("Replacement target scope mismatch")
+                existing = db.execute(
+                    "SELECT id, status FROM memory_items WHERE content_hash=? AND memory_type=?",
+                    (_content_hash(summary, memory_type), memory_type),
+                ).fetchone()
+                if existing and existing[0] in ids:
+                    raise ValueError("A memory cannot replace itself")
+                if existing and existing[1] != "active":
+                    result = f"skipped:{existing[0]}"  # Never revive a corrected target.
+                else:
+                    if existing:
+                        target = self.get_items_by_ids([existing[0]])[0]
+                        if not in_scope(target):
+                            raise ValueError("Replacement content belongs to another scope")
+                    pending = []
+                    for old in old_items:
+                        if old["status"] == "active":
+                            pending.append(old)
+                        elif not (existing and db.execute(
+                            "SELECT 1 FROM memory_replacements WHERE old_item_id=? "
+                            "AND new_item_id=? AND source_ref=? AND relation_type='supersede'",
+                            (old["id"], existing[0], source_ref),
+                        ).fetchone()):
+                            raise ValueError("Replacement target is no longer active")
+                    if not pending:
+                        result = f"replaced:{existing[0]}"
+                    else:
+                        # An existing target is reused without reinforcing it on replay.
+                        result = (f"existing:{existing[0]}" if existing else self.upsert_item(
+                            memory_type, summary, embedding, source_ref, extra,
+                            happened_at, emotional_weight,
+                        ))
+                        new_id = result.split(":", 1)[1]
+                        new_item = self.get_items_by_ids([new_id])[0]
+                        self.record_replacements(old_items=pending, new_item=new_item,
+                                                 source_ref=source_ref)
+                        self.mark_superseded_batch([str(i["id"]) for i in pending])
+                        result = f"replaced:{new_id}"
+                db.execute("RELEASE explicit_memory_replacement")
+                return result
+            except BaseException:
+                db.execute("ROLLBACK TO explicit_memory_replacement")
+                db.execute("RELEASE explicit_memory_replacement")
+                raise
+            finally:
+                db.defer_commit = outer_defer
+
     def upsert_consolidation_event(
         self,
         *,

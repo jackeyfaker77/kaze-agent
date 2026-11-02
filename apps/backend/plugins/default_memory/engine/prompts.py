@@ -229,6 +229,7 @@ def _default_memory_tool_profile() -> MemoryToolProfile:
             description=(
                 "检索长期记忆中的事实、偏好、流程与历史事件线索。"
                 "query 写成陈述句；intent=answer 做主题检索，intent=timeline 做时间线回顾。"
+                "没有足够结果时，可结合当前对话换一种表述再次查询；不要编造事实。"
                 "返回的是记忆摘要和 evidence，回答依赖原文细节时继续用 fetch_messages 取证。"
             ),
             parameters={
@@ -272,6 +273,7 @@ def _default_memory_tool_profile() -> MemoryToolProfile:
                 "把你明确要求助手长期记住的信息写入全局记忆。"
                 "memory_kind 可选 event/profile/preference/procedure，engine 会自行校正分类。"
                 "procedure 仅表示你明确教给我的长期做事方式，不能替代实时工具能力检查。"
+                "仅在用户明确纠正已召回的旧信息时传 supersedes；可并存或不确定的内容不替代。"
             ),
             parameters={
                 "type": "object",
@@ -285,6 +287,12 @@ def _default_memory_tool_profile() -> MemoryToolProfile:
                         "enum": ["procedure", "preference", "event", "profile", ""],
                         "description": "记忆类型，留空由 engine 决定",
                         "default": "",
+                    },
+                    "supersedes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 20,
+                        "description": "用户明确纠正且已核对的旧 Memory2 ID；不得填写 notebook ID。默认不替代任何内容。",
                     },
                     "tool_requirement": {
                         "type": "string",
@@ -318,18 +326,4 @@ def _default_memory_tool_profile() -> MemoryToolProfile:
             risk="write",
             search_hint="记错了 删除记忆 撤销错误记忆 失效记忆",
         ),
-    )
-
-def _explicit_hypothesis_prompt(query: str, style: str) -> str:
-    if style == "event":
-        return (
-            "你是中性的检索查询改写器。根据当前问题生成一条带具体时间的假想记忆线索，"
-            "格式如 '[2026-03-08] 你...'。该线索只用于检索，禁止写回记忆。\n"
-            "规则：使用用户与助手的对话视角“我/你/我们”，简洁，只输出一条文本\n\n"
-            f"当前问题：{query}\n假想检索线索："
-        )
-    return (
-        "你是中性的检索查询改写器。根据当前问题生成一条假想记忆线索；该线索只用于检索，禁止写回。\n"
-        "规则：使用用户与助手的对话视角“我/你/我们”，肯定式、简洁，只输出一条文本\n\n"
-        f"当前问题：{query}\n假想检索线索："
     )
