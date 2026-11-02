@@ -40,9 +40,11 @@ from .connection import _SQLITE_VEC_AVAILABLE, _StoreConnection
 from .temporal import _StoreTemporalMixin
 from .vector import _StoreVectorMixin
 from .write import _StoreWriteMixin
+from .changes import _StoreChangesMixin
 
 
 class MemoryStore2(
+    _StoreChangesMixin,
     _StoreWriteMixin,
     _StoreAdminMixin,
     _StoreVectorMixin,
@@ -56,9 +58,10 @@ class MemoryStore2(
 # existing behavior. Nested store calls form one atomic outer operation.
 
 for _name in (
+    'commit_change', 'claim_extraction', 'finish_extraction', 'defer_extraction',
     'upsert_item', 'replace_items', 'mark_superseded', 'mark_superseded_batch', 'merge_item_raw',
     'reinforce_items_batch', 'record_replacements', 'get_items_by_ids',
     'vector_search', 'list_items_for_admin',
-    'upsert_consolidation_event', 'has_consolidation_source_ref', 'find_similar_recent_events',
+    'upsert_consolidation_event', 'has_consolidation_source_ref',
 ):
     setattr(MemoryStore2, _name, checkpoint_store(getattr(MemoryStore2, _name)))

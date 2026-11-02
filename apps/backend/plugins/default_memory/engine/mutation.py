@@ -33,7 +33,8 @@ def _item_matches_forget_scope(
     item: dict[str, object],
     scope: MemoryScope,
 ) -> bool:
-    return True
+    from memory2.store.changes import compatible
+    return compatible(item, {"scope_channel": scope.channel, "scope_chat_id": scope.chat_id})
 
 
 def _coerce_memory_type(
@@ -202,7 +203,8 @@ class _MutationMixin:
 
         # 2. 只失效能确认存在的条目，缺失 id 返回给调用方展示。
         if found_ids:
-            store.mark_superseded_batch(found_ids)
+            store.commit_change("forget", ids=found_ids, source_ref=request.source_ref,
+                                extra={"scope_channel": scope.channel, "scope_chat_id": scope.chat_id})
         return MemoryMutationResult(
             accepted=bool(found_ids),
             status="superseded",
@@ -271,62 +273,30 @@ class _MutationMixin:
         scope_chat_id: str,
         role_id: str = "",
     ) -> dict[str, int]:
-        saved_counts = {"profile": 0, "preference": 0, "procedure": 0}
-
-        # 1. profile 写入用户画像类事实。
-        for item in _dict_items(result.get("profile")):
-            summary = str(item.get("summary") or "").strip()
-            if not summary:
-                continue
-            category = str(item.get("category") or "personal_fact").strip()
-            raw_happened_at = item.get("happened_at")
-            happened_at = raw_happened_at if isinstance(raw_happened_at, str) else None
-            await self._save_item_with_supersede(
-                summary=summary,
-                memory_type="profile",
-                extra={
-                    "category": category,
-                    "role_id": role_id,
-                    "scope_channel": scope_channel,
-                    "scope_chat_id": scope_chat_id,
-                },
-                source_ref=f"{source_ref}#profile",
-                happened_at=happened_at,
-                emotional_weight=_coerce_emotional_weight(item.get("emotional_weight")),
+        counts = {"profile": 0, "preference": 0, "procedure": 0}
+        for kind, item, extra in self._implicit_rows(result, scope_channel, scope_chat_id, role_id):
+            when = item.get('happened_at')
+            status = await self._save_item_with_supersede(
+                summary=str(item["summary"]).strip(), memory_type=kind, extra=extra,
+                source_ref=source_ref + ("#profile" if kind == "profile" else "#implicit"),
+                happened_at=when if isinstance(when, str) else None,
+                emotional_weight=0,
             )
-            saved_counts["profile"] += 1
-            logger.info("consolidation long_term saved: type=profile %r", summary[:60])
+            if status and not status.startswith("skipped:"):
+                counts[kind] += 1
+        return counts
 
-        # 2. preference / procedure 写入行为偏好和执行规则。
-        for memory_type in ("preference", "procedure"):
-            for item in _dict_items(result.get(memory_type)):
-                summary = str(item.get("summary") or "").strip()
-                if not summary:
+    @staticmethod
+    def _implicit_rows(result, channel, chat_id, role_id):
+        for kind in ("profile", "preference", "procedure"):
+            for item in _dict_items(result.get(kind)):
+                if not str(item.get("summary") or "").strip():
                     continue
-                extra: dict[str, object] = {
-                    "tool_requirement": item.get("tool_requirement"),
-                    "steps": item.get("steps") or [],
-                    "role_id": role_id,
-                    "scope_channel": scope_channel,
-                    "scope_chat_id": scope_chat_id,
-                }
-                if memory_type == "procedure" and isinstance(
-                    item.get("rule_schema"), dict
-                ):
-                    extra["rule_schema"] = item["rule_schema"]
-                await self._save_item_with_supersede(
-                    summary=summary,
-                    memory_type=memory_type,
-                    extra=extra,
-                    source_ref=f"{source_ref}#implicit",
-                    emotional_weight=_coerce_emotional_weight(
-                        item.get("emotional_weight")
-                    ),
-                )
-                saved_counts[memory_type] += 1
-                logger.info(
-                    "consolidation long_term saved: type=%s %r",
-                    memory_type,
-                    summary[:60],
-                )
-        return saved_counts
+                extra = {"scope_channel": channel, "scope_chat_id": chat_id, "role_id": role_id}
+                if kind == "profile":
+                    extra["category"] = str(item.get("category") or "personal_fact").strip()
+                else:
+                    extra.update(tool_requirement=item.get("tool_requirement"), steps=item.get("steps") or [])
+                    if kind == "procedure" and isinstance(item.get("rule_schema"), dict):
+                        extra["rule_schema"] = item["rule_schema"]
+                yield kind, item, extra

@@ -35,6 +35,7 @@ def _undo_store_by_message_sources(
     message_ids: list[str],
     *,
     dry_run: bool = False,
+    resolve_legacy=None, journal=None,
 ) -> dict[str, object]:
     target_ids = {str(item).strip() for item in message_ids if str(item).strip()}
     if not target_ids:
@@ -44,6 +45,8 @@ def _undo_store_by_message_sources(
     def matches(source_ref):
         source = str(source_ref or "").strip()
         base_ids = _source_ref_message_ids(source)
+        if resolve_legacy and source.startswith(("memory-task:", "markdown-task:")):
+            base_ids = resolve_legacy(source)
         if source in target_ids:
             rollback_source_ids.add(source)
             return True
@@ -61,6 +64,19 @@ def _undo_store_by_message_sources(
             ).fetchall()
             if matches(source)
         }
+        # Each contribution may depend on several messages. Withdrawing any
+        # invalidates that contribution, not other independent confirmations.
+        evidence = db.execute("SELECT item_id,contribution,message_id,source_ref FROM memory_evidence WHERE active=1").fetchall()
+        removed = {key for _, key, mid, _ in evidence if mid in target_ids}
+        touched = {item for item, key, _, _ in evidence if key in removed}
+        candidates = touched | affected_ids
+        live_refs = {item: ref for item, key, _, ref in evidence if item in candidates and key not in removed}
+        for item in touched:
+            original = db.execute("SELECT source_ref FROM memory_items WHERE id=?", (item,)).fetchone()
+            if original and not matches(original[0]) and original[0]:
+                live_refs.setdefault(item, original[0])
+        affected_ids.update(touched)
+        affected_ids.difference_update(live_refs)
         # A reused target keeps its original source. The correction's source
         # lives on the relationship and must be undone independently of it.
         relation_ids = {
@@ -71,6 +87,10 @@ def _undo_store_by_message_sources(
             ).fetchall()
             if matches(source) or str(new_id) in affected_ids
         }
+        causes = db.execute('SELECT item_id,receipt,source_ref,restorable FROM memory_retirements WHERE active=1').fetchall()
+        revoke = {receipt for _, receipt, ref, _ in causes if matches(ref)}
+        keep_retired = {item for item, receipt, _, _ in causes if receipt not in revoke}
+        eligible = {item for item, receipt, _, allowed in causes if receipt in revoke and allowed}
         outer_defer = db.defer_commit
         db.execute("SAVEPOINT memory_source_undo")
         db.defer_commit = True
@@ -79,10 +99,19 @@ def _undo_store_by_message_sources(
                 store,
                 affected_ids,
                 dry_run=dry_run,
-                relation_ids=relation_ids,
+                relation_ids=relation_ids, eligible=eligible, keep_retired=keep_retired,
             )
             if not dry_run:
                 now = datetime.now().astimezone().isoformat()
+                db.executemany("UPDATE memory_retirements SET active=0 WHERE receipt=?", [(r,) for r in revoke])
+                db.executemany("UPDATE memory_evidence SET active=0 WHERE contribution=?", [(key,) for key in removed])
+                db.executemany("UPDATE memory_items SET source_ref=? WHERE id=?", [(ref, item) for item, ref in live_refs.items()])
+                if journal is not None:
+                    from core.memory.sources import read_messages, fingerprint
+                    for msg in read_messages(journal, ids=sorted(target_ids)):
+                        db.execute("INSERT OR REPLACE INTO memory_coverage VALUES (?,?,?,'withdrawn','','source_undo',?)",
+                                   (journal.root_id, msg['id'], fingerprint(msg), now))
+                db.executemany("UPDATE memory_coverage SET state='withdrawn',updated_at=? WHERE message_id=?", [(now, i) for i in target_ids])
                 db.executemany(
                     "UPDATE memory_items SET status='superseded', updated_at=?, "
                     "extra_json=json_set(COALESCE(extra_json, '{}'), '$._source_undone', 1) WHERE id=?",
@@ -111,7 +140,7 @@ def _restore_replacements_for_undo(
     affected_ids: set[str],
     *,
     dry_run: bool = False,
-    relation_ids: set[int] | None = None,
+    relation_ids: set[int] | None = None, eligible=None, keep_retired=None,
 ) -> set[str]:
     relations = store._db.execute(
         "SELECT id,old_item_id,new_item_id,relation_type FROM memory_replacements "
@@ -147,7 +176,8 @@ def _restore_replacements_for_undo(
             if ancestor not in candidates:
                 candidates.add(ancestor)
                 pending.append(ancestor)
-    candidates -= removed_sources
+    candidates.update(eligible or ())
+    candidates -= removed_sources | (keep_retired or set())
 
     def has_live_successor(item_id):
         pending = list(successors.get(item_id, ()))
@@ -285,7 +315,7 @@ class _AdminMixin:
         return _undo_store_by_message_sources(
             self._require_v2_store(),
             message_ids,
-            dry_run=dry_run,
+            dry_run=dry_run, journal=getattr(getattr(self, "memory_tasks", None), "journal", None), resolve_legacy=getattr(getattr(self, "memory_tasks", None), "legacy_sources", None),
         )
 
     def find_similar_items_for_admin(

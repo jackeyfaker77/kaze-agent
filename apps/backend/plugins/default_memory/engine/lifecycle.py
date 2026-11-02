@@ -224,17 +224,23 @@ class DefaultMemoryEngine(
         await self._apply_consolidation(event)
 
     async def _apply_consolidation(self, event: ConsolidationCommitted, *, existing_profile=None) -> None:
+        from core.memory.sources import memory_sources, source_ref
+        batch = memory_sources.get()
+        event_ref = source_ref(batch.messages, batch.root) if batch else event.source_ref
         # Stable sequential checkpoint paths across crashes and replay.
         for entry, emotional_weight in event.history_entry_payloads:
             await self._save_from_consolidation(
                 history_entry=entry,
                 behavior_updates=[],
-                source_ref=_build_entry_source_ref(event.source_ref, entry),
+                source_ref=_build_entry_source_ref(event_ref, entry),
                 scope_channel=event.scope_channel,
                 scope_chat_id=event.scope_chat_id,
                 role_id="",
                 emotional_weight=emotional_weight,
             )
+        if batch:
+            await self._extract_uncovered(event.scope_channel, event.scope_chat_id, "", existing_profile)
+            return
         implicit_result = await self._extract_implicit_long_term(
             conversation=event.conversation,
             existing_profile=self._existing_long_term_memory("") if existing_profile is None else existing_profile,
@@ -258,6 +264,10 @@ class DefaultMemoryEngine(
         chat_id: str,
         role_id: str,
     ) -> None:
+        from core.memory.sources import memory_sources
+        if memory_sources.get():
+            await self._extract_uncovered(channel, chat_id, role_id)
+            return
         clean_role_id = str(role_id or "").strip()
         conversation = f"USER: {user_msg}\nASSISTANT: {assistant_response}"
         result = await self._extract_implicit_long_term(
@@ -272,6 +282,61 @@ class DefaultMemoryEngine(
                 scope_chat_id=chat_id,
                 role_id=clean_role_id,
             )
+
+    async def _extract_uncovered(self, channel, chat_id, role_id, existing_profile=None):
+        import json
+        from core.memory.sources import memory_sources
+        from core.memory.task_context import memory_task, MemoryTaskBlocked
+        batch = memory_sources.get()
+        task = memory_task.get()
+        assert batch is not None and task is not None and self._memorizer is not None
+        store = self._require_v2_store()
+        batch.validate()
+        pending = {}
+        held = False
+        for m in batch.messages:
+            if m['role'] != 'user':
+                continue
+            decision = store.claim_extraction(batch.root, m, task.row['id'])
+            if decision == 'held':
+                held = True
+            elif decision:
+                pending[m['id']] = m
+        if not pending:
+            if held:
+                raise MemoryTaskBlocked('source_extraction_unresolved')
+            return
+        # Only uncovered user messages are evidence. An archive window may
+        # contain several users' turns; never credit its entire window to one claim.
+        conversation = "\n".join('USER ' + json.dumps({'source_id': k, 'text': m['content']}, ensure_ascii=False)
+                                 for k, m in pending.items())
+        result = await self._extract_implicit_long_term(
+            conversation=conversation,
+            existing_profile=self._existing_long_term_memory(role_id) if existing_profile is None else existing_profile,
+            attributed=True,
+        )
+        kinds = ('profile', 'preference', 'procedure')
+        if not isinstance(result, dict) or not any(k in result for k in kinds):
+            raise MemoryTaskBlocked('invalid_extraction_result')
+        for kind in kinds:
+            items = result.get(kind, [])
+            if not isinstance(items, list) or any(not isinstance(i, dict) or
+                    not isinstance(i.get('summary'), str) or not i['summary'].strip() for i in items):
+                raise MemoryTaskBlocked('invalid_extraction_result')
+        prepared = {k: [] for k in pending}
+        for kind, item, extra in self._implicit_rows(result, channel, chat_id, role_id):
+            key = item.get('source_id') or (next(iter(pending)) if len(pending) == 1 else None)
+            if key not in pending:
+                raise MemoryTaskBlocked('extraction_source_mismatch')
+            summary = str(item['summary']).strip()
+            embedding = await self._memorizer._embedder.embed(summary)
+            prepared[key].append(dict(memory_type=kind, summary=summary, extra=extra, embedding=embedding,
+                                      happened_at=item.get('happened_at') if kind == 'profile' else None))
+        batch.validate()
+        for key, message in pending.items():
+            store.finish_extraction(batch.root, message, prepared[key])
+        if held:
+            raise MemoryTaskBlocked('source_extraction_unresolved')
 
     def _existing_long_term_memory(self, role_id: str) -> str:
         """Builds a bounded role-local deduplication context for extraction."""
@@ -298,6 +363,7 @@ class DefaultMemoryEngine(
         *,
         conversation: str,
         existing_profile: str = "",
+        attributed: bool = False,
     ) -> dict[str, object] | None:
         try:
             started_at = time.perf_counter()
@@ -305,6 +371,8 @@ class DefaultMemoryEngine(
                 conversation=conversation,
                 existing_profile=existing_profile,
             )
+            if attributed:
+                prompt += "\n每条输出必须带 source_id，逐字复制支撑它的 USER 消息的 source_id。不要把不同来源合成一条。"
             resp = await self._provider.chat(
                 messages=[
                     {

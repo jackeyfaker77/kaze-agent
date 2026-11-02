@@ -26,7 +26,10 @@ async def setup(workspace, wire_hook=None, callback=False):
         if wire_hook:
             wire_hook()
         if '长期记忆提取器' in data['messages'][0]['content']:
-            content = '{"preference":[{"summary":"callback preference"}]}'
+            import re
+            source = re.search(r'USER \{"source_id": "([^"]+)"', data['messages'][-1]['content'])
+            content = json.dumps({'preference': [{'summary': 'callback preference',
+                                                 **({'source_id': source[1]} if source else {})}]})
         elif '近期语境压缩代理' in data['messages'][0]['content']:
             content = '{"active_topics":["durable topic"]}'
         else:

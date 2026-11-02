@@ -9,8 +9,7 @@ import pytest
 
 @pytest.mark.parametrize('point', [
     'source_fact', 'before_admission_commit', 'admitted', 'before_model', 'model_response',
-    'before_memory_commit:mark_superseded_batch', 'after_memory_commit:mark_superseded_batch',
-    'before_memory_commit:upsert_item', 'after_memory_commit:upsert_item',
+    'before_memory_commit:commit_change', 'after_memory_commit:commit_change',
     'before_done', 'done', 'wire',
 ])
 def test_crash_recovery_keeps_task_and_never_repeats_committed_work(tmp_path, point):

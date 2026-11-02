@@ -29,9 +29,8 @@ def fault(point):
 
 
 class MemoryTasks:
-    # v2 removes similarity-search steps from memory writes. Ordinal v1
-    # receipts cannot be replayed under this workflow; retain and block them.
-    VERSION = 2
+    # V1/V2 ordinal step paths cannot be replayed by V3. Keep old receipts.
+    VERSION = 3  # Message evidence, extraction coverage, and mutation receipt paths.
 
     def __init__(self, store, journal, worker):
         self.store, self.journal, self.worker = store, journal, worker
@@ -41,6 +40,8 @@ class MemoryTasks:
         self.consolidation_handler: Any = None
         self.lock = asyncio.Lock()
         self.db.executescript('''
+            CREATE TABLE IF NOT EXISTS memory_upgrade_boundary(id INTEGER PRIMARY KEY CHECK(id=1),seq INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS memory_root(id INTEGER PRIMARY KEY CHECK(id=1),root TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS memory_task_cursor(root TEXT PRIMARY KEY, seq INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS memory_tasks(
                 id TEXT PRIMARY KEY, root TEXT NOT NULL, source_seq INTEGER NOT NULL,
@@ -52,6 +53,17 @@ class MemoryTasks:
                 PRIMARY KEY(job,path));
         ''')
         self.db.commit()
+        # Memory item IDs, replacement edges and legacy source IDs are local to one root.
+        with self.db:
+            if self.db.execute('SELECT 1 FROM memory_upgrade_boundary').fetchone() is None:
+                # Subscribe before accepting new jobs; this boundary never advances.
+                head = journal._conn.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
+                self.db.execute('INSERT OR IGNORE INTO memory_upgrade_boundary VALUES (1,?)', (head,))
+            self.db.execute('INSERT OR IGNORE INTO memory_root VALUES (1,?)', (journal.root_id,))
+            if self.db.execute('SELECT root FROM memory_root WHERE id=1').fetchone()[0] != journal.root_id or self.db.execute(
+                    'SELECT root FROM memory_task_cursor WHERE root<>? UNION ALL SELECT root FROM memory_tasks WHERE root<>? LIMIT 1',
+                    (journal.root_id, journal.root_id)).fetchone():
+                raise MemoryTaskBlocked('memory_database_root_mismatch')
         journal.memory_tasks_enabled = True
 
     def discover(self):
@@ -95,6 +107,58 @@ class MemoryTasks:
                 (job, self.journal.root_id, event.source_seq, event.source_turn, self.VERSION, encode(payload), 'pending'))
         return job
 
+    def _legacy_messages(self, ref):
+        """Resolve old task handles only from their recorded source, never by text similarity."""
+        import sqlite3
+        from contextlib import closing
+        from core.memory.sources import read_messages
+        base = ref.split('#', 1)[0]
+        if base.startswith('memory-task:'):
+            row = self.db.execute('SELECT source_turn,source_seq FROM memory_tasks WHERE root=? AND id=?',
+                                  (self.journal.root_id, base.removeprefix('memory-task:'))).fetchone()
+            return [m for m in read_messages(self.journal, turn=row[0], through=row[1])
+                    if m['role'] == 'user'] if row else []
+        if base.startswith('markdown-task:'):
+            path = self.journal.directory.parent.parent / 'memory/markdown_tasks.sqlite3'
+            if not path.is_file():
+                return []
+            with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
+                row = conn.execute('SELECT draft,session_key,snapshot FROM tasks WHERE root=? AND id=?',
+                                   (self.journal.root_id, base.removeprefix('markdown-task:'))).fetchone()
+            if row and row[0]:
+                from core.memory.markdown.formatting import window_sources, _is_nsfw_memory_enabled_session
+                from types import SimpleNamespace
+                snapshot = SimpleNamespace(**json.loads(row[2] or '{}'))
+                return window_sources(json.loads(row[0]).get('window', {}).get('old_messages', []), row[1],
+                                      nsfw_memory_enabled=_is_nsfw_memory_enabled_session(snapshot))
+        return []
+
+    def legacy_sources(self, ref):
+        return [m['id'] for m in self._legacy_messages(ref) if m.get('id')]
+
+    def legacy_ref(self, ref):
+        from core.memory.sources import source_ref
+        messages = self._legacy_messages(ref)
+        return source_ref(messages, self.journal.root_id) if messages and all(m.get('id') for m in messages) else ''
+
+    def guard_legacy_overlap(self, batch, session_key):
+        """A new route cannot retry a source held by an unresolved old workflow."""
+        ids = {m['id'] for m in batch.messages}
+        for job, cutoff in self.db.execute("""SELECT id,source_seq FROM memory_tasks WHERE root=? AND version<>?
+                AND state IN ('pending','running','blocked') AND json_extract(input,'$.session_key')=?""",
+                (batch.root, self.VERSION, session_key)):
+            ref = ('markdown-task:' + job.removeprefix('markdown-callback:') if job.startswith('markdown-callback:') else 'memory-task:' + job)
+            held = self.legacy_sources(ref)
+            # Old callbacks can cover a later window than their trigger. Use
+            # the immutable log high-water mark at first V3 startup for them.
+            if not held:
+                from core.memory.sources import read_messages
+                if job.startswith('markdown-callback:'):
+                    cutoff = self.db.execute('SELECT seq FROM memory_upgrade_boundary WHERE id=1').fetchone()[0]
+                held = [m['id'] for m in read_messages(self.journal, ids=sorted(ids), through=cutoff)]
+            if ids.intersection(held):
+                raise MemoryTaskBlocked('legacy_source_unresolved')
+
     def list_tasks(self, session_key='', limit=50):
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError('Invalid memory task limit')
@@ -136,6 +200,8 @@ class MemoryTasks:
                 context = Task(self, row)
                 token = memory_task.set(context)
                 frame = _frame.set(('', [0]))
+                from core.memory.sources import SourceBatch, memory_sources, read_messages, source_ref
+                source_token = memory_sources.set(None)
                 try:
                     if row['version'] != self.VERSION:
                         raise MemoryTaskBlocked('unsupported_workflow_version')
@@ -144,9 +210,24 @@ class MemoryTasks:
                         if self.consolidation_handler is None:
                             raise MemoryTaskBlocked('consolidation_handler_unavailable')
                         from core.memory.events import ConsolidationCommitted
-                        await self.consolidation_handler(ConsolidationCommitted(**inputs['event']), existing_profile=inputs['existing_profile'])
+                        event = ConsolidationCommitted(**inputs['event'])
+                        batch = SourceBatch(self.journal, event.source_messages)
+                        batch.validate()
+                        self.guard_legacy_overlap(batch, inputs['session_key'])
+                        self.store.check_withdrawn(batch)
+                        memory_sources.set(batch)
+                        await self.consolidation_handler(event, existing_profile=inputs['existing_profile'])
                     else:
-                        await self.worker.run(**inputs, source_ref='memory-task:' + row['id'])
+                        messages = read_messages(self.journal, turn=row['source_turn'], through=row['source_seq'])
+                        sources = [m for m in messages if m['role'] == 'user' and m['session_key'] == inputs['session_key']]
+                        if len(sources) != 1 or sources[0]['content'] != inputs['user_msg']:
+                            raise MemoryTaskBlocked('source_identity_missing')
+                        batch = SourceBatch(self.journal, sources)
+                        batch.validate()
+                        self.guard_legacy_overlap(batch, inputs['session_key'])
+                        self.store.check_withdrawn(batch)
+                        memory_sources.set(batch)
+                        await self.worker.run(**inputs, source_ref=source_ref(sources, batch.root))
                     fault('before_done')
                     with self.db:
                         self.db.execute("UPDATE memory_tasks SET state='done',error=NULL WHERE id=?", (row['id'],))
@@ -158,8 +239,10 @@ class MemoryTasks:
                     with self.db:
                         reason = str(exc) if isinstance(exc, MemoryTaskBlocked) else type(exc).__name__
                         self.db.execute("UPDATE memory_tasks SET state='blocked',error=? WHERE id=?", (reason, row['id']))
+                    self.store.block_extraction(row['id'], reason)
                     logger.warning('memory task blocked: id=%s error=%s', row['id'], type(exc).__name__)
                 finally:
+                    memory_sources.reset(source_token)
                     _frame.reset(frame)
                     memory_task.reset(token)
 

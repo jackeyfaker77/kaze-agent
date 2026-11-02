@@ -279,7 +279,10 @@ class MarkdownTasks:
         fault('cursor')
         if m._event_bus is not None:
             from core.memory.events import ConsolidationCommitted
-            await m._event_bus.emit(ConsolidationCommitted(
+            from .formatting import window_sources, _is_nsfw_memory_enabled_session
+            sources = window_sources(draft.window.old_messages, row['session_key'],
+                                     nsfw_memory_enabled=_is_nsfw_memory_enabled_session(session))
+            await m._event_bus.emit(ConsolidationCommitted(source_messages=sources,
                 history_entry_payloads=draft.history_entry_payloads, source_ref=draft.source_ref,
                 scope_channel=draft.scope_channel, scope_chat_id=draft.scope_chat_id,
                 conversation=draft.conversation, task_id=row['id'], session_key=row['session_key'],

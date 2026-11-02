@@ -30,9 +30,8 @@ class _PolicyMixin:
             raise RuntimeError("memory v2 store unavailable")
         return self._v2_store
 
-    @classmethod
     def _build_record(
-        cls,
+        self,
         item: dict[str, object],
         *,
         injected_ids: list[str] | None = None,
@@ -44,6 +43,8 @@ class _PolicyMixin:
         memory_kind = str(item.get("memory_type", "") or "")
         item_id = str(item.get("id", "") or "")
         source_ref = str(item.get("source_ref", "") or "")
+        if source_ref.startswith(('memory-task:', 'markdown-task:')) and getattr(self, 'memory_tasks', None):
+            source_ref = self.memory_tasks.legacy_ref(source_ref)
         raw_score = item.get("score", 0.0)
         score = raw_score if isinstance(raw_score, int | float) else 0.0
         return MemoryRecord(
@@ -52,7 +53,7 @@ class _PolicyMixin:
             domain=str(item.get("memory_domain", "") or ""),
             summary=str(item.get("summary", "") or ""),
             score=float(score),
-            engine_kind=cls.DESCRIPTOR.name,
+            engine_kind=self.DESCRIPTOR.name,
             evidence=evidence_from_source_ref(source_ref),
             signals=signals,
             injected=item_id in set(injected_ids or []),

@@ -470,6 +470,10 @@ def _format_source_tag(source_ref: str | None) -> str:
     """
     if not source_ref:
         return ""
+    if "#rev:" in source_ref:
+        # Bare message IDs would lose the revision check; keep long archive
+        # windows out of the prompt. Recall supplies the complete evidence ref.
+        return " (用 recall_memory 取得版本化 evidence)"
     raw = source_ref.split("#h:")[0].strip()
     ids: list[str] = []
     try:

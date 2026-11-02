@@ -61,7 +61,8 @@ async def test_classifiers_use_non_thinking_wire_and_replay_without_changing_dia
         [{'id': item, 'summary': '旧查询流程', 'score': .99} for item in ids], implicit)
     try:
         await worker.run('不要再按旧查询流程做了', '好的', [], 'test')
-        memorizer.supersede_batch.assert_called_once_with(ids)
+        assert memorizer.supersede_batch.call_args.args == (ids,)
+        assert memorizer.supersede_batch.call_args.kwargs["source_ref"]
         implicit.assert_awaited_once()
         assert sum(p['max_tokens'] for p in wire) + worker.TOKENS_EXTRACT_IMPLICIT <= worker.TOKEN_BUDGET_PER_RUN
         assert len(wire) == 2

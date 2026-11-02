@@ -92,24 +92,9 @@ class _StoreWriteMixin:
         if not summary.strip() or not source_ref.strip() or source_ref == "memorize_tool":
             raise ValueError("Replacement requires content and a recorded source")
         ids = list(dict.fromkeys(i.strip() for i in supersedes))
-        def owner(value):
-            # Missing domain is the legacy default engine's shared domain.
-            return (str(value.get("role_id") or "").strip(),
-                    str(value.get("memory_domain") or "shared").strip())
-
+        from .changes import compatible
         def in_scope(item):
-            value = item.get("extra_json") or {}
-            if owner(value) != owner(extra):
-                return False
-            # Shared personal memory is readable/correctable across channels.
-            # Source channel/chat are provenance, not a second ownership key.
-            if owner(value)[1] == "shared":
-                return True
-            return all(
-                not str(value.get(k) or "").strip()
-                or str(value.get(k) or "").strip() == str(extra.get(k) or "").strip()
-                for k in ("scope_channel", "scope_chat_id")
-            )
+            return compatible(item, extra)
         with self._lock:
             db = self._db
             outer_defer = db.defer_commit
@@ -208,7 +193,15 @@ class _StoreWriteMixin:
                 (chash, "event"),
             ).fetchone()
 
+            if existing and happened_at:
+                old_time = self._db.execute("SELECT happened_at FROM memory_items WHERE id=?", (existing[0],)).fetchone()[0]
+                if old_time and old_time != happened_at:
+                    chash = _content_hash(json.dumps([text, happened_at], ensure_ascii=False), "event")
+                    existing = self._db.execute("SELECT id,status FROM memory_items WHERE content_hash=? AND memory_type='event'", (chash,)).fetchone()
             if existing:
+                from .changes import compatible
+                if not compatible(self.get_items_by_ids([existing[0]])[0], extra or {}):
+                    raise ValueError("Memory content scope mismatch")
                 row_id, status = existing
                 if status == "superseded":
                     result = f"skipped:{row_id}"

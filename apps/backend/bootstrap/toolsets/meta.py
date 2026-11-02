@@ -32,6 +32,7 @@ class CommonMetaToolsetProvider(ToolsetProvider):
             self._readonly_tools,
             deps.session_store,
             push_tool=deps.push_tool,
+            resolve_legacy=getattr(getattr(deps.memory_engine, "memory_tasks", None), "legacy_ref", None),
         )
 
         return build_registration_result(

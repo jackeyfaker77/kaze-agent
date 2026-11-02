@@ -56,8 +56,9 @@ class FetchMessagesTool(Tool):
         },
     }
 
-    def __init__(self, store: SessionStore) -> None:
+    def __init__(self, store: SessionStore, resolve_legacy=None) -> None:
         self._store = store
+        self._resolve_legacy = resolve_legacy
 
     async def execute(
         self,
@@ -68,18 +69,35 @@ class FetchMessagesTool(Tool):
         context: int = 0,
         **_: Any,
     ) -> str:
-        clean_ids = _resolve_fetch_ids(
-            ids=ids or [],
-            source_ref=source_ref,
-            source_refs=source_refs or [],
-            evidence=evidence or [],
-        )
+        from core.memory.sources import source_ref as versioned_ref
+        refs = list(ids or []) + ([source_ref] if source_ref else []) + list(source_refs or []) + _source_refs_from_evidence(evidence or [])
+        if self._resolve_legacy:
+            refs = [self._resolve_legacy(ref) if ref.startswith(('memory-task:', 'markdown-task:')) else ref for ref in refs]
+        refs = list(dict.fromkeys(filter(None, refs)))
+        clean_ids = list(dict.fromkeys(mid for ref in refs for mid in _expand_source_ref(ref)))
+        def verify(messages):
+            by_id = {m['id']: m for m in messages}
+            journal = getattr(self._store, 'execution_journal', None)
+            for ref in refs:
+                if '#rev:' not in ref:
+                    continue
+                group = _expand_source_ref(ref)
+                if not journal or not group or not all(mid in by_id for mid in group):
+                    return False
+                actual = versioned_ref([by_id[mid] for mid in group], journal.root_id)
+                if actual.partition('#rev:')[2] != ref.partition('#rev:')[2].split('#', 1)[0]:
+                    return False
+            return True
+
+        changed = json.dumps({'count':0,'matched_count':0,'messages':[], 'error':'source_history_changed'})
         if not clean_ids:
             return json.dumps({"count": 0, "matched_count": 0, "messages": []}, ensure_ascii=False)
 
         ctx = max(0, min(int(context), _MAX_CONTEXT))
         if ctx == 0:
             messages = [_to_public_message(m) for m in self._store.fetch_by_ids(clean_ids)]
+            if not verify(messages):
+                return changed
             return json.dumps(
                 {"count": len(messages), "matched_count": len(messages), "messages": messages},
                 ensure_ascii=False,
@@ -89,33 +107,13 @@ class FetchMessagesTool(Tool):
             _to_public_message(m)
             for m in self._store.fetch_by_ids_with_context(clean_ids, ctx)
         ]
+        if not verify(messages):
+            return changed
         matched = sum(1 for m in messages if m.get("in_source_ref"))
         return json.dumps(
             {"count": len(messages), "matched_count": matched, "messages": messages},
             ensure_ascii=False,
         )
-
-
-def _resolve_fetch_ids(
-    *,
-    ids: list[str],
-    source_ref: str | None,
-    source_refs: list[str],
-    evidence: list[dict[str, object]],
-) -> list[str]:
-    resolved: list[str] = []
-    seen: set[str] = set()
-    for value in (
-        list(ids)
-        + ([source_ref] if source_ref else [])
-        + list(source_refs)
-        + _source_refs_from_evidence(evidence)
-    ):
-        for item_id in _expand_source_ref(value):
-            if item_id not in seen:
-                seen.add(item_id)
-                resolved.append(item_id)
-    return resolved
 
 
 def _source_refs_from_evidence(evidence: list[dict[str, object]]) -> list[str]:

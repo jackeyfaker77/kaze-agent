@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[5]
     'model_response','second_model_response','draft','file_intent','file_pre_replace','file_replaced',
     'file_applied:PENDING.md','file_applied:RECENT_CONTEXT.md','file_applied:journal/2026-10-28.md',
     'files','cursor','callback','before_done','done','receipt_conflict','wire','wire_second','callback_wire',
-    'callback_before_memory_commit:upsert_consolidation_event',
-    'callback_after_memory_commit:upsert_consolidation_event','callback_model_response',
-    'callback_after_memory_commit:upsert_item','callback_before_done'])
+    'callback_before_memory_commit:commit_change',
+    'callback_after_memory_commit:commit_change','callback_model_response',
+    'callback_after_memory_commit:finish_extraction','callback_before_done'])
 def test_real_crash_recovers_without_duplicate_calls_or_writes(tmp_path, point):
     command = [sys.executable, str(ROOT/'tests/e2e/markdown_tasks_crash.py'), str(tmp_path), point]
     env = {**os.environ, 'PYTHONIOENCODING':'utf-8'}
