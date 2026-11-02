@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
+from itertools import groupby
 from pathlib import Path
 import sqlite3
 import threading
@@ -24,6 +25,26 @@ from .projection import project_event, public_state, retry_policy, unresolved, u
 
 def encode(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _projection_batches(events):
+    """A reply-delta run changes only last_seq; retain every fact and validate its envelope."""
+    def key(event):
+        if event["kind"] == "reply.delta":
+            return tuple(event[k] for k in ("kind", "turn_id", "run_id", "epoch", "version"))
+        return event["seq"]
+
+    for _, batch in groupby(events, key):
+        first = next(batch)
+        last_seq = first["seq"]
+        for event in batch:
+            # project_event checks the first fact's version, identity, ordering,
+            # payload and running state. The grouping key preserves those same
+            # checks for later facts; their payloads must also be objects.
+            if not isinstance(json.loads(event["payload"]), dict):
+                raise ExecutionProjectionError("Invalid execution event prefix")
+            last_seq = event["seq"]
+        yield first, last_seq
 
 
 class ExecutionJournal(SpawnHandoff):
@@ -111,12 +132,13 @@ class ExecutionJournal(SpawnHandoff):
     def _sync_projection(self):
         checkpoint = self._conn.execute("SELECT seq FROM execution_checkpoint WHERE id=1").fetchone()
         after = checkpoint[0] if checkpoint else 0
-        for event in self._conn.execute("SELECT * FROM events WHERE seq>? ORDER BY seq", (after,)).fetchall():
+        for event, last_seq in _projection_batches(self._conn.execute("SELECT * FROM events WHERE seq>? ORDER BY seq", (after,))):
             # Conversation facts have their own strict projection and identities.
             if event["kind"] not in {"conversation.baseline", "conversation.changed", "goal.state"}:
                 old = self._conn.execute("SELECT state FROM execution_views WHERE turn_id=?", (event["turn_id"],)).fetchone()
                 state = project_event(json.loads(old[0]) if old else None,
                                       {**dict(event), "payload": json.loads(event["payload"])}, self.root_id)
+                state["last_seq"] = last_seq
                 if event['kind'] == 'continuation.started':
                     claim = state['continuation']
                     self._conn.execute('INSERT INTO continuation_claims VALUES (?,?,?,?)',
@@ -148,7 +170,7 @@ class ExecutionJournal(SpawnHandoff):
                     (state["cursor"], state["turn_id"], state["run_id"], state["epoch"], state["session_key"],
                      state["source"], state["request_key"], encode(state["input"]), state["status"],
                      encode(state["result"]) if state["result"] is not None else None))
-            after = event["seq"]
+            after = last_seq
         self._conn.execute("INSERT INTO execution_checkpoint VALUES (1,?) ON CONFLICT(id) DO UPDATE SET seq=excluded.seq", (after,))
 
     def rebuild_projection(self):
