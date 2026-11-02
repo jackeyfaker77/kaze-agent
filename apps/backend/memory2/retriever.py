@@ -86,6 +86,15 @@ class Retriever:
         time_end: datetime | None = None,
         keyword_enabled: bool = True,
     ) -> list[dict]:
+        """Retrieve in RRF order; injection may filter but must not reorder.
+
+        aux_queries is retained for caller-supplied, on-demand expansion via
+        context/procedure MemoryQuery.filters.hints["queries"]. The default
+        loop currently supplies no extra queries; answer/recall_memory does
+        not generate HyDE hypotheses. Each distinct auxiliary query adds an
+        embedding and vector search, not a query-generation LLM call. Keyword
+        retrieval continues to use only the original query.
+        """
         # 1. query 与辅助 query 一起进入向量 lane，避免多入口语义漂移。
         actual_top_k = self._top_k if top_k is None else max(1, int(top_k))
         actual_threshold = (

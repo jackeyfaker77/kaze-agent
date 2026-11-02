@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from agent.tools.memorize import MemorizeTool
-from core.memory.engine import MemoryMutation, MemoryQuery, MemoryScope
+from core.memory.engine import MemoryMutation, MemoryQuery, MemoryQueryFilters, MemoryScope
 from memory2.memorizer import Memorizer
 from memory2.retriever import Retriever
 from memory2.store import MemoryStore2
@@ -356,3 +356,56 @@ def test_removed_config_keys_are_ignored_and_not_reemitted(tmp_path):
     rendered = render_default_memory_config(config)
     for key in ("relative_delta", "line_max", "procedure_guard_enabled", "forced"):
         assert key not in rendered
+
+
+@pytest.mark.parametrize("reuse_existing_target", [False, True])
+def test_replacement_rejects_retired_old_target_without_prior_relation(
+    store, reuse_existing_target
+):
+    old = store.upsert_item("preference", "old", [1.0, 0.0]).split(":")[1]
+    store.mark_superseded(old)
+    if reuse_existing_target:
+        store.upsert_item("preference", "new", [1.0, 0.0])
+    before = list(store._db.iterdump())
+
+    with pytest.raises(ValueError, match="Replacement target is no longer active"):
+        store.replace_items(
+            memory_type="preference",
+            summary="new",
+            embedding=[1.0, 0.0],
+            source_ref="user:2",
+            extra={},
+            supersedes=[old],
+        )
+
+    # No new item, reinforcement, relationship, or status change on rejection.
+    assert list(store._db.iterdump()) == before
+    assert not store._db.defer_commit and not store._db.in_transaction
+
+
+async def test_context_expansion_is_opt_in_and_does_not_generate_queries(store):
+    primary = store.upsert_item("preference", "primary record", [1.0, 0.0]).split(":")[1]
+    auxiliary = store.upsert_item("preference", "auxiliary record", [0.0, 1.0]).split(":")[1]
+    vectors = {"original topic": [1.0, 0.0], "additional topic": [0.0, 1.0]}
+    embedder = SimpleNamespace(embed=AsyncMock(side_effect=lambda text: vectors[text]))
+    value = engine(store)
+    value._retriever = Retriever(store, embedder, score_threshold=0.8)
+
+    ordinary = await value.query(MemoryQuery(text="original topic", intent="context"))
+    assert [record.id for record in ordinary.records] == [primary]
+    embedder.embed.reset_mock()
+    expanded = await value.query(
+        MemoryQuery(
+            text="original topic",
+            intent="context",
+            filters=MemoryQueryFilters(
+                hints={"queries": ["original topic", "additional topic", "additional topic"]}
+            ),
+        )
+    )
+
+    assert {record.id for record in expanded.records} == {primary, auxiliary}
+    assert [call.args[0] for call in embedder.embed.await_args_list] == [
+        "original topic", "additional topic"
+    ]
+    value._light_provider.chat.assert_not_called()
