@@ -73,99 +73,22 @@ class Memorizer:
         source_ref: str,
         happened_at: str | None = None,
         emotional_weight: int = 0,
-        merge_threshold: float = 0.70,
-        supersede_threshold: float = 0.90,
+        supersedes: list[str] | None = None,
     ) -> str:
-        """先 supersede 高相似旧条目，再写入新条目。
+        """Ordinary writes coexist; only explicit IDs authorize replacement.
 
-        - procedure / preference：退休相似度 >= supersede_threshold 的旧条目；
-          procedure 额外尝试 merge 同工具要求的近似条目。
-        - profile（status / purchase 类别）：退休相同 category 中相似度 >= supersede_threshold
-          的旧条目，防止同类状态事实堆积。
+        Similarity is retrieval evidence, not a contradiction or merge verdict.
+        The store commits the new item, replacement record and retirement together.
         """
-        embedding = await self._embedder.embed(summary)
-        role_id = str((extra or {}).get("role_id") or "").strip() or None
-
-        if memory_type in ("procedure", "preference"):
-            similar = self._store.vector_search(
-                query_vec=embedding,
-                top_k=5,
-                memory_types=[memory_type],
-                score_threshold=min(merge_threshold, supersede_threshold),
-                role_id=role_id,
+        if not supersedes:
+            return await self.save_item(
+                summary, memory_type, extra, source_ref, happened_at, emotional_weight,
             )
-            if memory_type == "procedure":
-                merge_target = self._pick_explicit_merge_target(similar, extra, merge_threshold)
-                if merge_target is not None:
-                    merged_summary = self._merge_summary_text(
-                        merge_target.get("summary", ""),
-                        summary,
-                    )
-                    await self.merge_item(
-                        merge_target["id"],
-                        merged_summary,
-                        extra_patch=extra,
-                    )
-                    logger.info(
-                        "memorizer save_with_supersede: merged explicit procedure into %s",
-                        merge_target["id"],
-                    )
-                    return f"merged:{merge_target['id']}"
-            similar = [
-                item
-                for item in similar
-                if isinstance(score := item.get("score"), int | float)
-                and float(score) >= supersede_threshold
-            ]
-            if similar:
-                supersede_ids = [str(item["id"]) for item in similar]
-                self._store.mark_superseded_batch(supersede_ids)
-                logger.info(
-                    "memorizer save_with_supersede: superseded %d %s items: %s",
-                    len(supersede_ids), memory_type, supersede_ids,
-                )
-
-        elif memory_type == "profile":
-            category = str((extra or {}).get("category") or "")
-            if category in ("status", "purchase"):
-                similar = self._store.vector_search(
-                    query_vec=embedding,
-                    top_k=5,
-                    memory_types=["profile"],
-                    score_threshold=supersede_threshold,
-                    role_id=role_id,
-                )
-                same_cat = [
-                    item for item in similar
-                    if isinstance(extra_json := item.get("extra_json"), dict)
-                    and extra_json.get("category") == category
-                    and isinstance(score := item.get("score"), int | float)
-                    and float(score)
-                    >= (
-                        0.92
-                        if _coerce_emotional_weight(
-                            extra_json.get("_emotional_weight", 0)
-                        )
-                        >= 7
-                        else supersede_threshold
-                    )
-                ]
-                if same_cat:
-                    supersede_ids = [str(item["id"]) for item in same_cat]
-                    self._store.mark_superseded_batch(supersede_ids)
-                    logger.info(
-                        "memorizer save_with_supersede: superseded %d profile/%s items: %s",
-                        len(supersede_ids), category, supersede_ids,
-                    )
-
-        return self._store.upsert_item(
-            memory_type=memory_type,
-            summary=summary,
-            embedding=embedding,
-            source_ref=source_ref,
-            extra=extra,
-            happened_at=happened_at,
-            emotional_weight=emotional_weight,
+        embedding = await self._embedder.embed(summary)
+        return self._store.replace_items(
+            memory_type=memory_type, summary=summary, embedding=embedding,
+            source_ref=source_ref, extra=extra, happened_at=happened_at,
+            emotional_weight=emotional_weight, supersedes=supersedes,
         )
 
     async def save_from_consolidation(
@@ -260,38 +183,6 @@ class Memorizer:
 
     def reinforce_items_batch(self, ids: list[str]) -> None:
         self._store.reinforce_items_batch(ids)
-
-    @staticmethod
-    def _merge_summary_text(old_summary: str, new_summary: str) -> str:
-        old_summary = (old_summary or "").strip()
-        new_summary = (new_summary or "").strip()
-        if not old_summary:
-            return new_summary
-        if not new_summary:
-            return old_summary
-        if new_summary in old_summary:
-            return old_summary
-        if old_summary in new_summary:
-            return new_summary
-        return f"{old_summary.rstrip('。；;，, ')}；{new_summary}"
-
-    @staticmethod
-    def _pick_explicit_merge_target(
-        similar: list[dict],
-        extra: dict,
-        merge_threshold: float,
-    ) -> dict | None:
-        wanted_tool = str(extra.get("tool_requirement") or "").strip()
-        if not wanted_tool:
-            return None
-        for item in similar:
-            if float(item.get("score", 0.0)) < merge_threshold:
-                continue
-            item_extra = item.get("extra_json") or {}
-            item_tool = str(item_extra.get("tool_requirement") or "").strip()
-            if item_tool == wanted_tool:
-                return item
-        return None
 
     async def merge_item(
         self,

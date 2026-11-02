@@ -20,12 +20,8 @@ from .policy import _NormalizedIngestContent, _keep_count
 from .prompts import (
     _build_long_term_prompt,
     _default_memory_tool_profile,
-    _explicit_hypothesis_prompt,
 )
 from .query import (
-    _ChatCall,
-    _HYPOTHESIS_MAX_TOKENS,
-    _HYPOTHESIS_TIMEOUT_S,
     _VECTOR_SCORE_THRESHOLD,
     _VECTOR_TOP_K,
 )

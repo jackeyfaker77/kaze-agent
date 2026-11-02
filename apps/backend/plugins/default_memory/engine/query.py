@@ -2,26 +2,19 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import cast
 
-from agent.provider import LLMResponse
 from core.memory.engine import EngineProfile, MemoryQuery, MemoryQueryResult
 from core.memory.utils import resolve_memory_scope, should_require_scope_match
 from memory2.query_builder import build_procedure_queries
 
-from .prompts import _explicit_hypothesis_prompt
 
 logger = logging.getLogger("plugins.default_memory.engine")
 
-_HYPOTHESIS_MAX_TOKENS = 80
-_HYPOTHESIS_TIMEOUT_S = 3.0
 _VECTOR_SCORE_THRESHOLD = 0.35
 _VECTOR_TOP_K = 15
-_ChatCall = Callable[..., Awaitable[LLMResponse]]
 
 
 class _QueryMixin:
@@ -101,14 +94,7 @@ class _QueryMixin:
         self,
         request: MemoryQuery,
     ) -> MemoryQueryResult:
-        hyp1_task = asyncio.create_task(
-            self._gen_hypothesis(request.text, style="event")
-        )
-        hyp2_task = asyncio.create_task(
-            self._gen_hypothesis(request.text, style="general")
-        )
-        hyp1, hyp2 = await asyncio.gather(hyp1_task, hyp2_task)
-        aux_queries = [text for text in (hyp1, hyp2) if text]
+        # Search the actual question; the main loop may retry with a revised query.
         scope = resolve_memory_scope(request.scope)
         types = self._resolve_memory_types(request)
         requested_domains = self._resolve_memory_domains(request)
@@ -124,7 +110,6 @@ class _QueryMixin:
                     "intent": "answer",
                     "effect": request.effect,
                     "hit_count": 0,
-                    "hyde_hypotheses": aux_queries,
                     "denied_domains": list(requested_domains or []),
                     "denied_reason": "memory_domain_unauthorized",
                 },
@@ -139,7 +124,6 @@ class _QueryMixin:
             scope_channel=scope.channel or None,
             scope_chat_id=scope.chat_id or None,
             require_scope_match=should_require_scope_match(request, scope),
-            aux_queries=aux_queries,
             score_threshold=_VECTOR_SCORE_THRESHOLD,
             time_start=request.filters.time_start,
             time_end=request.filters.time_end,
@@ -155,7 +139,6 @@ class _QueryMixin:
                 "intent": request.intent,
                 "effect": request.effect,
                 "hit_count": len(sliced),
-                "hyde_hypotheses": aux_queries,
             },
             raw={"items": sliced},
         )
@@ -307,25 +290,6 @@ class _QueryMixin:
                 keyword_enabled=keyword_enabled,
             ),
         )
-
-    async def _gen_hypothesis(self, query: str, style: str) -> str | None:
-        prompt = _explicit_hypothesis_prompt(query, style)
-        try:
-            chat = cast(_ChatCall, getattr(self._light_provider, "chat"))
-            resp = await asyncio.wait_for(
-                chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    tools=[],
-                    model=self._light_model,
-                    max_tokens=_HYPOTHESIS_MAX_TOKENS,
-                ),
-                timeout=_HYPOTHESIS_TIMEOUT_S,
-            )
-            text = (resp.content or "").strip()
-            return text if text else None
-        except Exception as e:
-            logger.debug("explicit retrieval hypothesis failed: %s", e)
-            return None
 
     async def _attach_trigger_tags(
         self,

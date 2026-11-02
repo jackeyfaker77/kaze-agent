@@ -142,6 +142,8 @@ class _MutationMixin:
             "steps": list(steps or []),
         }
         extra["role_id"] = ""
+        extra["scope_channel"] = scope.channel
+        extra["scope_chat_id"] = scope.chat_id
         memory_domain = self._resolve_memory_domain_for_write(request, memory_type)
         self._ensure_memory_domain_allowed(
             memory_domain,
@@ -158,17 +160,28 @@ class _MutationMixin:
             )
             await self._attach_trigger_tags(extra=extra, summary=request.summary)
 
-        # 2. 写入时顺带执行相似记忆 supersede，避免同类偏好堆积。
+        # Ordinary writes coexist. Only user-directed IDs can replace old facts.
+        replacement: dict = {}
+        supersedes = request.metadata.get("supersedes", [])
+        if not isinstance(supersedes, list) or any(not isinstance(i, str) for i in supersedes):
+            raise ValueError("supersedes must be a list of Memory2 IDs")
+        if supersedes:
+            if not request.source_ref:
+                raise ValueError("Replacement requires a recorded user source")
+            extra["scope_channel"] = scope.channel
+            extra["scope_chat_id"] = scope.chat_id
+            replacement["supersedes"] = supersedes
         result = await self._memorizer.save_item_with_supersede(
             summary=request.summary,
             memory_type=memory_type,
             extra=extra,
             source_ref=request.source_ref or "memorize_tool",
             happened_at=request.happened_at or None,
+            **replacement,
         )
         write_status, actual_id = _split_write_result(result)
         return MemoryMutationResult(
-            accepted=bool(actual_id),
+            accepted=bool(actual_id) and write_status != "skipped",
             item_id=actual_id,
             actual_kind=memory_type,
             status=write_status,

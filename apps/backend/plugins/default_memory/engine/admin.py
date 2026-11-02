@@ -36,42 +36,69 @@ def _undo_store_by_message_sources(
     *,
     dry_run: bool = False,
 ) -> dict[str, object]:
-    clean_ids = [str(item).strip() for item in message_ids if str(item).strip()]
-    if not clean_ids:
+    target_ids = {str(item).strip() for item in message_ids if str(item).strip()}
+    if not target_ids:
         return {"affected_ids": [], "restored_ids": [], "rollback_source_ids": []}
-    target_ids = set(clean_ids)
-    with store._lock:
-        rows = store._db.execute("""
-            SELECT id, source_ref
-            FROM memory_items
-            WHERE COALESCE(source_ref, '') != ''
-            """).fetchall()
-        affected_ids: set[str] = set()
-        rollback_source_ids: set[str] = set()
-        for item_id, source_ref in rows:
-            source = str(source_ref or "").strip()
-            base_ids = _source_ref_message_ids(source)
-            if source in target_ids:
-                affected_ids.add(str(item_id))
-                rollback_source_ids.add(source)
-                continue
-            if base_ids and target_ids.intersection(base_ids):
-                affected_ids.add(str(item_id))
-                rollback_source_ids.update(base_ids)
+    rollback_source_ids: set[str] = set()
 
-        if affected_ids and not dry_run:
-            now = datetime.now().astimezone().isoformat()
-            store._db.executemany(
-                "UPDATE memory_items SET status='superseded', updated_at=? WHERE id=?",
-                [(now, item_id) for item_id in sorted(affected_ids)],
+    def matches(source_ref):
+        source = str(source_ref or "").strip()
+        base_ids = _source_ref_message_ids(source)
+        if source in target_ids:
+            rollback_source_ids.add(source)
+            return True
+        if target_ids.intersection(base_ids):
+            rollback_source_ids.update(base_ids)
+            return True
+        return False
+
+    with store._lock:
+        db = store._db
+        affected_ids = {
+            str(item_id)
+            for item_id, source in db.execute(
+                "SELECT id, source_ref FROM memory_items"
+            ).fetchall()
+            if matches(source)
+        }
+        # A reused target keeps its original source. The correction's source
+        # lives on the relationship and must be undone independently of it.
+        relation_ids = {
+            int(row_id)
+            for row_id, new_id, source in db.execute(
+                "SELECT id,new_item_id,source_ref FROM memory_replacements "
+                "WHERE relation_type='supersede'"
+            ).fetchall()
+            if matches(source) or str(new_id) in affected_ids
+        }
+        outer_defer = db.defer_commit
+        db.execute("SAVEPOINT memory_source_undo")
+        db.defer_commit = True
+        try:
+            restored_ids = _restore_replacements_for_undo(
+                store,
+                affected_ids,
+                dry_run=dry_run,
+                relation_ids=relation_ids,
             )
-        restored_ids = _restore_replacements_for_undo(
-            store,
-            affected_ids,
-            dry_run=dry_run,
-        )
-        if not dry_run:
-            store._db.commit()
+            if not dry_run:
+                now = datetime.now().astimezone().isoformat()
+                db.executemany(
+                    "UPDATE memory_items SET status='superseded', updated_at=?, "
+                    "extra_json=json_set(COALESCE(extra_json, '{}'), '$._source_undone', 1) WHERE id=?",
+                    [(now, item_id) for item_id in sorted(affected_ids)],
+                )
+                db.executemany(
+                    "UPDATE memory_replacements SET relation_type='supersede_undone' WHERE id=?",
+                    [(row_id,) for row_id in sorted(relation_ids)],
+                )
+            db.execute("RELEASE memory_source_undo")
+        except BaseException:
+            db.execute("ROLLBACK TO memory_source_undo")
+            db.execute("RELEASE memory_source_undo")
+            raise
+        finally:
+            db.defer_commit = outer_defer
     return {
         "affected_ids": sorted(affected_ids),
         "restored_ids": sorted(restored_ids),
@@ -84,51 +111,70 @@ def _restore_replacements_for_undo(
     affected_ids: set[str],
     *,
     dry_run: bool = False,
+    relation_ids: set[int] | None = None,
 ) -> set[str]:
-    if not affected_ids:
-        return set()
-    sorted_affected = sorted(affected_ids)
-    placeholders = ",".join("?" for _ in sorted_affected)
-    rows = store._db.execute(
-        f"""
-        SELECT DISTINCT old_item_id
-        FROM memory_replacements
-        WHERE new_item_id IN ({placeholders})
-        """,
-        tuple(sorted_affected),
+    relations = store._db.execute(
+        "SELECT id,old_item_id,new_item_id,relation_type FROM memory_replacements "
+        "WHERE relation_type IN ('supersede', 'supersede_undone')"
     ).fetchall()
-    old_ids = {str(row[0]) for row in rows if str(row[0]).strip()}
-    restored: set[str] = set()
-    now = datetime.now().astimezone().isoformat()
-    for old_id in sorted(old_ids):
-        active_replacement = store._db.execute(
-            """
-            SELECT 1
-            FROM memory_replacements r
-            JOIN memory_items m ON m.id = r.new_item_id
-            WHERE r.old_item_id = ?
-              AND r.new_item_id NOT IN ({})
-              AND m.status = 'active'
-            LIMIT 1
-            """.format(placeholders),
-            tuple([old_id, *sorted_affected]),
-        ).fetchone()
-        if active_replacement is not None:
-            continue
-        if dry_run:
-            old_row = store._db.execute(
-                "SELECT 1 FROM memory_items WHERE id=? AND status='superseded'",
-                (old_id,),
-            ).fetchone()
-            if old_row is not None:
-                restored.add(old_id)
-            continue
-        cur = store._db.execute(
+    if relation_ids is None:
+        relation_ids = {
+            r[0] for r in relations if r[2] in affected_ids and r[3] == "supersede"
+        }
+    candidates = {r[1] for r in relations if r[0] in relation_ids}
+    statuses = dict(store._db.execute("SELECT id,status FROM memory_items").fetchall())
+    withdrawn = {
+        row[0]
+        for row in store._db.execute(
+            "SELECT id FROM memory_items WHERE json_extract(extra_json, '$._source_undone')=1"
+        ).fetchall()
+    }
+    removed_sources = affected_ids | withdrawn
+    predecessors: dict[str, set[str]] = {}
+    successors: dict[str, set[str]] = {}
+    for row_id, old_id, new_id, kind in relations:
+        if new_id in removed_sources:
+            predecessors.setdefault(new_id, set()).add(old_id)
+        # Revoked edges only bridge withdrawn intermediate nodes. A revoked
+        # correction to an independently existing target must not block undo.
+        if (
+            kind == "supersede" and row_id not in relation_ids
+        ) or new_id in removed_sources:
+            successors.setdefault(old_id, set()).add(new_id)
+    pending = list(candidates)
+    while pending:
+        for ancestor in predecessors.get(pending.pop(), ()):
+            if ancestor not in candidates:
+                candidates.add(ancestor)
+                pending.append(ancestor)
+    candidates -= removed_sources
+
+    def has_live_successor(item_id):
+        pending = list(successors.get(item_id, ()))
+        seen = {item_id}
+        while pending:
+            child = pending.pop()
+            if child in seen:
+                continue
+            seen.add(child)
+            if child not in affected_ids and statuses.get(child) == "active":
+                return True
+            pending.extend(successors.get(child, ()))
+        return False
+
+    restored = {
+        item_id
+        for item_id in candidates
+        if item_id not in withdrawn
+        and statuses.get(item_id) == "superseded"
+        and not has_live_successor(item_id)
+    }
+    if not dry_run:
+        now = datetime.now().astimezone().isoformat()
+        store._db.executemany(
             "UPDATE memory_items SET status='active', updated_at=? WHERE id=? AND status='superseded'",
-            (now, old_id),
+            [(now, item_id) for item_id in sorted(restored)],
         )
-        if cur.rowcount:
-            restored.add(old_id)
     return restored
 
 
@@ -229,7 +275,6 @@ class _AdminMixin:
 
     def delete_items_batch(self, ids: list[str]) -> int:
         return self._require_v2_store().delete_items_batch(ids)
-
 
     def undo_by_message_sources(
         self,
