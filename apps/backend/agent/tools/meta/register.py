@@ -45,6 +45,7 @@ def register_common_meta_tools(
     readonly_tools: dict[str, Tool],
     session_store: Any,
     push_tool: MessagePushTool | None = None,
+    resolve_legacy=None,
 ) -> MessagePushTool:
     tools.register(ToolSearchTool(tools), always_on=True, risk="read-only")
     tools.register(
@@ -89,7 +90,7 @@ def register_common_meta_tools(
         search_hint="ls 查看目录",
     )
     tools.register(
-        FetchMessagesTool(session_store),
+        FetchMessagesTool(session_store, resolve_legacy),
         always_on=True,
         risk="read-only",
         search_hint="消息回溯 按ID查对话原文 source_ref",

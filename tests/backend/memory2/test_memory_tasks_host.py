@@ -29,7 +29,7 @@ async def test_real_chat_commits_memory_intent_and_host_drains_once(tmp_path, mo
                  'choices':[{'index':0,'delta':{},'finish_reason':'stop'}]}]
             return httpx.Response(200, text=''.join('data: '+json.dumps(c)+'\n\n' for c in chunks)+'data: [DONE]\n\n',
                                   headers={'content-type':'text/event-stream'})
-        text = '[]' if body['messages'][0]['content'].startswith('判断用户消息') else '{}'
+        text = '[]' if body['messages'][0]['content'].startswith('判断用户消息') else '{"preference":[]}'
         return httpx.Response(200, json={'id':'a','object':'chat.completion','created':0,'model':'test',
             'choices':[{'index':0,'finish_reason':'stop','message':{'role':'assistant','content':text}}]})
     await provider._client._client.aclose()

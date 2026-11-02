@@ -134,6 +134,12 @@ class PostResponseMemoryWorker:
                         role_id=role_id,
                     )
 
+                else:
+                    from core.memory.sources import memory_sources
+                    batch = memory_sources.get()
+                    if batch:
+                        self._memorizer._store.defer_extraction(batch.root, batch.messages, 'budget_exhausted')
+
             logger.debug(
                 "post_response_memorize done session=%s source_ref=%s remain_budget=%d",
                 session_key or "-",
@@ -266,7 +272,10 @@ class PostResponseMemoryWorker:
                 token_budget,
             )
             if supersede_ids:
-                self._memorizer.supersede_batch(supersede_ids)
+                self._memorizer.supersede_batch(supersede_ids, source_ref=source_ref, extra={
+                    'role_id': run_context.role_id, 'scope_channel': run_context.channel,
+                    'scope_chat_id': run_context.chat_id,
+                })
                 logger.info(
                     "post_response invalidation: superseded %s for topic '%s'",
                     supersede_ids,

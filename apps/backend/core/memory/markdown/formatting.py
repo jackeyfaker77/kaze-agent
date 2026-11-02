@@ -242,6 +242,20 @@ def _format_conversation_for_consolidation(
     return "\n".join(lines)
 
 
+def window_sources(messages, session_key, *, nsfw_memory_enabled=False):
+    """Preserve message identity/version but pass only the existing filtered text."""
+    from core.memory.sources import fingerprint
+    result = []
+    for m in messages:
+        rendered = _format_conversation_for_consolidation([m], nsfw_memory_enabled=nsfw_memory_enabled)
+        if not rendered:
+            continue
+        result.append({'id': m.get('id'), 'role': m.get('role'), 'session_key': session_key,
+                       'revision': fingerprint({**m, 'session_key': session_key}),
+                       'content': _normalize_memory_content(m, nsfw_memory_enabled=nsfw_memory_enabled)})
+    return result
+
+
 def _select_recent_history_entries(history_text: str, *, limit: int = 3) -> list[str]:
     if not history_text.strip() or limit <= 0:
         return []

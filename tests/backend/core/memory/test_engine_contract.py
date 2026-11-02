@@ -1150,7 +1150,7 @@ async def test_default_memory_engine_passes_shared_query_domain(tmp_path: Path):
     assert "denied_reason" not in result.trace
 
 
-async def test_default_memory_engine_forget_uses_explicit_ids_across_sessions(
+async def test_default_memory_engine_forget_allows_shared_cross_session_but_not_another_role(
     tmp_path: Path,
 ):
     store = MemoryStore2(tmp_path / "memory2.db")
@@ -1163,7 +1163,7 @@ async def test_default_memory_engine_forget_uses_explicit_ids_across_sessions(
             embedding=[1.0, 0.0],
             source_ref="tg:1",
             extra={
-                "role_id": "mira",
+                "role_id": "",
                 "scope_channel": "telegram",
                 "scope_chat_id": "room-1",
             },
@@ -1175,7 +1175,7 @@ async def test_default_memory_engine_forget_uses_explicit_ids_across_sessions(
             embedding=[1.0, 0.0],
             source_ref="tg:2",
             extra={
-                "role_id": "mira",
+                "role_id": "",
                 "scope_channel": "telegram",
                 "scope_chat_id": "room-2",
             },
@@ -1207,11 +1207,11 @@ async def test_default_memory_engine_forget_uses_explicit_ids_across_sessions(
             )
         )
 
-        assert set(result.affected_ids) == {same_scope, other_scope, other_role}
-        assert result.missing_ids == []
+        assert set(result.affected_ids) == {same_scope, other_scope}
+        assert result.missing_ids == [other_role]
         assert store.get_items_by_ids([same_scope])[0]["status"] == "superseded"
         assert store.get_items_by_ids([other_scope])[0]["status"] == "superseded"
-        assert store.get_items_by_ids([other_role])[0]["status"] == "superseded"
+        assert store.get_items_by_ids([other_role])[0]["status"] == "active"
     finally:
         store.close()
 

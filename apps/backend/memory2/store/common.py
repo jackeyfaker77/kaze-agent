@@ -29,6 +29,23 @@ _TIME_FILTER_MARGIN = timedelta(days=2)
 _TIME_FILTER_KEYWORD_CANDIDATE_LIMIT = 1000
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory_write_receipts (
+    id TEXT PRIMARY KEY, source_ref TEXT NOT NULL, action TEXT NOT NULL, result TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_retirements (
+    item_id TEXT NOT NULL, receipt TEXT NOT NULL, source_ref TEXT NOT NULL, restorable INTEGER NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(item_id,receipt)
+);
+CREATE TABLE IF NOT EXISTS memory_coverage (
+    root TEXT NOT NULL, message_id TEXT NOT NULL, revision TEXT NOT NULL,
+    state TEXT NOT NULL, job TEXT NOT NULL, reason TEXT NOT NULL, updated_at TEXT NOT NULL,
+    PRIMARY KEY(root,message_id,revision)
+);
+CREATE TABLE IF NOT EXISTS memory_evidence (
+    item_id TEXT NOT NULL, contribution TEXT NOT NULL, root TEXT NOT NULL,
+    message_id TEXT NOT NULL, revision TEXT NOT NULL, source_ref TEXT NOT NULL, active INTEGER NOT NULL,
+    PRIMARY KEY(item_id,contribution,message_id)
+);
 CREATE TABLE IF NOT EXISTS memory_items (
     id            TEXT PRIMARY KEY,
     memory_type   TEXT NOT NULL,

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import cast
 
 from .common import (
     _MemoryHit,
     _TIME_FILTER_KEYWORD_CANDIDATE_LIMIT,
     _coerce_float,
-    _cosine_similarity,
     _is_memory_time_in_range,
     _json_object,
     _parse_memory_time,
@@ -90,33 +89,6 @@ class _StoreTemporalMixin:
         selected = hits[:max_items]
         selected.sort(key=lambda item: item[0])
         return [item for _, item in selected]
-
-    def find_similar_recent_events(
-        self,
-        embedding: list[float],
-        *,
-        days_back: int = 7,
-        threshold: float = 0.92,
-        top_k: int = 3,
-    ) -> list[str]:
-        cutoff = (
-            datetime.now(timezone.utc) - timedelta(days=max(1, int(days_back)))
-        ).isoformat()
-        rows = self._db.execute(
-            "SELECT id, embedding FROM memory_items "
-            "WHERE memory_type='event' AND status='active' "
-            "AND embedding IS NOT NULL AND created_at >= ?",
-            (cutoff,),
-        ).fetchall()
-        scored: list[tuple[str, float]] = []
-        for row_id, emb_json in rows:
-            if not emb_json:
-                continue
-            score = _cosine_similarity(embedding, json.loads(emb_json))
-            if score >= float(threshold):
-                scored.append((row_id, score))
-        scored.sort(key=lambda item: item[1], reverse=True)
-        return [row_id for row_id, _score in scored[: max(1, int(top_k))]]
 
     def delete_by_source_ref(self, source_ref: str) -> int:
         """删除指定 source_ref 的所有条目，返回删除行数。"""

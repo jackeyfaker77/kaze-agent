@@ -55,7 +55,7 @@ class Memorizer:
     ) -> str:
         """embed → content_hash → upsert，返回 'new:id' 或 'reinforced:id'"""
         embedding = await self._embedder.embed(summary)
-        return self._store.upsert_item(
+        return self._store.commit_change("add",
             memory_type=memory_type,
             summary=summary,
             embedding=embedding,
@@ -85,7 +85,7 @@ class Memorizer:
                 summary, memory_type, extra, source_ref, happened_at, emotional_weight,
             )
         embedding = await self._embedder.embed(summary)
-        return self._store.replace_items(
+        return self._store.commit_change("replace",
             memory_type=memory_type, summary=summary, embedding=embedding,
             source_ref=source_ref, extra=extra, happened_at=happened_at,
             emotional_weight=emotional_weight, supersedes=supersedes,
@@ -114,13 +114,7 @@ class Memorizer:
                     text = ""
                 if text:
                     embedding = await self._embedder.embed(text)
-                    if self._should_semantic_dedup_event(
-                        embedding,
-                        emotional_weight=emotional_weight,
-                    ):
-                        text = ""
-                if text:
-                    result = self._store.upsert_consolidation_event(
+                    result = self._store.commit_change("archive_event", memory_type="event",
                         source_ref=source_ref,
                         summary=text,
                         embedding=embedding,
@@ -152,34 +146,8 @@ class Memorizer:
                 len(behavior_updates),
             )
 
-    def _should_semantic_dedup_event(
-        self,
-        embedding: list[float] | None,
-        *,
-        emotional_weight: int = 0,
-    ) -> bool:
-        if embedding is None:
-            return False
-        similar_ids = self._store.find_similar_recent_events(
-            embedding,
-            threshold=0.92,
-            days_back=7,
-        )
-        if not similar_ids:
-            return False
-        self._store.reinforce_items_batch(
-            similar_ids[:1],
-            emotional_weight=emotional_weight,
-        )
-        logger.info(
-            "memory2 event semantic-dedup: similar=%s",
-            similar_ids[:1],
-        )
-        return True
-
-    def supersede_batch(self, ids: list[str]) -> None:
-        self._store.mark_superseded_batch(ids)
-        logger.info(f"memory2 superseded {len(ids)} items: {ids}")
+    def supersede_batch(self, ids: list[str], *, source_ref="", extra=None) -> None:
+        self._store.commit_change("invalidate", ids=ids, source_ref=source_ref, extra=extra)
 
     def reinforce_items_batch(self, ids: list[str]) -> None:
         self._store.reinforce_items_batch(ids)

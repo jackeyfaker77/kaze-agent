@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 class ForgetMemoryTool(Tool):
     name = "forget_memory"
+    context_precedence = frozenset({"current_user_source_ref", "session_key", "channel", "chat_id"})
     description = "由当前 memory engine 的 tool_profile 注入工具描述。"
     parameters = {
         "type": "object",
@@ -36,6 +37,7 @@ class ForgetMemoryTool(Tool):
         channel: str | None = None,
         chat_id: str | None = None,
         session_key: str | None = None,
+        current_user_source_ref: str = "",
         **_: Any,
     ) -> str:
         clean_ids = _clean_ids(ids)
@@ -47,6 +49,7 @@ class ForgetMemoryTool(Tool):
             resolved_session_key = chat_id if channel == "desktop" else f"{channel}:{chat_id}"
         request = MemoryMutation(
             kind="forget",
+            source_ref=current_user_source_ref,
             ids=tuple(clean_ids),
             scope=MemoryScope(
                 session_key=resolved_session_key,

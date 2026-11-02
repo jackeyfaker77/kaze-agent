@@ -14,7 +14,23 @@ class _FakeEmbedder:
         return list(self._mapping[text])
 
 
-def test_near_duplicate_event_not_saved_again(tmp_path):
+def test_same_event_text_at_distinct_times_keeps_both_occurrences(tmp_path):
+    store = MemoryStore2(tmp_path / "memory2.db", vec_dim=2)
+    try:
+        def record(source, date):
+            return store.commit_change('archive_event', memory_type='event', summary='review meeting',
+                embedding=[1., 0.], source_ref=source, happened_at=date)
+        first = record('one', '2026-10-01').split(':')[1]
+        second = record('two', '2026-10-02').split(':')[1]
+        assert first != second
+        record('two', '2026-10-02')
+        assert store._db.execute('SELECT happened_at,reinforcement FROM memory_items ORDER BY happened_at').fetchall() == [
+            ('2026-10-01', 1), ('2026-10-02', 1)]
+    finally:
+        store.close()
+
+
+def test_similar_descriptions_do_not_establish_same_occurrence(tmp_path):
     store = MemoryStore2(tmp_path / "memory2.db")
     embedder = _FakeEmbedder(
         {
@@ -43,7 +59,7 @@ def test_near_duplicate_event_not_saved_again(tmp_path):
     asyncio.run(_run())
 
     items = store.list_by_type("event")
-    assert len(items) == 1
+    assert len(items) == 2
 
 
 def test_distinct_event_saves_normally(tmp_path):
@@ -78,7 +94,7 @@ def test_distinct_event_saves_normally(tmp_path):
     assert len(items) == 2
 
 
-def test_reinforcement_incremented_on_dedup(tmp_path):
+def test_vector_similarity_does_not_reinforce(tmp_path):
     store = MemoryStore2(tmp_path / "memory2.db")
     embedder = _FakeEmbedder(
         {
@@ -107,10 +123,10 @@ def test_reinforcement_incremented_on_dedup(tmp_path):
     asyncio.run(_run())
 
     items = store.list_by_type("event")
-    assert items[0]["reinforcement"] == 2
+    assert [i["reinforcement"] for i in items] == [1, 1]
 
 
-def test_emotional_weight_merged_on_event_dedup(tmp_path):
+def test_similar_occurrences_keep_their_own_weights(tmp_path):
     store = MemoryStore2(tmp_path / "memory2.db")
     embedder = _FakeEmbedder(
         {
@@ -141,10 +157,10 @@ def test_emotional_weight_merged_on_event_dedup(tmp_path):
     asyncio.run(_run())
 
     items = store.list_by_type("event")
-    assert items[0]["emotional_weight"] == 8
+    assert sorted(i["emotional_weight"] for i in items) == [0, 8]
 
 
-def test_dedup_window_is_7_days(tmp_path):
+def test_old_event_is_also_kept(tmp_path):
     store = MemoryStore2(tmp_path / "memory2.db")
     embedder = _FakeEmbedder(
         {

@@ -74,3 +74,4 @@ class ConsolidationCommitted:
     session_key: str = ''
     source_seq: int = 0
     source_turn: str | None = None
+    source_messages: list[dict] = field(default_factory=list)

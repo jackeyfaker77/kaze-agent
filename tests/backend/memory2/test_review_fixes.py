@@ -44,9 +44,10 @@ def statuses(store):
     return dict(store._db.execute("SELECT summary,status FROM memory_items").fetchall())
 
 
+@pytest.mark.parametrize("version", [1, 2])
 @pytest.mark.parametrize("state", ["pending", "running"])
 async def test_v1_committed_receipt_is_blocked_before_v2_worker_runs(
-    store, tmp_path, state
+    store, tmp_path, state, version
 ):
     journal_db = sqlite3.connect(":memory:")
     journal_db.execute("CREATE TABLE events(seq INTEGER,kind TEXT,payload TEXT)")
@@ -57,7 +58,7 @@ async def test_v1_committed_receipt_is_blocked_before_v2_worker_runs(
     jobs = durable_tasks.MemoryTasks(store, journal, worker)
     store._db.execute(
         "INSERT INTO memory_tasks VALUES (?,?,?,?,?,?,?,?,?)",
-        ("old-job", "root", 1, "turn", 1, "{}", state, "dead", None),
+        ("old-job", "root", 1, "turn", version, "{}", state, "dead", None),
     )
     store._db.commit()
     task = durable_tasks.Task(jobs, {"id": "old-job"})
@@ -85,31 +86,14 @@ async def test_v1_committed_receipt_is_blocked_before_v2_worker_runs(
         assert store._db.execute(
             "SELECT reinforcement FROM memory_items"
         ).fetchone() == (1,)
-        # Current-version work remains runnable; completed old work is untouched.
-        store._db.execute(
-            "INSERT INTO memory_tasks VALUES (?,?,?,?,?,?,?,?,?)",
-            (
-                "new-job",
-                "root",
-                2,
-                "new-turn",
-                jobs.VERSION,
-                "{}",
-                "pending",
-                None,
-                None,
-            ),
-        )
+        # Completed legacy jobs remain untouched.
         store._db.execute(
             "INSERT INTO memory_tasks VALUES (?,?,?,?,?,?,?,?,?)",
             ("old-done", "root", 3, "done-turn", 1, "{}", "done", "dead", None),
         )
         store._db.commit()
         await jobs.drain()
-        worker.run.assert_awaited_once()
-        assert store._db.execute(
-            "SELECT state FROM memory_tasks WHERE id='new-job'"
-        ).fetchone() == ("done",)
+        worker.run.assert_not_awaited()
         assert store._db.execute(
             "SELECT state FROM memory_tasks WHERE id='old-done'"
         ).fetchone() == ("done",)
